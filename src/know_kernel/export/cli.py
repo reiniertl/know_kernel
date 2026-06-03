@@ -15,34 +15,30 @@ def main() -> None:
         prog="kk-export",
         description="Export a Class B-only snapshot from the master knowledge base.",
     )
-    parser.add_argument("master_db", type=Path, help="Path to the master SQLite DB")
-    parser.add_argument("output_db", type=Path, help="Path for the output snapshot DB")
-    parser.add_argument("--json", action="store_true", dest="json_output", help="Output report as JSON")
+    parser.add_argument("--master-db", type=Path, required=True, help="Path to the master SQLite DB")
+    parser.add_argument("--output-db", type=Path, required=True, help="Path for the output snapshot DB")
     args = parser.parse_args()
 
     if not args.master_db.exists():
         print(f"Error: master DB not found: {args.master_db}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
 
     if args.output_db.exists():
         print(f"Error: output path already exists: {args.output_db}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
 
     try:
         report = export_class_b_snapshot(args.master_db, args.output_db)
     except ExportValidationError as e:
         for issue in e.issues:
             print(f"FAIL: {issue}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(2)
 
-    if args.json_output:
-        json.dump(report, sys.stdout, indent=2)
-        print()
-    else:
-        print(f"Snapshot exported: {args.output_db}")
-        print(f"  Nodes: {report['node_count']}")
-        print(f"  Edges: {report['edge_count']}")
-        print(f"  Class A content: {report['class_a_count']}")
+    json.dump(report, sys.stdout, indent=2)
+    print()
 
 
 if __name__ == "__main__":

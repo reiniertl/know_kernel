@@ -1,4 +1,4 @@
-"""Tests for the snapshot exporter — the contamination gate."""
+"""Tests for export_class_b_snapshot and validate_snapshot — the contamination gate."""
 
 from __future__ import annotations
 
@@ -17,48 +17,18 @@ from know_kernel.export.exporter import (
 )
 
 
-@pytest.fixture
-def master_db(tmp_path: Path) -> Path:
-    """Create a master DB with mixed Class A + B + C content that passes admissibility."""
-    db_path = tmp_path / "master.db"
-    conn = init_db(db_path)
-    add_node(conn, "sub1", "Subsystem", {"name": "scheduler"})
-    add_node(conn, "c1", "Concept", {"name": "RCU", "description": "read-copy-update", "artifact_class": "B"})
-    add_node(conn, "c2", "Concept", {"name": "rwlock", "description": "read-write lock", "artifact_class": "B"})
-    add_node(conn, "src1", "Source", {"url": "http://ex.com", "source_type": "paper", "license": "PD"})
-    add_node(conn, "src2", "Source", {"url": "http://ex2.com", "source_type": "paper", "license": "PD"})
-    add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
-    add_node(conn, "ev2", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
-    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
-    add_node(conn, "adv2", "Advisory", {"assessment": "safe"})
-    add_node(conn, "prop1", "Proposal", {"name": "use-rcu", "description": "use RCU for sync"})
-    add_edge(conn, "belongs-to", "c1", "sub1")
-    add_edge(conn, "belongs-to", "c2", "sub1")
-    add_edge(conn, "extracted-from", "c1", "ev1")
-    add_edge(conn, "extracted-from", "c2", "ev2")
-    add_edge(conn, "sourced-from", "ev1", "src1")
-    add_edge(conn, "sourced-from", "ev2", "src2")
-    add_edge(conn, "assessed-by", "src1", "adv1")
-    add_edge(conn, "assessed-by", "src2", "adv2")
-    add_edge(conn, "grounded-in", "prop1", "c1")
-    add_edge(conn, "alternative-to", "c1", "c2")
-    conn.commit()
-    conn.close()
-    return db_path
-
-
 class TestExportClassBSnapshot:
-    def test_produces_class_b_only(self, master_db: Path, tmp_path: Path) -> None:
+    def test_produces_class_b_only(self, admissible_master_db: Path, tmp_path: Path) -> None:
         output = tmp_path / "snapshot.db"
-        report = export_class_b_snapshot(master_db, output)
+        report = export_class_b_snapshot(admissible_master_db, output)
         assert output.exists()
         assert report["class_a_count"] == 0
         assert report["issues"] == []
 
-    def test_allowed_kinds_only(self, master_db: Path, tmp_path: Path) -> None:
+    def test_allowed_kinds_only(self, admissible_master_db: Path, tmp_path: Path) -> None:
         """INV-KK-SNAPSHOT-ALLOWED-KINDS: only Concept, Subsystem, Proposal in output."""
         output = tmp_path / "snapshot.db"
-        export_class_b_snapshot(master_db, output)
+        export_class_b_snapshot(admissible_master_db, output)
         conn = sqlite3.connect(str(output))
         kinds = {row[0] for row in conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
         conn.close()
@@ -67,10 +37,10 @@ class TestExportClassBSnapshot:
         assert "Source" not in kinds
         assert "Advisory" not in kinds
 
-    def test_no_dangling_edges(self, master_db: Path, tmp_path: Path) -> None:
+    def test_no_dangling_edges(self, admissible_master_db: Path, tmp_path: Path) -> None:
         """INV-KK-SNAPSHOT-NO-DANGLING-EDGES: all edge endpoints exist in snapshot."""
         output = tmp_path / "snapshot.db"
-        export_class_b_snapshot(master_db, output)
+        export_class_b_snapshot(admissible_master_db, output)
         conn = sqlite3.connect(str(output))
         dangling = conn.execute(
             "SELECT COUNT(*) FROM edges WHERE source_id NOT IN (SELECT id FROM nodes) "
@@ -79,11 +49,11 @@ class TestExportClassBSnapshot:
         conn.close()
         assert dangling == 0
 
-    def test_schema_match(self, master_db: Path, tmp_path: Path) -> None:
+    def test_schema_match(self, admissible_master_db: Path, tmp_path: Path) -> None:
         """INV-KK-SNAPSHOT-SCHEMA-MATCH: same table schema as master."""
         output = tmp_path / "snapshot.db"
-        export_class_b_snapshot(master_db, output)
-        master_conn = sqlite3.connect(str(master_db))
+        export_class_b_snapshot(admissible_master_db, output)
+        master_conn = sqlite3.connect(str(admissible_master_db))
         snap_conn = sqlite3.connect(str(output))
         master_tables = {
             row[0]: row[1]
@@ -103,17 +73,16 @@ class TestExportClassBSnapshot:
         snap_conn.close()
         assert master_tables == snap_tables
 
-    def test_node_counts(self, master_db: Path, tmp_path: Path) -> None:
+    def test_node_counts(self, admissible_master_db: Path, tmp_path: Path) -> None:
         output = tmp_path / "snapshot.db"
-        report = export_class_b_snapshot(master_db, output)
+        report = export_class_b_snapshot(admissible_master_db, output)
         assert report["node_count"] == 4  # sub1, c1, c2, prop1
-        # belongs-to x2, grounded-in, alternative-to survive; extracted-from, sourced-from, assessed-by filtered
-        assert report["edge_count"] == 4
+        assert report["edge_count"] == 4  # belongs-to x2, grounded-in, alternative-to
 
-    def test_edge_filtering(self, master_db: Path, tmp_path: Path) -> None:
+    def test_edge_filtering(self, admissible_master_db: Path, tmp_path: Path) -> None:
         """Edges referencing filtered-out nodes must not appear."""
         output = tmp_path / "snapshot.db"
-        export_class_b_snapshot(master_db, output)
+        export_class_b_snapshot(admissible_master_db, output)
         conn = sqlite3.connect(str(output))
         edge_kinds = [row[0] for row in conn.execute("SELECT kind FROM edges").fetchall()]
         conn.close()
@@ -123,10 +92,10 @@ class TestExportClassBSnapshot:
         assert "belongs-to" in edge_kinds
         assert "grounded-in" in edge_kinds
 
-    def test_contamination_gate_zero_class_a(self, master_db: Path, tmp_path: Path) -> None:
+    def test_contamination_gate_zero_class_a(self, admissible_master_db: Path, tmp_path: Path) -> None:
         """INV-KK-CONTAMINATION-GATE + INV-KK-SNAPSHOT-ZERO-CLASS-A."""
         output = tmp_path / "snapshot.db"
-        report = export_class_b_snapshot(master_db, output)
+        report = export_class_b_snapshot(admissible_master_db, output)
         assert report["class_a_count"] == 0
 
     def test_empty_master_db(self, tmp_path: Path) -> None:
@@ -138,6 +107,23 @@ class TestExportClassBSnapshot:
         assert report["node_count"] == 0
         assert report["edge_count"] == 0
         assert report["issues"] == []
+
+    def test_class_a_only_master(self, tmp_path: Path) -> None:
+        """Master with only Class A content should produce an empty snapshot."""
+        master = tmp_path / "class_a.db"
+        conn = init_db(master)
+        add_node(conn, "src1", "Source", {"url": "http://ex.com", "source_type": "paper", "license": "PD"})
+        add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+        add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+        add_edge(conn, "sourced-from", "ev1", "src1")
+        add_edge(conn, "assessed-by", "src1", "adv1")
+        conn.commit()
+        conn.close()
+        output = tmp_path / "snapshot.db"
+        report = export_class_b_snapshot(master, output)
+        assert report["node_count"] == 0
+        assert report["edge_count"] == 0
+        assert report["class_a_count"] == 0
 
     def test_concepts_only_master(self, tmp_path: Path) -> None:
         """Master with admissible Class B content should export everything."""
