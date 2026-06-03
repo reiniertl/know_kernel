@@ -1,0 +1,42 @@
+# Combobul / Claude Code
+combobul/
+.claude/
+.combobul/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Runtime databases (generated, not source)
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+.env.local
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Test / coverage
+htmlcov/
+.coverage
+.pytest_cache/
