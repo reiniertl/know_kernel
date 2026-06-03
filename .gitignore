@@ -1,5 +1,7 @@
 # Combobul / Claude Code
 combobul/
+!combobul/spec/
+!combobul/spec/spec.db
 .claude/
 .combobul/
 
