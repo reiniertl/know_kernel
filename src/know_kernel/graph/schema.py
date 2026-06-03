@@ -20,6 +20,28 @@ EDGE_KINDS = (
     "grounded-in",
 )
 
+EDGE_VALID_PAIRS: dict[str, tuple[str, str]] = {
+    "belongs-to": ("Concept", "Subsystem"),
+    "extracted-from": ("Concept", "Evidence"),
+    "sourced-from": ("Evidence", "Source"),
+    "alternative-to": ("Concept", "Concept"),
+    "refines": ("Concept", "Concept"),
+    "contradicts": ("Concept", "Concept"),
+    "prerequisite": ("Concept", "Concept"),
+    "supersedes": ("Concept", "Concept"),
+    "assessed-by": ("Source", "Advisory"),
+    "grounded-in": ("Proposal", "Concept"),
+}
+
+REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
+    "Concept": ("name", "description", "artifact_class"),
+    "Source": ("url", "source_type", "license"),
+    "Evidence": ("artifact_class", "contamination_level"),
+    "Advisory": ("assessment",),
+    "Subsystem": ("name",),
+    "Proposal": ("name", "description"),
+}
+
 SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS nodes (
     id TEXT PRIMARY KEY,

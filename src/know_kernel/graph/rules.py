@@ -34,12 +34,15 @@ def check_concept_has_provenance(conn: sqlite3.Connection, node_id: str) -> Viol
 
 
 def check_evidence_has_source(conn: sqlite3.Connection, node_id: str) -> Violation | None:
-    row = conn.execute(
-        "SELECT 1 FROM edges WHERE kind = 'sourced-from' AND source_id = ? LIMIT 1",
+    count = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'sourced-from' AND source_id = ?",
         (node_id,),
-    ).fetchone()
-    if row is None:
-        return Violation(node_id, "evidence-source", "Evidence must have exactly one sourced-from edge")
+    ).fetchone()[0]
+    if count != 1:
+        return Violation(
+            node_id, "evidence-exactly-one-source",
+            f"Evidence must have exactly one sourced-from edge, found {count}",
+        )
     return None
 
 
