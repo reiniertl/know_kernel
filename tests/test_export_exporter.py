@@ -156,6 +156,19 @@ class TestExportClassBSnapshot:
 
 
 class TestValidateSnapshot:
+    def test_schema_mismatch_detected(self, tmp_path: Path) -> None:
+        """INV-KK-SNAPSHOT-SCHEMA-MATCH: validate_snapshot reports mismatch when schemas differ."""
+        master_path = tmp_path / "master.db"
+        snap_path = tmp_path / "snap.db"
+        master_conn = init_db(master_path)
+        snap_conn = init_db(snap_path)
+        snap_conn.execute("CREATE TABLE extra_table (id TEXT PRIMARY KEY)")
+        snap_conn.commit()
+        report = validate_snapshot(snap_conn, master_conn)
+        master_conn.close()
+        snap_conn.close()
+        assert any("Schema mismatch" in issue for issue in report["issues"])
+
     def test_detects_forbidden_kinds(self, tmp_path: Path) -> None:
         db_path = tmp_path / "bad.db"
         conn = init_db(db_path)
