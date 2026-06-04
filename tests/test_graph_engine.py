@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 from know_kernel.graph.engine import (
+    AdmissibilityError,
     add_edge,
     add_node,
     delete_edge,
@@ -159,6 +160,99 @@ def test_delete_node_cascades_edges(populated: sqlite3.Connection):
 def test_delete_node_nonexistent(conn: sqlite3.Connection):
     with pytest.raises(ValueError, match="does not exist"):
         delete_node(conn, "ghost")
+
+
+# --- delete_node admissibility cascade (INV-KK-DELETE-CASCADE) ---
+# REPRODUCTION TEST: these must FAIL before the fix, PASS after.
+
+
+def test_delete_evidence_rejects_if_concept_loses_provenance(conn: sqlite3.Connection):
+    """Deleting ev1 (only provenance for c1) must be rejected."""
+    add_node(conn, "sub1", "Subsystem", {"name": "mm"})
+    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B"})
+    add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+    add_edge(conn, "belongs-to", "c1", "sub1")
+    add_edge(conn, "extracted-from", "c1", "ev1")
+    add_edge(conn, "sourced-from", "ev1", "src1")
+    add_edge(conn, "assessed-by", "src1", "adv1")
+    with pytest.raises(AdmissibilityError):
+        delete_node(conn, "ev1")
+
+
+def test_delete_source_rejects_if_evidence_loses_traceability(conn: sqlite3.Connection):
+    """Deleting src1 (only source for ev1) must be rejected."""
+    add_node(conn, "sub1", "Subsystem", {"name": "mm"})
+    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B"})
+    add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+    add_edge(conn, "belongs-to", "c1", "sub1")
+    add_edge(conn, "extracted-from", "c1", "ev1")
+    add_edge(conn, "sourced-from", "ev1", "src1")
+    add_edge(conn, "assessed-by", "src1", "adv1")
+    with pytest.raises(AdmissibilityError):
+        delete_node(conn, "src1")
+
+
+def test_delete_subsystem_rejects_if_concept_loses_belongs_to(conn: sqlite3.Connection):
+    """Deleting sub1 (only subsystem for c1) must be rejected."""
+    add_node(conn, "sub1", "Subsystem", {"name": "mm"})
+    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B"})
+    add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+    add_edge(conn, "belongs-to", "c1", "sub1")
+    add_edge(conn, "extracted-from", "c1", "ev1")
+    add_edge(conn, "sourced-from", "ev1", "src1")
+    add_edge(conn, "assessed-by", "src1", "adv1")
+    with pytest.raises(AdmissibilityError):
+        delete_node(conn, "sub1")
+
+
+def test_delete_advisory_rejects_if_source_loses_assessment(conn: sqlite3.Connection):
+    """Deleting adv1 (only advisory for src1) must be rejected."""
+    add_node(conn, "sub1", "Subsystem", {"name": "mm"})
+    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B"})
+    add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+    add_edge(conn, "belongs-to", "c1", "sub1")
+    add_edge(conn, "extracted-from", "c1", "ev1")
+    add_edge(conn, "sourced-from", "ev1", "src1")
+    add_edge(conn, "assessed-by", "src1", "adv1")
+    with pytest.raises(AdmissibilityError):
+        delete_node(conn, "adv1")
+
+
+def test_delete_node_succeeds_when_no_dependents_violated(conn: sqlite3.Connection):
+    """Deleting a node that no other node depends on must succeed."""
+    add_node(conn, "sub1", "Subsystem", {"name": "mm"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    delete_node(conn, "adv1")
+    assert get_node(conn, "adv1") is None
+
+
+def test_delete_node_succeeds_when_alternate_path_exists(conn: sqlite3.Connection):
+    """Deleting ev1 succeeds when c1 still has ev2 as alternate provenance."""
+    add_node(conn, "sub1", "Subsystem", {"name": "mm"})
+    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B"})
+    add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
+    add_node(conn, "src2", "Source", {"url": "http://y.com", "source_type": "paper", "license": "PD"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "adv2", "Advisory", {"assessment": "safe"})
+    add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+    add_node(conn, "ev2", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+    add_edge(conn, "belongs-to", "c1", "sub1")
+    add_edge(conn, "extracted-from", "c1", "ev1")
+    add_edge(conn, "extracted-from", "c1", "ev2")
+    add_edge(conn, "sourced-from", "ev1", "src1")
+    add_edge(conn, "sourced-from", "ev2", "src2")
+    add_edge(conn, "assessed-by", "src1", "adv1")
+    add_edge(conn, "assessed-by", "src2", "adv2")
+    delete_node(conn, "ev1")
+    assert get_node(conn, "ev1") is None
 
 
 # --- delete_edge ---

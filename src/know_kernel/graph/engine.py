@@ -133,8 +133,21 @@ def delete_node(conn: sqlite3.Connection, node_id: str) -> None:
     node = get_node(conn, node_id)
     if node is None:
         raise ValueError(f"Node '{node_id}' does not exist")
+    affected = conn.execute(
+        "SELECT DISTINCT e.source_id, n.kind FROM edges e JOIN nodes n ON e.source_id = n.id WHERE e.target_id = ?",
+        (node_id,),
+    ).fetchall()
+    conn.execute("SAVEPOINT delete_node_check")
     conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (node_id, node_id))
     conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
+    all_violations: list[Violation] = []
+    for dep_id, dep_kind in affected:
+        all_violations.extend(validate_node(conn, dep_id, dep_kind))
+    if all_violations:
+        conn.execute("ROLLBACK TO SAVEPOINT delete_node_check")
+        conn.execute("RELEASE SAVEPOINT delete_node_check")
+        raise AdmissibilityError(all_violations)
+    conn.execute("RELEASE SAVEPOINT delete_node_check")
 
 
 def delete_edge(conn: sqlite3.Connection, edge_id: int) -> None:
