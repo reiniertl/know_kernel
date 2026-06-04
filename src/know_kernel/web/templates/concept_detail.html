@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ node.id }}</h1>
+<p><strong>Kind:</strong> {{ node.kind }}</p>
+<h2>Attributes</h2>
+<table>
+  <thead><tr><th>Key</th><th>Value</th></tr></thead>
+  <tbody>
+  {% if node.attrs %}
+    {% for key, val in node.attrs.items() %}
+      <tr><td>{{ key }}</td><td>{{ val }}</td></tr>
+    {% endfor %}
+  {% else %}
+    <tr><td colspan="2">No attributes.</td></tr>
+  {% endif %}
+  </tbody>
+</table>
+<h2>Edges</h2>
+<table>
+  <thead><tr><th>Kind</th><th>Source</th><th>Target</th></tr></thead>
+  <tbody>
+  {% for edge in edges %}
+    <tr>
+      <td>{{ edge.kind }}</td>
+      <td><a href="/concepts/{{ edge.source_id }}">{{ edge.source_id }}</a></td>
+      <td><a href="/concepts/{{ edge.target_id }}">{{ edge.target_id }}</a></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="3">No edges.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

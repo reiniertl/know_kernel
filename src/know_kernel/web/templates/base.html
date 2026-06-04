@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>know_kernel</title>
+  <style>
+    body { font-family: monospace; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    nav { margin-bottom: 1.5rem; }
+    nav a { margin-right: 1rem; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 0.4rem 0.6rem; text-align: left; }
+  </style>
+</head>
+<body>
+<nav>
+  <a href="/">Dashboard</a>
+  <a href="/concepts">All Nodes</a>
+  <a href="/subsystems">Subsystems</a>
+  <a href="/sources">Sources</a>
+  <a href="/graph">Graph JSON</a>
+</nav>
+{% block content %}{% endblock %}
+</body>
+</html>

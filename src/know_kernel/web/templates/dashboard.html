@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Knowledge Base — Dashboard</h1>
+<p>{{ total }} nodes &nbsp;|&nbsp; {{ edge_total }} edges</p>
+<table>
+  <thead><tr><th>Kind</th><th>Count</th></tr></thead>
+  <tbody>
+  {% for kind, count in counts.items() %}
+    <tr><td>{{ kind }}</td><td>{{ count }}</td></tr>
+  {% else %}
+    <tr><td colspan="2">No nodes yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
