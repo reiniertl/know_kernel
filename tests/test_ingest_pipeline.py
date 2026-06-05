@@ -76,3 +76,9 @@ class TestIngestDocument:
         empty.write_bytes(b"")
         with pytest.raises(ValueError, match="Empty document"):
             ingest_document(conn, str(empty), "https://example.com/empty.txt", "paper")
+
+    def test_no_advisory_after_ingest(self, conn, doc_file):
+        """INV-KK-INGEST-SOURCE-HAS-ADVISORY: ingestion creates no Advisory nodes."""
+        ingest_document(conn, doc_file, "https://example.com/doc.txt", "paper")
+        count = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'Advisory'").fetchone()[0]
+        assert count == 0
