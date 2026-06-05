@@ -47,6 +47,8 @@ def parse_document(path: str, source_type: str = "") -> ParsedDocument:
 
 def _parse_text(p: Path, source_type: str, file_type: str) -> ParsedDocument:
     text = p.read_text(encoding="utf-8", errors="replace")
+    if not text:
+        raise ValueError(f"Empty document: {p} produced no text content")
     metadata = {
         "filename": p.name,
         "source_type": source_type,

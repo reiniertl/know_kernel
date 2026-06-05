@@ -91,8 +91,6 @@ def test_parse_nonexistent_file_raises() -> None:
 
 
 def test_parse_empty_file(empty_file: Path) -> None:
-    """Parsing a zero-byte file returns a ParsedDocument with empty text."""
-    doc = parse_document(str(empty_file))
-    assert doc.file_type == "txt"
-    assert doc.text == ""
-    assert doc.page_count == 1
+    """Parsing a zero-byte file raises ValueError (INV-KK-PARSE-RETURNS-TEXT)."""
+    with pytest.raises(ValueError, match="Empty document"):
+        parse_document(str(empty_file))

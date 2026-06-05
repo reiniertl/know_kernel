@@ -70,3 +70,9 @@ class TestIngestDocument:
         gate = SessionGate()
         ingest_document(conn, doc_file, "https://example.com/doc.txt", "paper", gate=gate)
         assert gate.is_extraction_mode is True
+
+    def test_ingest_empty_file_raises(self, conn, tmp_path):
+        empty = tmp_path / "empty.txt"
+        empty.write_bytes(b"")
+        with pytest.raises(ValueError, match="Empty document"):
+            ingest_document(conn, str(empty), "https://example.com/empty.txt", "paper")
