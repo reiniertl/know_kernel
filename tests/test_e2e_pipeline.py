@@ -1,0 +1,252 @@
+"""E2E integration test — INV-KK-E2E-PIPELINE-SOUND.
+
+Verifies the full pipeline: ingest → review → extract → export → MCP verify.
+Uses a mock LLM client to avoid real API calls.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from know_kernel.graph.engine import add_edge, add_node
+from know_kernel.graph.schema import init_db
+from know_kernel.export.exporter import export_class_b_snapshot
+from know_kernel.ingest.extractor import extract_concepts
+from know_kernel.ingest.gate import SessionGate, SessionViolationError
+from know_kernel.ingest.pipeline import ingest_document
+from know_kernel.ingest.reviewer import review_source
+from know_kernel.mcp_server.server import init_snapshot
+
+
+class MockLLMClient:
+    def create_message(self, model: str, system: str, user: str, max_tokens: int) -> dict:
+        return {
+            "text": json.dumps([
+                {"name": "Virtual Address Translation", "description": "A mechanism that maps process-specific virtual addresses to physical memory locations through a hierarchical lookup structure."},
+                {"name": "Demand Paging", "description": "A lazy loading strategy that defers page allocation until the first access, reducing memory footprint for large address spaces."},
+            ]),
+            "prompt_tokens": 100,
+            "response_tokens": 50,
+        }
+
+
+@pytest.fixture
+def master_db(tmp_path):
+    return tmp_path / "master.db"
+
+
+@pytest.fixture
+def snapshot_db(tmp_path):
+    return tmp_path / "snapshot.db"
+
+
+class TestE2EPipeline:
+    def test_full_pipeline_produces_class_b_only(self, master_db, snapshot_db):
+        """INV-KK-E2E-PIPELINE-SOUND: full pipeline, zero Class A leakage."""
+        conn = init_db(master_db)
+
+        # Step 1: Ingest
+        doc = master_db.parent / "test_doc.txt"
+        doc.write_text("MIT License. This paper describes virtual memory management and demand paging in modern kernels.")
+        gate = SessionGate()
+        ingest_result = ingest_document(conn, str(doc), "https://example.com/vm.txt", "paper", gate=gate)
+        assert gate.is_extraction_mode
+
+        # Step 2: Review
+        review_result = review_source(
+            conn, ingest_result.source_id,
+            "License confirmed as MIT. No restrictions on concept extraction.",
+            "weak-copyleft",
+        )
+        assert review_result.advisory_id.startswith("adv-")
+
+        # Step 3: Extract (mock LLM)
+        extract_result = extract_concepts(
+            conn, ingest_result.evidence_id, gate,
+            model="test-model", client=MockLLMClient(),
+        )
+        assert extract_result.concepts_created == 2
+        assert all(cid.startswith("concept-") for cid in extract_result.concept_ids)
+
+        # Step 3b: Add Subsystem + belongs-to edges (required by graph validation)
+        add_node(conn, "sub-vm", "Subsystem", {"name": "Virtual Memory"})
+        for cid in extract_result.concept_ids:
+            add_edge(conn, "belongs-to", cid, "sub-vm")
+
+        conn.commit()
+
+        # Step 4: Export
+        report = export_class_b_snapshot(master_db, snapshot_db)
+
+        # Step 5: Verify snapshot contents — Class B only
+        snap_conn = sqlite3.connect(str(snapshot_db))
+        kinds = [row[0] for row in snap_conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()]
+        assert "Evidence" not in kinds
+        assert "Source" not in kinds
+        assert "Advisory" not in kinds
+        assert "Concept" in kinds
+
+        concept_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'Concept'").fetchone()[0]
+        assert concept_count == 2
+
+        for row in snap_conn.execute("SELECT attrs FROM nodes WHERE kind = 'Concept'").fetchall():
+            attrs = json.loads(row[0])
+            assert attrs["artifact_class"] == "abstracted-mechanism"
+
+        snap_conn.close()
+
+        # Step 6: MCP init validates Class B-only
+        init_snapshot(str(snapshot_db))
+
+    def test_session_gate_blocks_cross_mode(self, master_db):
+        """SessionGate prevents proposal-mode sessions from accessing Class A."""
+        conn = init_db(master_db)
+        doc = master_db.parent / "test_doc2.txt"
+        doc.write_text("MIT License. Some content about process scheduling.")
+
+        gate = SessionGate()
+        gate.record_proposal()
+
+        with pytest.raises(SessionViolationError):
+            ingest_document(conn, str(doc), "https://example.com/sched.txt", "paper", gate=gate)
+
+    def test_extraction_gate_blocks_proposal_mode(self, master_db):
+        """SessionGate prevents proposal-mode from extracting."""
+        conn = init_db(master_db)
+        doc = master_db.parent / "test_doc3.txt"
+        doc.write_text("MIT License. Content about IPC mechanisms.")
+
+        ingest_gate = SessionGate()
+        result = ingest_document(conn, str(doc), "https://example.com/ipc.txt", "paper", gate=ingest_gate)
+        conn.commit()
+
+        proposal_gate = SessionGate()
+        proposal_gate.record_proposal()
+
+        with pytest.raises(SessionViolationError):
+            extract_concepts(conn, result.evidence_id, proposal_gate, client=MockLLMClient())
+
+    def test_export_excludes_all_class_a_kinds(self, master_db, snapshot_db):
+        """Snapshot contains zero Evidence, Source, or Advisory nodes."""
+        conn = init_db(master_db)
+        doc = master_db.parent / "test_doc4.txt"
+        doc.write_text("Apache License Version 2.0. Filesystem journaling techniques.")
+
+        gate = SessionGate()
+        ingest_result = ingest_document(conn, str(doc), "https://example.com/fs.txt", "paper", gate=gate)
+        review_source(conn, ingest_result.source_id, "Apache 2.0 confirmed.", "weak-copyleft")
+        extract_result = extract_concepts(
+            conn, ingest_result.evidence_id, gate,
+            client=MockLLMClient(),
+        )
+        add_node(conn, "sub-fs", "Subsystem", {"name": "Filesystem"})
+        for cid in extract_result.concept_ids:
+            add_edge(conn, "belongs-to", cid, "sub-fs")
+        conn.commit()
+
+        export_class_b_snapshot(master_db, snapshot_db)
+
+        snap_conn = sqlite3.connect(str(snapshot_db))
+        forbidden = snap_conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE kind IN ('Evidence', 'Source', 'Advisory')"
+        ).fetchone()[0]
+        assert forbidden == 0
+
+        class_b = snap_conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE kind = 'Concept'"
+        ).fetchone()[0]
+        assert class_b == 2
+        snap_conn.close()
+
+    def test_extraction_idempotent_in_pipeline(self, master_db):
+        """Re-extraction from same Evidence skips — no duplicates."""
+        conn = init_db(master_db)
+        doc = master_db.parent / "test_doc5.txt"
+        doc.write_text("MIT License. Scheduler design patterns.")
+
+        gate = SessionGate()
+        result = ingest_document(conn, str(doc), "https://example.com/sched.txt", "paper", gate=gate)
+        conn.commit()
+
+        client = MockLLMClient()
+        r1 = extract_concepts(conn, result.evidence_id, gate, client=client)
+        assert r1.concepts_created == 2
+
+        r2 = extract_concepts(conn, result.evidence_id, gate, client=client)
+        assert r2.concepts_created == 0
+        assert r2.concepts_skipped == 2
+
+    def test_advisory_edge_present_after_review(self, master_db):
+        """Review creates assessed-by edge from Source to Advisory."""
+        conn = init_db(master_db)
+        doc = master_db.parent / "test_doc6.txt"
+        doc.write_text("BSD License. Memory allocator internals.")
+
+        gate = SessionGate()
+        result = ingest_document(conn, str(doc), "https://example.com/alloc.txt", "paper", gate=gate)
+        review = review_source(conn, result.source_id, "BSD confirmed.", "weak-copyleft")
+
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind = 'assessed-by' AND source_id = ? AND target_id = ?",
+            (result.source_id, review.advisory_id),
+        ).fetchone()
+        assert edge is not None
+
+    def test_concept_provenance_in_pipeline(self, master_db):
+        """Every extracted Concept has extracted-from edge to Evidence."""
+        conn = init_db(master_db)
+        doc = master_db.parent / "test_doc7.txt"
+        doc.write_text("MIT License. Lock-free data structures.")
+
+        gate = SessionGate()
+        result = ingest_document(conn, str(doc), "https://example.com/lockfree.txt", "paper", gate=gate)
+        conn.commit()
+
+        extract = extract_concepts(conn, result.evidence_id, gate, client=MockLLMClient())
+        for cid in extract.concept_ids:
+            edge = conn.execute(
+                "SELECT 1 FROM edges WHERE kind = 'extracted-from' AND source_id = ? AND target_id = ?",
+                (cid, result.evidence_id),
+            ).fetchone()
+            assert edge is not None
+
+    def test_snapshot_concepts_are_class_b(self, master_db, snapshot_db):
+        """All Concepts in snapshot have artifact_class=abstracted-mechanism."""
+        conn = init_db(master_db)
+        doc = master_db.parent / "test_doc8.txt"
+        doc.write_text("MIT License. Real-time scheduling algorithms.")
+
+        gate = SessionGate()
+        result = ingest_document(conn, str(doc), "https://example.com/rt.txt", "paper", gate=gate)
+        review_source(conn, result.source_id, "MIT confirmed.", "weak-copyleft")
+        extract = extract_concepts(conn, result.evidence_id, gate, client=MockLLMClient())
+        add_node(conn, "sub-rt", "Subsystem", {"name": "Real-Time"})
+        for cid in extract.concept_ids:
+            add_edge(conn, "belongs-to", cid, "sub-rt")
+        conn.commit()
+
+        export_class_b_snapshot(master_db, snapshot_db)
+
+        snap_conn = sqlite3.connect(str(snapshot_db))
+        for row in snap_conn.execute("SELECT attrs FROM nodes WHERE kind = 'Concept'").fetchall():
+            attrs = json.loads(row[0])
+            assert attrs["artifact_class"] == "abstracted-mechanism"
+        snap_conn.close()
+
+    def test_mcp_rejects_non_class_b_snapshot(self, tmp_path):
+        """MCP init_snapshot rejects a DB containing Evidence nodes."""
+        bad_db = tmp_path / "bad_snapshot.db"
+        conn = init_db(bad_db)
+        add_node(conn, "ev-bad", "Evidence", {
+            "artifact_class": "licensed-evidence",
+            "contamination_level": "weak-copyleft",
+        })
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(ValueError, match="Not a Class B-only snapshot"):
+            init_snapshot(str(bad_db))
