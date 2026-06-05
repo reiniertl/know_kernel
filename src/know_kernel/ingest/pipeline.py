@@ -8,8 +8,9 @@ from dataclasses import dataclass
 
 from know_kernel.graph.engine import add_edge, add_node
 from know_kernel.graph.rules import validate_node
+from know_kernel.ingest.gate import SessionGate
 from know_kernel.ingest.parser import parse_document
-from know_kernel.ingest.scanner import ScanResult, scan_license
+from know_kernel.ingest.scanner import ArtifactClass, ScanResult, scan_license
 
 
 @dataclass
@@ -26,6 +27,7 @@ def ingest_document(
     file_path: str,
     url: str,
     source_type: str,
+    gate: SessionGate | None = None,
 ) -> IngestResult:
     """Ingest one document: parse → scan → write Source + Evidence to graph.
 
@@ -37,6 +39,9 @@ def ingest_document(
     """
     parsed = parse_document(file_path, source_type)
     scan = scan_license(parsed)
+
+    if gate is not None and scan.artifact_class is ArtifactClass.A:
+        gate.record_class_a_access()
 
     source_id = f"src-{uuid.uuid4().hex[:12]}"
     evidence_id = f"ev-{uuid.uuid4().hex[:12]}"

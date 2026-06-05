@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from know_kernel.graph.schema import init_db
+from know_kernel.ingest.gate import SessionGate
 from know_kernel.ingest.pipeline import ingest_document
 
 
@@ -39,12 +40,14 @@ def main() -> None:
     files = sorted(f for f in input_path.rglob("*") if f.is_file()) \
         if input_path.is_dir() else [input_path]
 
+    gate = SessionGate()
+
     results = []
     errors = []
 
     for fp in files:
         try:
-            result = ingest_document(conn, str(fp), args.url, args.source_type)
+            result = ingest_document(conn, str(fp), args.url, args.source_type, gate=gate)
             results.append({
                 "file": str(fp),
                 "source_id": result.source_id,

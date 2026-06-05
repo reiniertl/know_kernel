@@ -4,6 +4,7 @@ import pytest
 
 from know_kernel.graph.engine import validate_graph
 from know_kernel.graph.schema import init_db
+from know_kernel.ingest.gate import SessionGate, SessionViolationError
 from know_kernel.ingest.scanner import ArtifactClass
 from know_kernel.ingest.pipeline import IngestResult, ingest_document
 
@@ -58,3 +59,14 @@ class TestIngestDocument:
                 "https://example.com/missing.txt",
                 "paper",
             )
+
+    def test_ingest_proposal_mode_rejects_class_a(self, conn, doc_file):
+        gate = SessionGate()
+        gate.record_proposal()
+        with pytest.raises(SessionViolationError):
+            ingest_document(conn, doc_file, "https://example.com/doc.txt", "paper", gate=gate)
+
+    def test_ingest_clean_gate_enters_extraction_mode(self, conn, doc_file):
+        gate = SessionGate()
+        ingest_document(conn, doc_file, "https://example.com/doc.txt", "paper", gate=gate)
+        assert gate.is_extraction_mode is True
