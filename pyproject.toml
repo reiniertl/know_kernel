@@ -26,13 +26,13 @@ dev = [
 ]
 
 [project.scripts]
-kk-ingest = "know_kernel.ingest.cli:main"
-kk-web = "know_kernel.web.app:main"
-kk-export = "know_kernel.export.cli:main"
-kk-mcp = "know_kernel.mcp_server.server:main"
+kk-ingest = "ingest.cli:main"
+kk-web = "web.app:main"
+kk-export = "export.cli:main"
+kk-mcp = "mcp_server.server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/know_kernel"]
+packages = ["src/graph", "src/ingest", "src/export", "src/web", "src/mcp_server"]
 
 [tool.ruff]
 target-version = "py311"

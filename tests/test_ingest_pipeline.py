@@ -1,12 +1,12 @@
-"""Tests for ingest_document — INV-KK-INGEST-CREATES-EVIDENCE."""
+﻿"""Tests for ingest_document â€” INV-KK-INGEST-CREATES-EVIDENCE."""
 
 import pytest
 
-from know_kernel.graph.engine import validate_graph
-from know_kernel.graph.schema import init_db
-from know_kernel.ingest.gate import SessionGate, SessionViolationError
-from know_kernel.ingest.scanner import ArtifactClass
-from know_kernel.ingest.pipeline import IngestResult, ingest_document
+from graph.engine import validate_graph
+from graph.schema import init_db
+from ingest.gate import SessionGate, SessionViolationError
+from ingest.scanner import ArtifactClass
+from ingest.pipeline import IngestResult, ingest_document
 
 
 @pytest.fixture

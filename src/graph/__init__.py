@@ -1,6 +1,6 @@
-"""Shared graph engine library — SQLite-backed concept store."""
+﻿"""Shared graph engine library â€” SQLite-backed concept store."""
 
-from know_kernel.graph.engine import (
+from graph.engine import (
     AdmissibilityError,
     add_edge,
     add_node,
@@ -15,8 +15,8 @@ from know_kernel.graph.engine import (
     update_node_attrs,
     validate_graph,
 )
-from know_kernel.graph.rules import Violation, validate_node
-from know_kernel.graph.schema import (
+from graph.rules import Violation, validate_node
+from graph.schema import (
     EDGE_KINDS,
     EDGE_VALID_PAIRS,
     NODE_KINDS,

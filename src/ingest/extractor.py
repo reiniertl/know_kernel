@@ -1,4 +1,4 @@
-"""LLM concept extraction — Evidence (Class A) → Concepts (Class B) (ALG-KK-LLM-EXTRACT)."""
+﻿"""LLM concept extraction â€” Evidence (Class A) â†’ Concepts (Class B) (ALG-KK-LLM-EXTRACT)."""
 
 from __future__ import annotations
 
@@ -8,18 +8,18 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from know_kernel.graph.engine import add_edge, add_node
-from know_kernel.ingest.gate import SessionGate
+from graph.engine import add_edge, add_node
+from ingest.gate import SessionGate
 
 
 EXTRACTION_SYSTEM_PROMPT = """\
 You are a concept extraction agent for a kernel-design intelligence system.
 
 Your task: given a document about operating system or kernel design, extract \
-abstract concepts — the IDEAS, MECHANISMS, and DESIGN PATTERNS described, \
+abstract concepts â€” the IDEAS, MECHANISMS, and DESIGN PATTERNS described, \
 NOT the specific text or expression used to describe them.
 
-CRITICAL RULES — LEGAL PROTECTION:
+CRITICAL RULES â€” LEGAL PROTECTION:
 - NEVER quote verbatim from the source material.
 - NEVER copy sentences, phrases, or distinctive wording from the source.
 - Express each concept in your own words as an abstract description of the mechanism.
@@ -144,7 +144,7 @@ def extract_concepts(
             src_attrs = json.loads(src_attrs_row[0])
             evidence_text = src_attrs.get("text", "")
 
-    user_prompt = f"Extract abstract concepts from this document:\n\n{evidence_text}" if evidence_text else f"Extract abstract concepts from Evidence node {evidence_id} (no text available — produce concepts from metadata only)."
+    user_prompt = f"Extract abstract concepts from this document:\n\n{evidence_text}" if evidence_text else f"Extract abstract concepts from Evidence node {evidence_id} (no text available â€” produce concepts from metadata only)."
 
     if dry_run:
         return ExtractionResult(

@@ -1,4 +1,4 @@
-"""Tests for kk-review CLI — ALG-KK-REVIEW-CLI."""
+﻿"""Tests for kk-review CLI â€” ALG-KK-REVIEW-CLI."""
 
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from know_kernel.graph.engine import add_edge, add_node
-from know_kernel.graph.schema import init_db
+from graph.engine import add_edge, add_node
+from graph.schema import init_db
 
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "know_kernel.ingest.cli_review", *args],
+        [sys.executable, "-m", "ingest.cli_review", *args],
         capture_output=True,
         text=True,
         cwd=str(Path(__file__).resolve().parents[1]),

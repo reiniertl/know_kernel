@@ -1,4 +1,4 @@
-"""Tests for export_class_b_snapshot and validate_snapshot — the contamination gate."""
+﻿"""Tests for export_class_b_snapshot and validate_snapshot â€” the contamination gate."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from know_kernel.graph.schema import init_db
-from know_kernel.graph.engine import add_node, add_edge
-from know_kernel.export.exporter import (
+from graph.schema import init_db
+from graph.engine import add_node, add_edge
+from export.exporter import (
     ALLOWED_KINDS,
     ExportValidationError,
     export_class_b_snapshot,

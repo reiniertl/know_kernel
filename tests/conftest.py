@@ -1,4 +1,4 @@
-"""Shared fixtures for graph engine tests."""
+﻿"""Shared fixtures for graph engine tests."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from know_kernel.graph.schema import init_db
-from know_kernel.graph.engine import add_node, add_edge
+from graph.schema import init_db
+from graph.engine import add_node, add_edge
 
 
 @pytest.fixture

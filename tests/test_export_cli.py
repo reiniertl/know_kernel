@@ -1,4 +1,4 @@
-"""Tests for the kk-export CLI entry point."""
+﻿"""Tests for the kk-export CLI entry point."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from know_kernel.graph.schema import init_db
-from know_kernel.graph.engine import add_node, add_edge
+from graph.schema import init_db
+from graph.engine import add_node, add_edge
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def cli_master_db(tmp_path: Path) -> Path:
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "know_kernel.export.cli", *args],
+        [sys.executable, "-m", "export.cli", *args],
         capture_output=True,
         text=True,
         cwd=str(Path(__file__).resolve().parents[1]),
@@ -85,7 +85,7 @@ class TestExportCli:
         assert result.returncode != 0
 
     def test_validation_failure_exit_1(self, tmp_path: Path) -> None:
-        """Master DB with admissibility violations → exit 1."""
+        """Master DB with admissibility violations â†’ exit 1."""
         master = tmp_path / "bad.db"
         conn = init_db(master)
         add_node(conn, "c1", "Concept", {"name": "X", "description": "x", "artifact_class": "B"})

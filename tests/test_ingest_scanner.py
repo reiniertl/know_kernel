@@ -1,7 +1,7 @@
-"""Tests for scan_license — INV-KK-ALL-EVIDENCE-CLASS-A and INV-KK-UNKNOWN-LICENSE-L4."""
+﻿"""Tests for scan_license â€” INV-KK-ALL-EVIDENCE-CLASS-A and INV-KK-UNKNOWN-LICENSE-L4."""
 
-from know_kernel.ingest.parser import ParsedDocument
-from know_kernel.ingest.scanner import ArtifactClass, ContaminationLevel, ScanResult, scan_license
+from ingest.parser import ParsedDocument
+from ingest.scanner import ArtifactClass, ContaminationLevel, ScanResult, scan_license
 
 
 def _doc(text: str) -> ParsedDocument:

@@ -1,4 +1,4 @@
-"""CLI entry point for the snapshot exporter."""
+﻿"""CLI entry point for the snapshot exporter."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from know_kernel.export.exporter import ExportValidationError, export_class_b_snapshot
+from export.exporter import ExportValidationError, export_class_b_snapshot
 
 
 def main() -> None:

@@ -1,6 +1,6 @@
-"""E2E integration test — INV-KK-E2E-PIPELINE-SOUND.
+﻿"""E2E integration test â€” INV-KK-E2E-PIPELINE-SOUND.
 
-Verifies the full pipeline: ingest → review → extract → export → MCP verify.
+Verifies the full pipeline: ingest â†’ review â†’ extract â†’ export â†’ MCP verify.
 Uses a mock LLM client to avoid real API calls.
 """
 
@@ -12,14 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from know_kernel.graph.engine import add_edge, add_node
-from know_kernel.graph.schema import init_db
-from know_kernel.export.exporter import export_class_b_snapshot
-from know_kernel.ingest.extractor import extract_concepts
-from know_kernel.ingest.gate import SessionGate, SessionViolationError
-from know_kernel.ingest.pipeline import ingest_document
-from know_kernel.ingest.reviewer import review_source
-from know_kernel.mcp_server.server import init_snapshot
+from graph.engine import add_edge, add_node
+from graph.schema import init_db
+from export.exporter import export_class_b_snapshot
+from ingest.extractor import extract_concepts
+from ingest.gate import SessionGate, SessionViolationError
+from ingest.pipeline import ingest_document
+from ingest.reviewer import review_source
+from mcp_server.server import init_snapshot
 
 
 class MockLLMClient:
@@ -82,7 +82,7 @@ class TestE2EPipeline:
         # Step 4: Export
         report = export_class_b_snapshot(master_db, snapshot_db)
 
-        # Step 5: Verify snapshot contents — Class B only
+        # Step 5: Verify snapshot contents â€” Class B only
         snap_conn = sqlite3.connect(str(snapshot_db))
         kinds = [row[0] for row in snap_conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()]
         assert "Evidence" not in kinds
@@ -163,7 +163,7 @@ class TestE2EPipeline:
         snap_conn.close()
 
     def test_extraction_idempotent_in_pipeline(self, master_db):
-        """Re-extraction from same Evidence skips — no duplicates."""
+        """Re-extraction from same Evidence skips â€” no duplicates."""
         conn = init_db(master_db)
         doc = master_db.parent / "test_doc5.txt"
         doc.write_text("MIT License. Scheduler design patterns.")

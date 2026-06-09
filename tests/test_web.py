@@ -1,4 +1,4 @@
-"""Tests for know_kernel web API — ALG-KK-WEB-SERVE.
+﻿"""Tests for know_kernel web API â€” ALG-KK-WEB-SERVE.
 
 INV-KK-WEB-READ-ONLY: no write endpoints.
 INV-KK-WEB-FULL-ACCESS: all node kinds served to humans.
@@ -9,9 +9,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from know_kernel.graph.engine import add_edge, add_node
-from know_kernel.graph.schema import init_db
-from know_kernel.web.app import create_app
+from graph.engine import add_edge, add_node
+from graph.schema import init_db
+from web.app import create_app
 
 
 @pytest.fixture

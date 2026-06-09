@@ -1,11 +1,11 @@
-"""Tests for know_kernel.graph.rules — admissibility rule checkers."""
+﻿"""Tests for know_kernel.graph.rules â€” admissibility rule checkers."""
 
 from __future__ import annotations
 
 import sqlite3
 
-from know_kernel.graph.engine import add_edge, add_node
-from know_kernel.graph.rules import (
+from graph.engine import add_edge, add_node
+from graph.rules import (
     Violation,
     check_concept_has_belongs_to,
     check_concept_has_provenance,

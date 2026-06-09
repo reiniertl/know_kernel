@@ -1,4 +1,4 @@
-"""Tests for structural constraints — symmetric contradicts, acyclic supersedes, path_exists."""
+﻿"""Tests for structural constraints â€” symmetric contradicts, acyclic supersedes, path_exists."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import sqlite3
 
 import pytest
 
-from know_kernel.graph.engine import add_edge, add_node, path_exists
+from graph.engine import add_edge, add_node, path_exists
 
 
 # --- INV-KK-CONTRADICTS-SYMMETRIC ---
@@ -32,7 +32,7 @@ def test_contradicts_explicit_reverse_hits_unique(populated: sqlite3.Connection)
 
 
 def test_contradicts_delete_removes_reverse(populated: sqlite3.Connection):
-    from know_kernel.graph.engine import delete_edge
+    from graph.engine import delete_edge
 
     add_edge(populated, "contradicts", "c1", "c2")
     eid = populated.execute(

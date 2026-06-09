@@ -1,4 +1,4 @@
-"""Tests for kk-ingest CLI — ALG-KK-INGEST-CLI."""
+﻿"""Tests for kk-ingest CLI â€” ALG-KK-INGEST-CLI."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "know_kernel.ingest.cli", *args],
+        [sys.executable, "-m", "ingest.cli", *args],
         capture_output=True,
         text=True,
         cwd=str(Path(__file__).resolve().parents[1]),

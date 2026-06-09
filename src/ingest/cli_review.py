@@ -1,4 +1,4 @@
-"""CLI entry point for the review service (ALG-KK-REVIEW-CLI)."""
+﻿"""CLI entry point for the review service (ALG-KK-REVIEW-CLI)."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import json
 import sys
 from pathlib import Path
 
-from know_kernel.graph.schema import init_db
-from know_kernel.ingest.reviewer import review_source
+from graph.schema import init_db
+from ingest.reviewer import review_source
 
 
 def main() -> None:

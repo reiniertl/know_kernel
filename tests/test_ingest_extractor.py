@@ -1,4 +1,4 @@
-"""Tests for extract_concepts — ALG-KK-LLM-EXTRACT invariants."""
+﻿"""Tests for extract_concepts â€” ALG-KK-LLM-EXTRACT invariants."""
 
 from __future__ import annotations
 
@@ -6,14 +6,14 @@ import json
 
 import pytest
 
-from know_kernel.graph.engine import add_edge, add_node
-from know_kernel.graph.schema import init_db
-from know_kernel.ingest.extractor import (
+from graph.engine import add_edge, add_node
+from graph.schema import init_db
+from ingest.extractor import (
     EXTRACTION_SYSTEM_PROMPT,
     ExtractionResult,
     extract_concepts,
 )
-from know_kernel.ingest.gate import SessionGate, SessionViolationError
+from ingest.gate import SessionGate, SessionViolationError
 
 
 class MockLLMClient:

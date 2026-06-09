@@ -1,4 +1,4 @@
-"""Ingestion pipeline — parse → scan → graph write (ALG-KK-INGEST-PIPELINE)."""
+﻿"""Ingestion pipeline â€” parse â†’ scan â†’ graph write (ALG-KK-INGEST-PIPELINE)."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 
-from know_kernel.graph.engine import add_edge, add_node
-from know_kernel.graph.rules import validate_node
-from know_kernel.ingest.gate import SessionGate
-from know_kernel.ingest.parser import parse_document
-from know_kernel.ingest.scanner import ArtifactClass, ScanResult, scan_license
+from graph.engine import add_edge, add_node
+from graph.rules import validate_node
+from ingest.gate import SessionGate
+from ingest.parser import parse_document
+from ingest.scanner import ArtifactClass, ScanResult, scan_license
 
 
 @dataclass
@@ -29,7 +29,7 @@ def ingest_document(
     source_type: str,
     gate: SessionGate | None = None,
 ) -> IngestResult:
-    """Ingest one document: parse → scan → write Source + Evidence to graph.
+    """Ingest one document: parse â†’ scan â†’ write Source + Evidence to graph.
 
     Creates exactly one Source node, one Evidence node, and a sourced-from edge
     (INV-KK-INGEST-CREATES-EVIDENCE). Does not create Advisory nodes

@@ -1,4 +1,4 @@
-"""Source review workflow — creates Advisory nodes (ALG-KK-REVIEW-SOURCE)."""
+﻿"""Source review workflow â€” creates Advisory nodes (ALG-KK-REVIEW-SOURCE)."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 
-from know_kernel.graph.engine import add_edge, add_node
-from know_kernel.graph.rules import validate_node
-from know_kernel.ingest.scanner import ContaminationLevel
+from graph.engine import add_edge, add_node
+from graph.rules import validate_node
+from ingest.scanner import ContaminationLevel
 
 
 VALID_LEVELS = {level.value for level in ContaminationLevel}

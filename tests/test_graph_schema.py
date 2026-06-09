@@ -1,10 +1,10 @@
-"""Tests for know_kernel.graph.schema — init_db, table creation, kind enums."""
+﻿"""Tests for know_kernel.graph.schema â€” init_db, table creation, kind enums."""
 
 from __future__ import annotations
 
 import sqlite3
 
-from know_kernel.graph.schema import (
+from graph.schema import (
     EDGE_KINDS,
     EDGE_VALID_PAIRS,
     NODE_KINDS,

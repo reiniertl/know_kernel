@@ -1,4 +1,4 @@
-"""Graph engine — node/edge CRUD and traversal queries."""
+﻿"""Graph engine â€” node/edge CRUD and traversal queries."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import json
 import sqlite3
 from typing import Any
 
-from know_kernel.graph.rules import Violation, validate_node
-from know_kernel.graph.schema import EDGE_VALID_PAIRS, REQUIRED_ATTRS
+from graph.rules import Violation, validate_node
+from graph.schema import EDGE_VALID_PAIRS, REQUIRED_ATTRS
 
 
 class AdmissibilityError(Exception):

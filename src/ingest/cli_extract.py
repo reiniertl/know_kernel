@@ -1,4 +1,4 @@
-"""CLI entry point for the extraction service (ALG-KK-EXTRACT-CLI)."""
+﻿"""CLI entry point for the extraction service (ALG-KK-EXTRACT-CLI)."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ import json
 import sys
 from pathlib import Path
 
-from know_kernel.graph.schema import init_db
-from know_kernel.ingest.extractor import extract_concepts
-from know_kernel.ingest.gate import SessionGate
+from graph.schema import init_db
+from ingest.extractor import extract_concepts
+from ingest.gate import SessionGate
 
 
 def main() -> None:

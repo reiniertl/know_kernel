@@ -1,10 +1,10 @@
-"""Tests for review_source — ALG-KK-REVIEW-SOURCE invariants."""
+﻿"""Tests for review_source â€” ALG-KK-REVIEW-SOURCE invariants."""
 
 import pytest
 
-from know_kernel.graph.engine import add_edge, add_node
-from know_kernel.graph.schema import init_db
-from know_kernel.ingest.reviewer import ReviewResult, review_source
+from graph.engine import add_edge, add_node
+from graph.schema import init_db
+from ingest.reviewer import ReviewResult, review_source
 
 
 @pytest.fixture

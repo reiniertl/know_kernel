@@ -1,4 +1,4 @@
-"""Tests for MCP server — ALG-KK-MCP-QUERY.
+﻿"""Tests for MCP server â€” ALG-KK-MCP-QUERY.
 
 INV-KK-MCP-SNAPSHOT-ONLY: only Class B snapshot accepted.
 INV-KK-MCP-NO-WRITE: read-only connection enforced.
@@ -11,10 +11,10 @@ import sqlite3
 
 import pytest
 
-import know_kernel.mcp_server.server as srv
-from know_kernel.export.exporter import export_class_b_snapshot
-from know_kernel.graph.engine import add_edge, add_node
-from know_kernel.graph.schema import init_db
+import mcp_server.server as srv
+from export.exporter import export_class_b_snapshot
+from graph.engine import add_edge, add_node
+from graph.schema import init_db
 
 
 @pytest.fixture
@@ -123,7 +123,7 @@ def test_snapshot_only_no_master(tmp_path):
 
 
 def test_read_only_connection(snapshot_path):
-    """INV-KK-MCP-NO-WRITE: connection opened in read-only URI mode — writes raise."""
+    """INV-KK-MCP-NO-WRITE: connection opened in read-only URI mode â€” writes raise."""
     conn = srv._conn
     assert conn is not None
     with pytest.raises(sqlite3.OperationalError):

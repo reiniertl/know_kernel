@@ -1,4 +1,4 @@
-"""License scanning and Class A/B classification."""
+﻿"""License scanning and Class A/B classification."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, List, Tuple
 
 if TYPE_CHECKING:
-    from know_kernel.ingest.parser import ParsedDocument
+    from ingest.parser import ParsedDocument
 
 
 class ArtifactClass(Enum):
@@ -42,23 +42,23 @@ _CONTAMINATION_ORDER = [
 
 # (regex pattern, contamination level, SPDX-ish identifier)
 _LICENSE_RULES: List[Tuple[str, ContaminationLevel, str]] = [
-    # L3 — patent-sensitive (explicit patent restrictions, not permissive grants)
+    # L3 â€” patent-sensitive (explicit patent restrictions, not permissive grants)
     (r"patent\s+retaliation", ContaminationLevel.L3, "LicenseRef-Patent-Retaliation"),
     (r"patent\s+claim", ContaminationLevel.L3, "LicenseRef-Patent-Claim"),
     (r"patent\s+termination", ContaminationLevel.L3, "LicenseRef-Patent-Termination"),
-    # L2 — strong copyleft
+    # L2 â€” strong copyleft
     (r"\bAGPL", ContaminationLevel.L2, "AGPL"),
     (r"\bLGPL", ContaminationLevel.L2, "LGPL"),
     (r"\bGPL", ContaminationLevel.L2, "GPL"),
     (r"GNU\s+(?:General|Lesser)\s+Public\s+License", ContaminationLevel.L2, "GPL"),
-    # L1 — permissive / weak copyleft
+    # L1 â€” permissive / weak copyleft
     (r"\bMIT\b", ContaminationLevel.L1, "MIT"),
     (r"\bBSD\b", ContaminationLevel.L1, "BSD"),
     (r"\bApache\b", ContaminationLevel.L1, "Apache-2.0"),
     (r"\bISC\b", ContaminationLevel.L1, "ISC"),
     (r"\bMPL\b", ContaminationLevel.L1, "MPL"),
     (r"Mozilla\s+Public\s+License", ContaminationLevel.L1, "MPL"),
-    # L0 — public domain / CC0
+    # L0 â€” public domain / CC0
     (r"\bCC[-\s]?0\b", ContaminationLevel.L0, "CC0-1.0"),
     (r"CC[-\s]?ZERO", ContaminationLevel.L0, "CC0-1.0"),
     (r"public[-\s]domain", ContaminationLevel.L0, "LicenseRef-PD"),

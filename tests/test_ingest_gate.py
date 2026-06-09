@@ -1,8 +1,8 @@
-"""Tests for SessionGate — INV-KK-SESSION-SEPARATION enforcement."""
+﻿"""Tests for SessionGate â€” INV-KK-SESSION-SEPARATION enforcement."""
 
 import pytest
 
-from know_kernel.ingest.gate import SessionGate, SessionViolationError
+from ingest.gate import SessionGate, SessionViolationError
 
 
 class TestSessionGate:

@@ -1,4 +1,4 @@
-"""CLI entry point for the ingestion service (ALG-KK-INGEST-CLI)."""
+﻿"""CLI entry point for the ingestion service (ALG-KK-INGEST-CLI)."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ import json
 import sys
 from pathlib import Path
 
-from know_kernel.graph.schema import init_db
-from know_kernel.ingest.gate import SessionGate
-from know_kernel.ingest.pipeline import ingest_document
+from graph.schema import init_db
+from ingest.gate import SessionGate
+from ingest.pipeline import ingest_document
 
 
 def main() -> None:

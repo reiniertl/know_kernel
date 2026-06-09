@@ -1,4 +1,4 @@
-"""Snapshot exporter — produces a Class B-only SQLite DB from the master.
+﻿"""Snapshot exporter â€” produces a Class B-only SQLite DB from the master.
 
 This is the contamination gate for LLM consumption. It filters out all
 Class A content so the MCP server is clean by construction.
@@ -11,8 +11,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from know_kernel.graph.engine import validate_graph
-from know_kernel.graph.schema import init_db
+from graph.engine import validate_graph
+from graph.schema import init_db
 
 ALLOWED_KINDS = ("Concept", "Subsystem", "Proposal")
 

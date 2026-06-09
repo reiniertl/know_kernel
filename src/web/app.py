@@ -1,4 +1,4 @@
-"""FastAPI application factory — ALG-KK-WEB-SERVE."""
+﻿"""FastAPI application factory â€” ALG-KK-WEB-SERVE."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.templating import Jinja2Templates
 
-from know_kernel.graph.schema import SCHEMA_SQL
+from graph.schema import SCHEMA_SQL
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -40,7 +40,7 @@ def create_app(db_path: str) -> FastAPI:
         lifespan=lifespan,
     )
 
-    from know_kernel.web.routes import setup_routes
+    from web.routes import setup_routes
     setup_routes(application, templates)
 
     return application
@@ -51,7 +51,7 @@ app = create_app(os.environ.get("KNOW_KERNEL_DB", ":memory:"))
 
 def main() -> None:
     import uvicorn
-    uvicorn.run("know_kernel.web.app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("web.app:app", host="0.0.0.0", port=8000, reload=True)
 
 
 if __name__ == "__main__":

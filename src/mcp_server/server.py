@@ -1,4 +1,4 @@
-"""MCP server — exposes Class B concepts to opencode via MCP protocol.
+﻿"""MCP server â€” exposes Class B concepts to opencode via MCP protocol.
 
 ALG-KK-MCP-QUERY: query the Class B-only snapshot DB.
 INV-KK-MCP-SNAPSHOT-ONLY: only the snapshot path is opened; master DB never accessed.
@@ -136,7 +136,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(
         prog="kk-mcp",
-        description="know_kernel MCP server — serves Class B concepts to LLM tools.",
+        description="know_kernel MCP server â€” serves Class B concepts to LLM tools.",
     )
     parser.add_argument(
         "--snapshot", required=True,
