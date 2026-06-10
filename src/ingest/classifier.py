@@ -1,5 +1,5 @@
 """Subsystem auto-classification — ALG-KK-CLASSIFY-RESOLVE-SUBSYSTEM,
-ALG-KK-CLASSIFY-PARSE-LLM, IF-KK-CLASSIFICATION-RESULT."""
+ALG-KK-CLASSIFY-ASSIGN, ALG-KK-CLASSIFY-PARSE-LLM, IF-KK-CLASSIFICATION-RESULT."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 
-from graph.engine import add_node
+from graph.engine import add_edge, add_node
 
 
 @dataclass
@@ -36,6 +36,39 @@ def resolve_subsystem(conn: sqlite3.Connection, label: str) -> str:
     new_id = f"sub-{uuid.uuid4().hex[:12]}"
     add_node(conn, new_id, "Subsystem", {"name": stripped})
     return new_id
+
+
+def assign_subsystems(
+    conn: sqlite3.Connection,
+    concept_ids: list[str],
+    classifications: dict[str, str],
+) -> ClassificationResult:
+    concept_subsystem_map: dict[str, str] = {}
+    seen_subsystems: dict[str, bool] = {}
+
+    for concept_id in concept_ids:
+        label = classifications[concept_id]
+        existing_before = set(
+            row[0]
+            for row in conn.execute(
+                "SELECT id FROM nodes WHERE kind = 'Subsystem'"
+            ).fetchall()
+        )
+        subsystem_id = resolve_subsystem(conn, label)
+        is_new = subsystem_id not in existing_before
+        if subsystem_id not in seen_subsystems:
+            seen_subsystems[subsystem_id] = is_new
+        add_edge(conn, "belongs-to", concept_id, subsystem_id)
+        concept_subsystem_map[concept_id] = subsystem_id
+
+    created = sum(1 for v in seen_subsystems.values() if v)
+    reused = sum(1 for v in seen_subsystems.values() if not v)
+
+    return ClassificationResult(
+        concept_subsystem_map=concept_subsystem_map,
+        subsystems_created=created,
+        subsystems_reused=reused,
+    )
 
 
 def parse_classification_labels(
