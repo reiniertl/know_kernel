@@ -28,13 +28,27 @@ CRITICAL RULES â€” LEGAL PROTECTION:
 
 For each concept, provide:
 - name: A short descriptive name (2-5 words)
-- description: An abstract description of the mechanism or idea (1-3 sentences, \
-your own words, no verbatim copying)
-- subsystem: The kernel subsystem this concept belongs to (e.g., "Virtual Memory", \
-"Scheduler", "Filesystem", "IPC", "Networking", "Device Drivers", "Security")
+- description: An abstract description of the mechanism (3-5 sentences, \
+your own words, covering WHAT it does, HOW it works at a high level, \
+and WHERE in the system it operates)
+- key_properties: A list of 3-5 defining properties or characteristics \
+(e.g., "O(log n) lookup time", "lazy allocation", "hardware-assisted")
+- tradeoffs: A list of 1-3 limitations or costs (e.g., "internal \
+fragmentation with large pages", "increased context switch overhead"). \
+Empty list if no significant tradeoffs.
+- design_rationale: One sentence explaining WHY this approach was chosen \
+over alternatives
+- subsystem: The kernel subsystem (e.g., "Virtual Memory", "Scheduler", \
+"Filesystem", "IPC", "Networking", "Device Drivers", "Security")
+- relationships: A list of connections to OTHER concepts you are \
+extracting in this same batch. Each entry has:
+  - target: The exact name of the other concept
+  - kind: One of "refines", "contradicts", "prerequisite"
+  - reason: One sentence explaining the relationship
+  If a concept has no relationships, use an empty list.
 
-Return a JSON array of objects with "name", "description", and "subsystem" fields.
-Extract at most 10 concepts per document. Focus on the most significant ideas.\
+Return a JSON array of objects. Extract at most 10 concepts per document. \
+Focus on the most significant ideas.\
 """
 
 CONCEPT_SCHEMA = {
@@ -44,9 +58,24 @@ CONCEPT_SCHEMA = {
         "properties": {
             "name": {"type": "string"},
             "description": {"type": "string"},
+            "key_properties": {"type": "array", "items": {"type": "string"}},
+            "tradeoffs": {"type": "array", "items": {"type": "string"}},
+            "design_rationale": {"type": "string"},
             "subsystem": {"type": "string"},
+            "relationships": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "target": {"type": "string"},
+                        "kind": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["target", "kind", "reason"],
+                },
+            },
         },
-        "required": ["name", "description", "subsystem"],
+        "required": ["name", "description", "key_properties", "tradeoffs", "design_rationale", "subsystem", "relationships"],
     },
 }
 
@@ -163,6 +192,7 @@ class ExtractionResult:
     concepts_created: int = 0
     concepts_skipped: int = 0
     subsystem_ids: list[str] = field(default_factory=list)
+    relationships_created: int = 0
     extraction_model: str = ""
     prompt_tokens: int = 0
     response_tokens: int = 0
@@ -247,7 +277,7 @@ def extract_concepts(
             src_attrs = json.loads(src_attrs_row[0])
             evidence_text = src_attrs.get("text", "")
 
-    user_prompt = f"Extract abstract concepts from this document:\n\n{evidence_text}" if evidence_text else f"Extract abstract concepts from Evidence node {evidence_id} (no text available â€” produce concepts from metadata only)."
+    user_prompt = build_extraction_prompt(evidence_text)
 
     if dry_run:
         return ExtractionResult(
@@ -279,18 +309,14 @@ def extract_concepts(
         concepts_data = []
 
     concept_ids: list[str] = []
+    name_to_id: dict[str, str] = {}
     for item in concepts_data[:10]:
-        if not isinstance(item, dict) or "name" not in item or "description" not in item:
+        validated = validate_extraction_item(item)
+        if validated is None:
             continue
-
-        concept_id = f"concept-{uuid.uuid4().hex[:12]}"
-        add_node(conn, concept_id, "Concept", {
-            "name": item["name"],
-            "description": item["description"],
-            "artifact_class": "abstracted-mechanism",
-        })
-        add_edge(conn, "extracted-from", concept_id, evidence_id)
+        concept_id = store_rich_concept(conn, validated, evidence_id)
         concept_ids.append(concept_id)
+        name_to_id[validated["name"].lower()] = concept_id
 
     subsystem_ids: list[str] = []
     if concept_ids:
@@ -300,10 +326,13 @@ def extract_concepts(
         class_result = assign_subsystems(conn, concept_ids, classifications)
         subsystem_ids = list(set(class_result.concept_subsystem_map.values()))
 
+    rel_result = wire_relationships(conn, concepts_data[:10], name_to_id)
+
     return ExtractionResult(
         evidence_id=evidence_id,
         concept_ids=concept_ids,
         subsystem_ids=subsystem_ids,
+        relationships_created=rel_result.edges_created,
         concepts_created=len(concept_ids),
         concepts_skipped=0,
         extraction_model=model,
