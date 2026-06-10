@@ -90,6 +90,50 @@ def build_extraction_prompt(evidence_text: str) -> str:
     return "Extract abstract concepts from metadata only — no source text available."
 
 
+ALLOWED_RELATIONSHIP_KINDS = {"refines", "contradicts", "prerequisite"}
+
+
+@dataclass
+class RelationshipResult:
+    edges_created: int = 0
+    edges_skipped: int = 0
+
+
+def wire_relationships(
+    conn: sqlite3.Connection,
+    concepts_data: list[dict],
+    concept_name_to_id: dict[str, str],
+) -> RelationshipResult:
+    created = 0
+    skipped = 0
+    for item in concepts_data:
+        if not isinstance(item, dict):
+            continue
+        source_name = item.get("name", "").lower()
+        source_id = concept_name_to_id.get(source_name)
+        if not source_id:
+            continue
+        for rel in item.get("relationships", []):
+            if not isinstance(rel, dict):
+                skipped += 1
+                continue
+            target_name = rel.get("target", "").strip().lower()
+            kind = rel.get("kind", "").strip()
+            if kind not in ALLOWED_RELATIONSHIP_KINDS:
+                skipped += 1
+                continue
+            target_id = concept_name_to_id.get(target_name)
+            if not target_id:
+                skipped += 1
+                continue
+            if source_id == target_id:
+                skipped += 1
+                continue
+            add_edge(conn, kind, source_id, target_id)
+            created += 1
+    return RelationshipResult(edges_created=created, edges_skipped=skipped)
+
+
 def store_rich_concept(
     conn: sqlite3.Connection, item: dict, evidence_id: str,
 ) -> str:

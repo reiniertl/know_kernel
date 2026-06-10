@@ -12,10 +12,12 @@ from ingest.extractor import (
     CONCEPT_SCHEMA,
     EXTRACTION_SYSTEM_PROMPT,
     ExtractionResult,
+    RelationshipResult,
     build_extraction_prompt,
     extract_concepts,
     store_rich_concept,
     validate_extraction_item,
+    wire_relationships,
 )
 from ingest.gate import SessionGate, SessionViolationError
 
@@ -271,3 +273,108 @@ class TestStoreRichConcept:
         row = conn.execute("SELECT id FROM nodes WHERE id = ?", (cid,)).fetchone()
         assert row is not None
         assert row[0] == cid
+
+
+def _setup_two_concepts(conn, evidence_node):
+    item_a = _make_valid_item(name="Page Table Walking")
+    item_b = _make_valid_item(name="Demand Paging")
+    cid_a = store_rich_concept(conn, item_a, evidence_node)
+    cid_b = store_rich_concept(conn, item_b, evidence_node)
+    name_map = {"page table walking": cid_a, "demand paging": cid_b}
+    return cid_a, cid_b, name_map
+
+
+class TestWireRelationships:
+    def test_wire_relationships_creates_refines_edge(self, conn, evidence_node):
+        cid_a, cid_b, name_map = _setup_two_concepts(conn, evidence_node)
+        concepts_data = [
+            {"name": "Page Table Walking", "relationships": [
+                {"target": "Demand Paging", "kind": "refines", "reason": "extends paging"}
+            ]},
+            {"name": "Demand Paging"},
+        ]
+        result = wire_relationships(conn, concepts_data, name_map)
+        assert result.edges_created == 1
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind='refines' AND source_id=? AND target_id=?",
+            (cid_a, cid_b),
+        ).fetchone()
+        assert edge is not None
+
+    def test_wire_relationships_creates_contradicts_edge(self, conn, evidence_node):
+        cid_a, cid_b, name_map = _setup_two_concepts(conn, evidence_node)
+        concepts_data = [
+            {"name": "Page Table Walking", "relationships": [
+                {"target": "Demand Paging", "kind": "contradicts", "reason": "conflict"}
+            ]},
+        ]
+        result = wire_relationships(conn, concepts_data, name_map)
+        assert result.edges_created == 1
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind='contradicts' AND source_id=? AND target_id=?",
+            (cid_a, cid_b),
+        ).fetchone()
+        assert edge is not None
+
+    def test_wire_relationships_creates_prerequisite_edge(self, conn, evidence_node):
+        cid_a, cid_b, name_map = _setup_two_concepts(conn, evidence_node)
+        concepts_data = [
+            {"name": "Page Table Walking", "relationships": [
+                {"target": "Demand Paging", "kind": "prerequisite", "reason": "needed first"}
+            ]},
+        ]
+        result = wire_relationships(conn, concepts_data, name_map)
+        assert result.edges_created == 1
+
+    def test_wire_relationships_skips_unknown_target(self, conn, evidence_node):
+        cid_a, cid_b, name_map = _setup_two_concepts(conn, evidence_node)
+        concepts_data = [
+            {"name": "Page Table Walking", "relationships": [
+                {"target": "Nonexistent Concept", "kind": "refines", "reason": "test"}
+            ]},
+        ]
+        result = wire_relationships(conn, concepts_data, name_map)
+        assert result.edges_created == 0
+        assert result.edges_skipped == 1
+
+    def test_wire_relationships_skips_invalid_kind(self, conn, evidence_node):
+        cid_a, cid_b, name_map = _setup_two_concepts(conn, evidence_node)
+        concepts_data = [
+            {"name": "Page Table Walking", "relationships": [
+                {"target": "Demand Paging", "kind": "depends-on", "reason": "test"}
+            ]},
+        ]
+        result = wire_relationships(conn, concepts_data, name_map)
+        assert result.edges_created == 0
+        assert result.edges_skipped == 1
+
+    def test_wire_relationships_skips_self_edge(self, conn, evidence_node):
+        cid_a, cid_b, name_map = _setup_two_concepts(conn, evidence_node)
+        concepts_data = [
+            {"name": "Page Table Walking", "relationships": [
+                {"target": "Page Table Walking", "kind": "refines", "reason": "self"}
+            ]},
+        ]
+        result = wire_relationships(conn, concepts_data, name_map)
+        assert result.edges_created == 0
+        assert result.edges_skipped == 1
+
+    def test_wire_relationships_case_insensitive(self, conn, evidence_node):
+        cid_a, cid_b, name_map = _setup_two_concepts(conn, evidence_node)
+        concepts_data = [
+            {"name": "Page Table Walking", "relationships": [
+                {"target": "Demand Paging", "kind": "refines", "reason": "test"}
+            ]},
+        ]
+        result = wire_relationships(conn, concepts_data, name_map)
+        assert result.edges_created == 1
+
+    def test_wire_relationships_empty_relationships(self, conn, evidence_node):
+        cid_a, cid_b, name_map = _setup_two_concepts(conn, evidence_node)
+        concepts_data = [
+            {"name": "Page Table Walking"},
+            {"name": "Demand Paging"},
+        ]
+        result = wire_relationships(conn, concepts_data, name_map)
+        assert result.edges_created == 0
+        assert result.edges_skipped == 0
