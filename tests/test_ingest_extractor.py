@@ -9,6 +9,7 @@ import pytest
 from graph.engine import add_edge, add_node
 from graph.schema import init_db
 from ingest.extractor import (
+    CONCEPT_SCHEMA,
     EXTRACTION_SYSTEM_PROMPT,
     ExtractionResult,
     extract_concepts,
@@ -19,8 +20,8 @@ from ingest.gate import SessionGate, SessionViolationError
 class MockLLMClient:
     def __init__(self, concepts: list[dict] | None = None):
         self.concepts = concepts or [
-            {"name": "Page Table Walking", "description": "A mechanism for translating virtual addresses to physical addresses by traversing a hierarchical table structure."},
-            {"name": "Copy-on-Write", "description": "A resource management technique that defers duplication of shared memory pages until a write operation occurs."},
+            {"name": "Page Table Walking", "description": "A mechanism for translating virtual addresses to physical addresses by traversing a hierarchical table structure.", "subsystem": "Virtual Memory"},
+            {"name": "Copy-on-Write", "description": "A resource management technique that defers duplication of shared memory pages until a write operation occurs.", "subsystem": "Virtual Memory"},
         ]
         self.calls: list[dict] = []
 
@@ -119,3 +120,24 @@ class TestExtractConcepts:
         client = MockLLMClient()
         result = extract_concepts(conn, evidence_node, gate, model="test-model", client=client)
         assert result.extraction_model == "test-model"
+
+    def test_extract_concepts_now_creates_belongs_to(self, conn, evidence_node):
+        gate = SessionGate()
+        client = MockLLMClient()
+        result = extract_concepts(conn, evidence_node, gate, client=client)
+        for cid in result.concept_ids:
+            edge = conn.execute(
+                "SELECT 1 FROM edges WHERE kind = 'belongs-to' AND source_id = ?",
+                (cid,),
+            ).fetchone()
+            assert edge is not None, f"Concept {cid} has no belongs-to edge"
+
+    def test_extract_concepts_subsystem_ids_populated(self, conn, evidence_node):
+        gate = SessionGate()
+        client = MockLLMClient()
+        result = extract_concepts(conn, evidence_node, gate, client=client)
+        assert len(result.subsystem_ids) > 0
+
+    def test_extract_concepts_schema_includes_subsystem(self):
+        assert "subsystem" in CONCEPT_SCHEMA["items"]["properties"]
+        assert "subsystem" in CONCEPT_SCHEMA["items"]["required"]

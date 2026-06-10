@@ -30,8 +30,10 @@ For each concept, provide:
 - name: A short descriptive name (2-5 words)
 - description: An abstract description of the mechanism or idea (1-3 sentences, \
 your own words, no verbatim copying)
+- subsystem: The kernel subsystem this concept belongs to (e.g., "Virtual Memory", \
+"Scheduler", "Filesystem", "IPC", "Networking", "Device Drivers", "Security")
 
-Return a JSON array of objects with "name" and "description" fields.
+Return a JSON array of objects with "name", "description", and "subsystem" fields.
 Extract at most 10 concepts per document. Focus on the most significant ideas.\
 """
 
@@ -42,8 +44,9 @@ CONCEPT_SCHEMA = {
         "properties": {
             "name": {"type": "string"},
             "description": {"type": "string"},
+            "subsystem": {"type": "string"},
         },
-        "required": ["name", "description"],
+        "required": ["name", "description", "subsystem"],
     },
 }
 
@@ -60,6 +63,7 @@ class ExtractionResult:
     concept_ids: list[str] = field(default_factory=list)
     concepts_created: int = 0
     concepts_skipped: int = 0
+    subsystem_ids: list[str] = field(default_factory=list)
     extraction_model: str = ""
     prompt_tokens: int = 0
     response_tokens: int = 0
@@ -189,9 +193,18 @@ def extract_concepts(
         add_edge(conn, "extracted-from", concept_id, evidence_id)
         concept_ids.append(concept_id)
 
+    subsystem_ids: list[str] = []
+    if concept_ids:
+        from ingest.classifier import assign_subsystems, parse_classification_labels
+
+        classifications = parse_classification_labels(concepts_data[:10], concept_ids)
+        class_result = assign_subsystems(conn, concept_ids, classifications)
+        subsystem_ids = list(set(class_result.concept_subsystem_map.values()))
+
     return ExtractionResult(
         evidence_id=evidence_id,
         concept_ids=concept_ids,
+        subsystem_ids=subsystem_ids,
         concepts_created=len(concept_ids),
         concepts_skipped=0,
         extraction_model=model,
