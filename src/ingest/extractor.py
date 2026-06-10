@@ -90,6 +90,22 @@ def build_extraction_prompt(evidence_text: str) -> str:
     return "Extract abstract concepts from metadata only — no source text available."
 
 
+def store_rich_concept(
+    conn: sqlite3.Connection, item: dict, evidence_id: str,
+) -> str:
+    concept_id = f"concept-{uuid.uuid4().hex[:12]}"
+    add_node(conn, concept_id, "Concept", {
+        "name": item["name"],
+        "description": item["description"],
+        "artifact_class": "abstracted-mechanism",
+        "key_properties": item["key_properties"],
+        "tradeoffs": item["tradeoffs"],
+        "design_rationale": item["design_rationale"],
+    })
+    add_edge(conn, "extracted-from", concept_id, evidence_id)
+    return concept_id
+
+
 class LLMClient(Protocol):
     def create_message(
         self, model: str, system: str, user: str, max_tokens: int,

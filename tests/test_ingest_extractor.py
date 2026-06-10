@@ -14,6 +14,7 @@ from ingest.extractor import (
     ExtractionResult,
     build_extraction_prompt,
     extract_concepts,
+    store_rich_concept,
     validate_extraction_item,
 )
 from ingest.gate import SessionGate, SessionViolationError
@@ -231,3 +232,42 @@ class TestBuildExtractionPrompt:
         prompt = build_extraction_prompt("")
         assert "metadata only" in prompt.lower()
         assert len(prompt) > 0
+
+
+class TestStoreRichConcept:
+    def test_store_rich_concept_creates_node(self, conn, evidence_node):
+        item = _make_valid_item()
+        cid = store_rich_concept(conn, item, evidence_node)
+        row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
+        assert row is not None
+        attrs = json.loads(row[0])
+        assert attrs["name"] == "Page Table Walking"
+        assert attrs["description"] == "A mechanism for translating virtual addresses."
+        assert attrs["key_properties"] == ["O(log n) lookup", "hardware-assisted"]
+        assert attrs["tradeoffs"] == ["TLB miss penalty"]
+        assert attrs["design_rationale"] == "Hierarchical structure balances memory and speed."
+        assert attrs["artifact_class"] == "abstracted-mechanism"
+
+    def test_store_rich_concept_creates_provenance(self, conn, evidence_node):
+        item = _make_valid_item()
+        cid = store_rich_concept(conn, item, evidence_node)
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind = 'extracted-from' AND source_id = ? AND target_id = ?",
+            (cid, evidence_node),
+        ).fetchone()
+        assert edge is not None
+
+    def test_store_rich_concept_artifact_class(self, conn, evidence_node):
+        item = _make_valid_item()
+        cid = store_rich_concept(conn, item, evidence_node)
+        row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
+        attrs = json.loads(row[0])
+        assert attrs["artifact_class"] == "abstracted-mechanism"
+
+    def test_store_rich_concept_returns_id(self, conn, evidence_node):
+        item = _make_valid_item()
+        cid = store_rich_concept(conn, item, evidence_node)
+        assert cid.startswith("concept-")
+        row = conn.execute("SELECT id FROM nodes WHERE id = ?", (cid,)).fetchone()
+        assert row is not None
+        assert row[0] == cid
