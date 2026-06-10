@@ -66,6 +66,7 @@ def main() -> None:
             results.append({
                 "evidence_id": result.evidence_id,
                 "concept_ids": result.concept_ids,
+                "subsystem_ids": result.subsystem_ids,
                 "concepts_created": result.concepts_created,
                 "concepts_skipped": result.concepts_skipped,
                 "extraction_model": result.extraction_model,

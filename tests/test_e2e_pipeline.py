@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from graph.engine import add_edge, add_node
+from graph.engine import add_node
 from graph.schema import init_db
 from export.exporter import export_class_b_snapshot
 from ingest.extractor import extract_concepts
@@ -26,8 +26,8 @@ class MockLLMClient:
     def create_message(self, model: str, system: str, user: str, max_tokens: int) -> dict:
         return {
             "text": json.dumps([
-                {"name": "Virtual Address Translation", "description": "A mechanism that maps process-specific virtual addresses to physical memory locations through a hierarchical lookup structure."},
-                {"name": "Demand Paging", "description": "A lazy loading strategy that defers page allocation until the first access, reducing memory footprint for large address spaces."},
+                {"name": "Virtual Address Translation", "description": "A mechanism that maps process-specific virtual addresses to physical memory locations through a hierarchical lookup structure.", "subsystem": "Virtual Memory"},
+                {"name": "Demand Paging", "description": "A lazy loading strategy that defers page allocation until the first access, reducing memory footprint for large address spaces.", "subsystem": "Virtual Memory"},
             ]),
             "prompt_tokens": 100,
             "response_tokens": 50,
@@ -72,10 +72,13 @@ class TestE2EPipeline:
         assert extract_result.concepts_created == 2
         assert all(cid.startswith("concept-") for cid in extract_result.concept_ids)
 
-        # Step 3b: Add Subsystem + belongs-to edges (required by graph validation)
-        add_node(conn, "sub-vm", "Subsystem", {"name": "Virtual Memory"})
+        # Auto-classification creates belongs-to edges — verify
         for cid in extract_result.concept_ids:
-            add_edge(conn, "belongs-to", cid, "sub-vm")
+            edge = conn.execute(
+                "SELECT 1 FROM edges WHERE kind = 'belongs-to' AND source_id = ?",
+                (cid,),
+            ).fetchone()
+            assert edge is not None, f"Concept {cid} missing belongs-to edge"
 
         conn.commit()
 
@@ -143,9 +146,6 @@ class TestE2EPipeline:
             conn, ingest_result.evidence_id, gate,
             client=MockLLMClient(),
         )
-        add_node(conn, "sub-fs", "Subsystem", {"name": "Filesystem"})
-        for cid in extract_result.concept_ids:
-            add_edge(conn, "belongs-to", cid, "sub-fs")
         conn.commit()
 
         export_class_b_snapshot(master_db, snapshot_db)
@@ -224,9 +224,6 @@ class TestE2EPipeline:
         result = ingest_document(conn, str(doc), "https://example.com/rt.txt", "paper", gate=gate)
         review_source(conn, result.source_id, "MIT confirmed.", "weak-copyleft")
         extract = extract_concepts(conn, result.evidence_id, gate, client=MockLLMClient())
-        add_node(conn, "sub-rt", "Subsystem", {"name": "Real-Time"})
-        for cid in extract.concept_ids:
-            add_edge(conn, "belongs-to", cid, "sub-rt")
         conn.commit()
 
         export_class_b_snapshot(master_db, snapshot_db)
