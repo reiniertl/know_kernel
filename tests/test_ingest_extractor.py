@@ -25,8 +25,26 @@ from ingest.gate import SessionGate, SessionViolationError
 class MockLLMClient:
     def __init__(self, concepts: list[dict] | None = None):
         self.concepts = concepts or [
-            {"name": "Page Table Walking", "description": "A mechanism for translating virtual addresses to physical addresses by traversing a hierarchical table structure.", "subsystem": "Virtual Memory"},
-            {"name": "Copy-on-Write", "description": "A resource management technique that defers duplication of shared memory pages until a write operation occurs.", "subsystem": "Virtual Memory"},
+            {
+                "name": "Page Table Walking",
+                "description": "A mechanism for translating virtual addresses to physical addresses by traversing a hierarchical table structure.",
+                "key_properties": ["O(log n) lookup", "hardware-assisted", "hierarchical"],
+                "tradeoffs": ["TLB miss penalty"],
+                "design_rationale": "Hierarchical structure balances memory overhead and lookup speed.",
+                "subsystem": "Virtual Memory",
+                "relationships": [],
+            },
+            {
+                "name": "Copy-on-Write",
+                "description": "A resource management technique that defers duplication of shared memory pages until a write operation occurs.",
+                "key_properties": ["lazy duplication", "shared pages", "write-triggered copy"],
+                "tradeoffs": ["copy latency on first write"],
+                "design_rationale": "Avoids unnecessary memory duplication for forked processes.",
+                "subsystem": "Virtual Memory",
+                "relationships": [
+                    {"target": "Page Table Walking", "kind": "prerequisite", "reason": "Requires page table infrastructure for tracking shared pages."},
+                ],
+            },
         ]
         self.calls: list[dict] = []
 
@@ -146,6 +164,42 @@ class TestExtractConcepts:
     def test_extract_concepts_schema_includes_subsystem(self):
         assert "subsystem" in CONCEPT_SCHEMA["items"]["properties"]
         assert "subsystem" in CONCEPT_SCHEMA["items"]["required"]
+
+    def test_extract_concepts_rich_end_to_end(self, conn, evidence_node):
+        gate = SessionGate()
+        client = MockLLMClient()
+        result = extract_concepts(conn, evidence_node, gate, client=client)
+        assert result.concepts_created == 2
+        for cid in result.concept_ids:
+            row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
+            attrs = json.loads(row[0])
+            assert "key_properties" in attrs
+            assert isinstance(attrs["key_properties"], list)
+            assert len(attrs["key_properties"]) >= 1
+            assert "tradeoffs" in attrs
+            assert isinstance(attrs["tradeoffs"], list)
+            assert "design_rationale" in attrs
+            assert len(attrs["design_rationale"]) > 0
+            assert attrs["artifact_class"] == "abstracted-mechanism"
+
+    def test_extract_concepts_relationships_wired(self, conn, evidence_node):
+        gate = SessionGate()
+        client = MockLLMClient()
+        result = extract_concepts(conn, evidence_node, gate, client=client)
+        edges = conn.execute(
+            "SELECT kind, source_id, target_id FROM edges WHERE kind = 'prerequisite'"
+        ).fetchall()
+        assert len(edges) >= 1
+
+    def test_extract_concepts_relationships_created_count(self, conn, evidence_node):
+        gate = SessionGate()
+        client = MockLLMClient()
+        result = extract_concepts(conn, evidence_node, gate, client=client)
+        assert result.relationships_created == 1
+        actual_edges = conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE kind IN ('refines', 'contradicts', 'prerequisite')"
+        ).fetchone()[0]
+        assert actual_edges == result.relationships_created
 
 
 def _make_valid_item(**overrides):

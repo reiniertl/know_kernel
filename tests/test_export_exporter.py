@@ -130,8 +130,8 @@ class TestExportClassBSnapshot:
         master = tmp_path / "clean.db"
         conn = init_db(master)
         add_node(conn, "sub1", "Subsystem", {"name": "test"})
-        add_node(conn, "c1", "Concept", {"name": "X", "description": "x", "artifact_class": "B"})
-        add_node(conn, "c2", "Concept", {"name": "Y", "description": "y", "artifact_class": "B"})
+        add_node(conn, "c1", "Concept", {"name": "X", "description": "x", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
+        add_node(conn, "c2", "Concept", {"name": "Y", "description": "y", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
         add_node(conn, "src1", "Source", {"url": "http://ex.com", "source_type": "paper", "license": "PD"})
         add_node(conn, "src2", "Source", {"url": "http://ex2.com", "source_type": "paper", "license": "PD"})
         add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
@@ -172,7 +172,7 @@ class TestValidateSnapshot:
     def test_detects_forbidden_kinds(self, tmp_path: Path) -> None:
         db_path = tmp_path / "bad.db"
         conn = init_db(db_path)
-        add_node(conn, "c1", "Concept", {"name": "X", "description": "x", "artifact_class": "B"})
+        add_node(conn, "c1", "Concept", {"name": "X", "description": "x", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
         add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
         conn.commit()
         report = validate_snapshot(conn)

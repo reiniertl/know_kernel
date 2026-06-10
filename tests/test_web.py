@@ -22,6 +22,9 @@ def client(tmp_path):
         "name": "Lock-free Queue",
         "description": "A queue implementation without locks.",
         "artifact_class": "B",
+        "key_properties": ["atomic operations"],
+        "tradeoffs": ["ABA problem"],
+        "design_rationale": "Eliminates lock contention.",
     })
     add_node(conn, "ev-1", "Evidence", {
         "artifact_class": "A",

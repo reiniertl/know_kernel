@@ -42,11 +42,17 @@ def snapshot_path(tmp_path):
         "name": "Lock-free Queue",
         "description": "A queue without locks using atomic operations.",
         "artifact_class": "B",
+        "key_properties": ["atomic operations", "wait-free reads"],
+        "tradeoffs": ["ABA problem"],
+        "design_rationale": "Eliminates lock contention for concurrent producers and consumers.",
     })
     add_node(conn, "concept-2", "Concept", {
         "name": "RCU",
         "description": "Read-Copy-Update synchronization mechanism.",
         "artifact_class": "B",
+        "key_properties": ["lock-free reads", "deferred reclamation"],
+        "tradeoffs": ["grace period latency"],
+        "design_rationale": "Optimizes read-heavy workloads by deferring memory reclamation.",
     })
     add_edge(conn, "extracted-from", "concept-1", "ev-1")
     add_edge(conn, "extracted-from", "concept-2", "ev-2")

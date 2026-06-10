@@ -19,7 +19,7 @@ def cli_master_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "master.db"
     conn = init_db(db_path)
     add_node(conn, "sub1", "Subsystem", {"name": "scheduler"})
-    add_node(conn, "c1", "Concept", {"name": "RCU", "description": "read-copy-update", "artifact_class": "B"})
+    add_node(conn, "c1", "Concept", {"name": "RCU", "description": "read-copy-update", "artifact_class": "B", "key_properties": ["lock-free reads"], "tradeoffs": [], "design_rationale": "Optimizes read-heavy workloads."})
     add_node(conn, "src1", "Source", {"url": "http://ex.com", "source_type": "paper", "license": "PD"})
     add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
     add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
@@ -88,7 +88,7 @@ class TestExportCli:
         """Master DB with admissibility violations â†’ exit 1."""
         master = tmp_path / "bad.db"
         conn = init_db(master)
-        add_node(conn, "c1", "Concept", {"name": "X", "description": "x", "artifact_class": "B"})
+        add_node(conn, "c1", "Concept", {"name": "X", "description": "x", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
         conn.commit()
         conn.close()
         output = tmp_path / "snapshot.db"

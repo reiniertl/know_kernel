@@ -169,7 +169,7 @@ def test_delete_node_nonexistent(conn: sqlite3.Connection):
 def test_delete_evidence_rejects_if_concept_loses_provenance(conn: sqlite3.Connection):
     """Deleting ev1 (only provenance for c1) must be rejected."""
     add_node(conn, "sub1", "Subsystem", {"name": "mm"})
-    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B"})
+    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
     add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
     add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
@@ -184,7 +184,7 @@ def test_delete_evidence_rejects_if_concept_loses_provenance(conn: sqlite3.Conne
 def test_delete_source_rejects_if_evidence_loses_traceability(conn: sqlite3.Connection):
     """Deleting src1 (only source for ev1) must be rejected."""
     add_node(conn, "sub1", "Subsystem", {"name": "mm"})
-    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B"})
+    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
     add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
     add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
@@ -199,7 +199,7 @@ def test_delete_source_rejects_if_evidence_loses_traceability(conn: sqlite3.Conn
 def test_delete_subsystem_rejects_if_concept_loses_belongs_to(conn: sqlite3.Connection):
     """Deleting sub1 (only subsystem for c1) must be rejected."""
     add_node(conn, "sub1", "Subsystem", {"name": "mm"})
-    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B"})
+    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
     add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
     add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
@@ -214,7 +214,7 @@ def test_delete_subsystem_rejects_if_concept_loses_belongs_to(conn: sqlite3.Conn
 def test_delete_advisory_rejects_if_source_loses_assessment(conn: sqlite3.Connection):
     """Deleting adv1 (only advisory for src1) must be rejected."""
     add_node(conn, "sub1", "Subsystem", {"name": "mm"})
-    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B"})
+    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
     add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
     add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
@@ -237,7 +237,7 @@ def test_delete_node_succeeds_when_no_dependents_violated(conn: sqlite3.Connecti
 def test_delete_node_succeeds_when_alternate_path_exists(conn: sqlite3.Connection):
     """Deleting ev1 succeeds when c1 still has ev2 as alternate provenance."""
     add_node(conn, "sub1", "Subsystem", {"name": "mm"})
-    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B"})
+    add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
     add_node(conn, "src2", "Source", {"url": "http://y.com", "source_type": "paper", "license": "PD"})
     add_node(conn, "adv1", "Advisory", {"assessment": "safe"})

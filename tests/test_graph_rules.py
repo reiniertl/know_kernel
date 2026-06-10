@@ -24,7 +24,7 @@ def test_concept_belongs_to_pass(populated: sqlite3.Connection):
 
 
 def test_concept_belongs_to_fail(conn: sqlite3.Connection):
-    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B"})
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     v = check_concept_has_belongs_to(conn, "c1")
     assert isinstance(v, Violation)
     assert "belongs-to" in v.message.lower() or "Subsystem" in v.message
@@ -38,7 +38,7 @@ def test_concept_provenance_pass(populated: sqlite3.Connection):
 
 
 def test_concept_provenance_fail(conn: sqlite3.Connection):
-    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B"})
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     v = check_concept_has_provenance(conn, "c1")
     assert isinstance(v, Violation)
 
@@ -105,7 +105,7 @@ def test_validate_node_concept_clean(populated: sqlite3.Connection):
 
 
 def test_validate_node_concept_violations(conn: sqlite3.Connection):
-    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B"})
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     violations = validate_node(conn, "c1", "Concept")
     assert len(violations) == 2
     rules = {v.rule for v in violations}

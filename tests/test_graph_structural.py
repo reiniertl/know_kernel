@@ -57,7 +57,7 @@ def test_supersedes_direct_ok(populated: sqlite3.Connection):
 
 
 def test_supersedes_chain_ok(populated: sqlite3.Connection):
-    add_node(populated, "c3", "Concept", {"name": "spin", "description": "spinlock", "artifact_class": "B"})
+    add_node(populated, "c3", "Concept", {"name": "spin", "description": "spinlock", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     add_edge(populated, "supersedes", "c1", "c2")
     add_edge(populated, "supersedes", "c2", "c3")
     row = populated.execute(
@@ -67,7 +67,7 @@ def test_supersedes_chain_ok(populated: sqlite3.Connection):
 
 
 def test_supersedes_cycle_rejected(populated: sqlite3.Connection):
-    add_node(populated, "c3", "Concept", {"name": "spin", "description": "spinlock", "artifact_class": "B"})
+    add_node(populated, "c3", "Concept", {"name": "spin", "description": "spinlock", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     add_edge(populated, "supersedes", "c1", "c2")
     add_edge(populated, "supersedes", "c2", "c3")
     with pytest.raises(ValueError, match="cycle"):

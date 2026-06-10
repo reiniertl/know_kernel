@@ -84,6 +84,7 @@ def _make_concept(conn, concept_id):
     add_edge(conn, "sourced-from", f"ev-{concept_id}", f"src-{concept_id}")
     add_node(conn, concept_id, "Concept", {
         "name": f"Concept {concept_id}", "description": "test", "artifact_class": "B",
+        "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test",
     })
     add_edge(conn, "extracted-from", concept_id, f"ev-{concept_id}")
 

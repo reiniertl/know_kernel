@@ -26,8 +26,26 @@ class MockLLMClient:
     def create_message(self, model: str, system: str, user: str, max_tokens: int) -> dict:
         return {
             "text": json.dumps([
-                {"name": "Virtual Address Translation", "description": "A mechanism that maps process-specific virtual addresses to physical memory locations through a hierarchical lookup structure.", "subsystem": "Virtual Memory"},
-                {"name": "Demand Paging", "description": "A lazy loading strategy that defers page allocation until the first access, reducing memory footprint for large address spaces.", "subsystem": "Virtual Memory"},
+                {
+                    "name": "Virtual Address Translation",
+                    "description": "A mechanism that maps process-specific virtual addresses to physical memory locations through a hierarchical lookup structure.",
+                    "key_properties": ["hierarchical lookup", "hardware-assisted", "per-process isolation"],
+                    "tradeoffs": ["TLB miss penalty"],
+                    "design_rationale": "Indirection through page tables enables per-process address isolation without physical memory fragmentation.",
+                    "subsystem": "Virtual Memory",
+                    "relationships": [],
+                },
+                {
+                    "name": "Demand Paging",
+                    "description": "A lazy loading strategy that defers page allocation until the first access, reducing memory footprint for large address spaces.",
+                    "key_properties": ["lazy allocation", "page fault driven", "reduced memory footprint"],
+                    "tradeoffs": ["page fault latency on first access"],
+                    "design_rationale": "Deferred allocation avoids wasting physical memory on unused virtual pages.",
+                    "subsystem": "Virtual Memory",
+                    "relationships": [
+                        {"target": "Virtual Address Translation", "kind": "prerequisite", "reason": "Requires address translation infrastructure for page fault handling."},
+                    ],
+                },
             ]),
             "prompt_tokens": 100,
             "response_tokens": 50,
@@ -99,6 +117,10 @@ class TestE2EPipeline:
         for row in snap_conn.execute("SELECT attrs FROM nodes WHERE kind = 'Concept'").fetchall():
             attrs = json.loads(row[0])
             assert attrs["artifact_class"] == "abstracted-mechanism"
+            assert "key_properties" in attrs
+            assert isinstance(attrs["key_properties"], list)
+            assert len(attrs["key_properties"]) >= 1
+            assert "design_rationale" in attrs
 
         snap_conn.close()
 
