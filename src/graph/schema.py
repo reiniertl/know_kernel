@@ -34,7 +34,7 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str]] = {
 }
 
 REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
-    "Concept": ("name", "description", "artifact_class"),
+    "Concept": ("name", "description", "artifact_class", "key_properties", "tradeoffs", "design_rationale"),
     "Source": ("url", "source_type", "license"),
     "Evidence": ("artifact_class", "contamination_level"),
     "Advisory": ("assessment",),

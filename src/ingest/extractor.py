@@ -51,6 +51,45 @@ CONCEPT_SCHEMA = {
 }
 
 
+_VALIDATE_REQUIRED_KEYS = ("name", "description", "key_properties", "tradeoffs", "design_rationale", "subsystem")
+
+
+def validate_extraction_item(item: Any) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    for key in _VALIDATE_REQUIRED_KEYS:
+        if key not in item:
+            return None
+    kp = item["key_properties"]
+    if not isinstance(kp, list) or len(kp) == 0:
+        return None
+    rationale = item["design_rationale"]
+    if not isinstance(rationale, str) or not rationale.strip():
+        return None
+    tradeoffs = item["tradeoffs"]
+    if not isinstance(tradeoffs, list):
+        return None
+    sanitized = {
+        "name": str(item["name"]).strip(),
+        "description": str(item["description"]).strip(),
+        "key_properties": [str(s).strip() for s in kp if isinstance(s, str)],
+        "tradeoffs": [str(s).strip() for s in tradeoffs if isinstance(s, str)],
+        "design_rationale": rationale.strip(),
+        "subsystem": str(item["subsystem"]).strip(),
+    }
+    if not sanitized["key_properties"]:
+        return None
+    if "relationships" in item:
+        sanitized["relationships"] = item["relationships"]
+    return sanitized
+
+
+def build_extraction_prompt(evidence_text: str) -> str:
+    if evidence_text:
+        return f"Extract abstract concepts from this document:\n\n{evidence_text}"
+    return "Extract abstract concepts from metadata only — no source text available."
+
+
 class LLMClient(Protocol):
     def create_message(
         self, model: str, system: str, user: str, max_tokens: int,

@@ -12,7 +12,9 @@ from ingest.extractor import (
     CONCEPT_SCHEMA,
     EXTRACTION_SYSTEM_PROMPT,
     ExtractionResult,
+    build_extraction_prompt,
     extract_concepts,
+    validate_extraction_item,
 )
 from ingest.gate import SessionGate, SessionViolationError
 
@@ -141,3 +143,91 @@ class TestExtractConcepts:
     def test_extract_concepts_schema_includes_subsystem(self):
         assert "subsystem" in CONCEPT_SCHEMA["items"]["properties"]
         assert "subsystem" in CONCEPT_SCHEMA["items"]["required"]
+
+
+def _make_valid_item(**overrides):
+    base = {
+        "name": "Page Table Walking",
+        "description": "A mechanism for translating virtual addresses.",
+        "key_properties": ["O(log n) lookup", "hardware-assisted"],
+        "tradeoffs": ["TLB miss penalty"],
+        "design_rationale": "Hierarchical structure balances memory and speed.",
+        "subsystem": "Virtual Memory",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestValidateExtractionItem:
+    def test_validate_item_valid(self):
+        item = _make_valid_item()
+        result = validate_extraction_item(item)
+        assert result is not None
+        assert result["name"] == "Page Table Walking"
+        assert len(result["key_properties"]) == 2
+        assert len(result["tradeoffs"]) == 1
+        assert result["design_rationale"] == "Hierarchical structure balances memory and speed."
+        assert result["subsystem"] == "Virtual Memory"
+
+    def test_validate_item_missing_name(self):
+        item = _make_valid_item()
+        del item["name"]
+        assert validate_extraction_item(item) is None
+
+    def test_validate_item_missing_key_properties(self):
+        item = _make_valid_item()
+        del item["key_properties"]
+        assert validate_extraction_item(item) is None
+
+    def test_validate_item_empty_key_properties(self):
+        item = _make_valid_item(key_properties=[])
+        assert validate_extraction_item(item) is None
+
+    def test_validate_item_empty_rationale(self):
+        item = _make_valid_item(design_rationale="   ")
+        assert validate_extraction_item(item) is None
+
+    def test_validate_item_missing_tradeoffs(self):
+        item = _make_valid_item()
+        del item["tradeoffs"]
+        assert validate_extraction_item(item) is None
+
+    def test_validate_item_non_dict(self):
+        assert validate_extraction_item("not a dict") is None
+        assert validate_extraction_item(42) is None
+        assert validate_extraction_item(None) is None
+
+    def test_validate_item_strips_strings(self):
+        item = _make_valid_item(
+            name="  Page Table Walking  ",
+            description="  A mechanism.  ",
+            design_rationale="  Reason.  ",
+        )
+        result = validate_extraction_item(item)
+        assert result["name"] == "Page Table Walking"
+        assert result["description"] == "A mechanism."
+        assert result["design_rationale"] == "Reason."
+
+    def test_validate_item_preserves_relationships(self):
+        rels = [{"target": "Copy-on-Write", "kind": "prerequisite", "reason": "needed first"}]
+        item = _make_valid_item(relationships=rels)
+        result = validate_extraction_item(item)
+        assert result["relationships"] == rels
+
+    def test_validate_item_empty_tradeoffs_ok(self):
+        item = _make_valid_item(tradeoffs=[])
+        result = validate_extraction_item(item)
+        assert result is not None
+        assert result["tradeoffs"] == []
+
+
+class TestBuildExtractionPrompt:
+    def test_build_prompt_with_text(self):
+        prompt = build_extraction_prompt("This paper describes kernel mechanisms.")
+        assert "This paper describes kernel mechanisms." in prompt
+        assert "Extract abstract concepts" in prompt
+
+    def test_build_prompt_empty_text(self):
+        prompt = build_extraction_prompt("")
+        assert "metadata only" in prompt.lower()
+        assert len(prompt) > 0
