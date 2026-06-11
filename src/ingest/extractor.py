@@ -64,8 +64,18 @@ invariant is violated:
   Extract 1-3 invariants per concept. Focus on the most critical rules. \
 If a concept has no clear invariants, use an empty list.
 
-Return a JSON array of objects. Extract at most 10 concepts per document. \
-Focus on the most significant ideas.\
+After listing ALL concepts, add a top-level "interaction_protocols" key \
+with coordination rules between concept PAIRS. Each protocol has:
+- rule: The coordination constraint in natural language
+- ordering: One of "before", "after", "never-during", "must-hold-while"
+- violation_mode: What happens if the protocol is violated (one sentence)
+- concept_a: Exact name of first participating concept (from your list)
+- concept_b: Exact name of second participating concept (from your list)
+Extract 0-5 protocols. Only include genuine cross-concept constraints.
+
+Return a JSON object with "concepts" (array, at most 10) and \
+"interaction_protocols" (array, at most 5). Focus on the most \
+significant ideas.\
 """
 
 CONCEPT_SCHEMA = {
@@ -299,6 +309,75 @@ def store_failure_mode(
     return fm_id
 
 
+VALID_ORDERINGS = {"before", "after", "never-during", "must-hold-while"}
+
+
+def validate_protocol_item(item: Any, concept_name_to_id: dict[str, str]) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    for key in ("rule", "ordering", "concept_a", "concept_b"):
+        if key not in item:
+            return None
+    rule = item["rule"]
+    if not isinstance(rule, str) or not rule.strip():
+        return None
+    ordering = item["ordering"]
+    if not isinstance(ordering, str) or ordering.strip() not in VALID_ORDERINGS:
+        return None
+    concept_a = item["concept_a"]
+    concept_b = item["concept_b"]
+    if not isinstance(concept_a, str) or not concept_a.strip():
+        return None
+    if not isinstance(concept_b, str) or not concept_b.strip():
+        return None
+    a_name = concept_a.strip().lower()
+    b_name = concept_b.strip().lower()
+    if a_name == b_name:
+        return None
+    if a_name not in concept_name_to_id or b_name not in concept_name_to_id:
+        return None
+    violation_mode = item.get("violation_mode", "")
+    return {
+        "rule": rule.strip(),
+        "ordering": ordering.strip(),
+        "concept_a": concept_a.strip(),
+        "concept_b": concept_b.strip(),
+        "violation_mode": str(violation_mode).strip() if violation_mode else "",
+    }
+
+
+def store_interaction_protocol(
+    conn: sqlite3.Connection,
+    item: dict,
+    evidence_id: str,
+    concept_name_to_id: dict[str, str],
+) -> str | None:
+    a_id = concept_name_to_id.get(item["concept_a"].lower())
+    b_id = concept_name_to_id.get(item["concept_b"].lower())
+    if not a_id or not b_id:
+        return None
+    proto_id = f"proto-{uuid.uuid4().hex[:12]}"
+    add_node(conn, proto_id, "InteractionProtocol", {
+        "rule": item["rule"],
+        "ordering": item["ordering"],
+        "violation_mode": item.get("violation_mode", ""),
+        "artifact_class": "abstracted-mechanism",
+    })
+    add_edge(conn, "constrains-composition", proto_id, a_id)
+    add_edge(conn, "constrains-composition", proto_id, b_id)
+    add_edge(conn, "extracted-from", proto_id, evidence_id)
+    return proto_id
+
+
+def build_protocol_extraction_prompt(concept_names: list[str]) -> str:
+    names_list = ", ".join(concept_names)
+    return (
+        f"Given these kernel concepts: {names_list}\n\n"
+        "Identify coordination rules that govern how these mechanisms must "
+        "interact when composed together. Return a JSON array of protocols."
+    )
+
+
 def store_rich_concept(
     conn: sqlite3.Connection, item: dict, evidence_id: str,
 ) -> str:
@@ -331,6 +410,7 @@ class ExtractionResult:
     relationships_created: int = 0
     invariants_created: int = 0
     failure_modes_created: int = 0
+    protocols_created: int = 0
     extraction_model: str = ""
     prompt_tokens: int = 0
     response_tokens: int = 0
@@ -439,12 +519,24 @@ def extract_concepts(
         if text.startswith("```"):
             text = text.split("\n", 1)[1] if "\n" in text else text[3:]
             text = text.rsplit("```", 1)[0]
-        concepts_data = json.loads(text)
+        parsed = json.loads(text)
     except (json.JSONDecodeError, KeyError, IndexError):
+        parsed = []
+
+    if isinstance(parsed, dict):
+        concepts_data = parsed.get("concepts", [])
+        protocols_data = parsed.get("interaction_protocols", [])
+    elif isinstance(parsed, list):
+        concepts_data = parsed
+        protocols_data = []
+    else:
         concepts_data = []
+        protocols_data = []
 
     if not isinstance(concepts_data, list):
         concepts_data = []
+    if not isinstance(protocols_data, list):
+        protocols_data = []
 
     concept_ids: list[str] = []
     name_to_id: dict[str, str] = {}
@@ -485,6 +577,15 @@ def extract_concepts(
                         store_failure_mode(conn, validated_fm, evidence_id, inv_id)
                         failure_modes_created += 1
 
+    protocols_created = 0
+    for proto in protocols_data[:5]:
+        validated_proto = validate_protocol_item(proto, name_to_id)
+        if validated_proto is None:
+            continue
+        proto_id = store_interaction_protocol(conn, validated_proto, evidence_id, name_to_id)
+        if proto_id:
+            protocols_created += 1
+
     return ExtractionResult(
         evidence_id=evidence_id,
         concept_ids=concept_ids,
@@ -492,6 +593,7 @@ def extract_concepts(
         relationships_created=rel_result.edges_created,
         invariants_created=invariants_created,
         failure_modes_created=failure_modes_created,
+        protocols_created=protocols_created,
         concepts_created=len(concept_ids),
         concepts_skipped=0,
         extraction_model=model,

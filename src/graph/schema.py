@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode", "InteractionProtocol")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -20,11 +20,12 @@ EDGE_KINDS = (
     "grounded-in",
     "governed-by",
     "triggered-by",
+    "constrains-composition",
 )
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "belongs-to": [("Concept", "Subsystem"), ("KernelInvariant", "Subsystem")],
-    "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence")],
+    "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence"), ("InteractionProtocol", "Evidence")],
     "sourced-from": ("Evidence", "Source"),
     "alternative-to": ("Concept", "Concept"),
     "refines": ("Concept", "Concept"),
@@ -35,6 +36,7 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "grounded-in": ("Proposal", "Concept"),
     "governed-by": ("KernelInvariant", "Concept"),
     "triggered-by": ("FailureMode", "KernelInvariant"),
+    "constrains-composition": ("InteractionProtocol", "Concept"),
 }
 
 REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
@@ -46,6 +48,7 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "Proposal": ("name", "description"),
     "KernelInvariant": ("predicate", "strength", "scope", "artifact_class"),
     "FailureMode": ("symptom", "blast_radius", "recoverability", "artifact_class"),
+    "InteractionProtocol": ("rule", "ordering", "violation_mode", "artifact_class"),
 }
 
 SCHEMA_SQL = """\
