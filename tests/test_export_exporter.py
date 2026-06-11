@@ -180,3 +180,42 @@ class TestValidateSnapshot:
         assert len(report["issues"]) > 0
         assert report["class_a_count"] == 1
         assert "Evidence" in report["issues"][0]
+
+
+class TestKernelInvariantInSnapshot:
+    def test_kernel_invariant_in_snapshot(self, admissible_master_db: Path, tmp_path: Path) -> None:
+        master_conn = sqlite3.connect(str(admissible_master_db))
+        master_conn.execute("PRAGMA foreign_keys=ON")
+        add_node(master_conn, "ki1", "KernelInvariant", {
+            "predicate": "No reader observes partially-updated data",
+            "strength": "safety",
+            "scope": "per-operation",
+            "artifact_class": "abstracted-mechanism",
+        })
+        add_edge(master_conn, "governed-by", "ki1", "c1")
+        add_edge(master_conn, "extracted-from", "ki1", "ev1")
+        master_conn.commit()
+        master_conn.close()
+
+        output = tmp_path / "snapshot.db"
+        report = export_class_b_snapshot(admissible_master_db, output)
+        assert report["issues"] == []
+
+        snap_conn = sqlite3.connect(str(output))
+        kinds = {row[0] for row in snap_conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
+        snap_conn.close()
+        assert "KernelInvariant" in kinds
+
+    def test_kernel_invariant_not_class_a(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "snap_ki.db"
+        conn = init_db(db_path)
+        add_node(conn, "ki1", "KernelInvariant", {
+            "predicate": "Test invariant",
+            "strength": "safety",
+            "scope": "system-wide",
+            "artifact_class": "abstracted-mechanism",
+        })
+        conn.commit()
+        report = validate_snapshot(conn)
+        conn.close()
+        assert report["class_a_count"] == 0

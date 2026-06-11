@@ -368,3 +368,58 @@ def test_path_exists_all_edge_kinds(populated: sqlite3.Connection):
 
 def test_path_exists_self(populated: sqlite3.Connection):
     assert path_exists(populated, "c1", "c1")
+
+
+# --- KernelInvariant ---
+
+KINV_ATTRS = {
+    "predicate": "No reader observes a partially-updated structure",
+    "strength": "safety",
+    "scope": "per-operation",
+    "artifact_class": "abstracted-mechanism",
+}
+
+
+def test_kernel_invariant_node_creation(conn: sqlite3.Connection):
+    add_node(conn, "ki1", "KernelInvariant", KINV_ATTRS)
+    node = get_node(conn, "ki1")
+    assert node is not None
+    assert node["kind"] == "KernelInvariant"
+    assert node["attrs"]["predicate"] == KINV_ATTRS["predicate"]
+
+
+def test_kernel_invariant_rejects_missing_attrs(conn: sqlite3.Connection):
+    with pytest.raises(ValueError, match="missing required"):
+        add_node(conn, "ki1", "KernelInvariant", {"predicate": "x"})
+
+
+def test_governed_by_edge_valid(populated: sqlite3.Connection):
+    add_node(populated, "ki1", "KernelInvariant", KINV_ATTRS)
+    add_edge(populated, "governed-by", "ki1", "c1")
+    row = populated.execute(
+        "SELECT 1 FROM edges WHERE kind='governed-by' AND source_id='ki1' AND target_id='c1'"
+    ).fetchone()
+    assert row is not None
+
+
+def test_governed_by_edge_invalid_source(populated: sqlite3.Connection):
+    with pytest.raises(ValueError, match="requires"):
+        add_edge(populated, "governed-by", "c1", "c2")
+
+
+def test_belongs_to_kernel_invariant(populated: sqlite3.Connection):
+    add_node(populated, "ki1", "KernelInvariant", KINV_ATTRS)
+    add_edge(populated, "belongs-to", "ki1", "sub1")
+    row = populated.execute(
+        "SELECT 1 FROM edges WHERE kind='belongs-to' AND source_id='ki1' AND target_id='sub1'"
+    ).fetchone()
+    assert row is not None
+
+
+def test_extracted_from_kernel_invariant(populated: sqlite3.Connection):
+    add_node(populated, "ki1", "KernelInvariant", KINV_ATTRS)
+    add_edge(populated, "extracted-from", "ki1", "ev1")
+    row = populated.execute(
+        "SELECT 1 FROM edges WHERE kind='extracted-from' AND source_id='ki1' AND target_id='ev1'"
+    ).fetchone()
+    assert row is not None

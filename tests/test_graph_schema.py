@@ -14,14 +14,14 @@ from graph.schema import (
 
 
 def test_node_kinds_complete():
-    assert set(NODE_KINDS) == {"Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal"}
+    assert set(NODE_KINDS) == {"Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant"}
 
 
 def test_edge_kinds_complete():
     expected = {
         "belongs-to", "extracted-from", "sourced-from", "alternative-to",
         "refines", "contradicts", "prerequisite", "supersedes",
-        "assessed-by", "grounded-in",
+        "assessed-by", "grounded-in", "governed-by",
     }
     assert set(EDGE_KINDS) == expected
 

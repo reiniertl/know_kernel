@@ -76,10 +76,12 @@ def add_edge(
         raise ValueError(f"Source node '{source_id}' does not exist")
     if target_node is None:
         raise ValueError(f"Target node '{target_id}' does not exist")
-    expected_source, expected_target = valid_pair
-    if source_node["kind"] != expected_source or target_node["kind"] != expected_target:
+    pairs = valid_pair if isinstance(valid_pair, list) else [valid_pair]
+    actual = (source_node["kind"], target_node["kind"])
+    if actual not in pairs:
+        allowed = " or ".join(f"({s} -> {t})" for s, t in pairs)
         raise ValueError(
-            f"Edge '{kind}' requires ({expected_source} -> {expected_target}), "
+            f"Edge '{kind}' requires {allowed}, "
             f"got ({source_node['kind']} -> {target_node['kind']})"
         )
     if kind == "supersedes" and _check_supersedes_cycle(conn, source_id, target_id):
