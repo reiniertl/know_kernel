@@ -46,6 +46,16 @@ extracting in this same batch. Each entry has:
   - kind: One of "refines", "contradicts", "prerequisite"
   - reason: One sentence explaining the relationship
   If a concept has no relationships, use an empty list.
+- invariants: A list of rules or properties that MUST HOLD for this \
+concept to function correctly. Each entry has:
+  - predicate: A clear statement of what must be true (e.g., "No reader \
+can observe a partially-updated data structure")
+  - strength: One of "safety" (violation = corruption), "liveness" \
+(violation = deadlock/starvation), "performance" (violation = regression), \
+"structural" (violation = design inconsistency)
+  - scope: One of "per-operation", "per-object", "system-wide"
+  Extract 1-3 invariants per concept. Focus on the most critical rules. \
+If a concept has no clear invariants, use an empty list.
 
 Return a JSON array of objects. Extract at most 10 concepts per document. \
 Focus on the most significant ideas.\
@@ -74,8 +84,20 @@ CONCEPT_SCHEMA = {
                     "required": ["target", "kind", "reason"],
                 },
             },
+            "invariants": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "predicate": {"type": "string"},
+                        "strength": {"type": "string"},
+                        "scope": {"type": "string"},
+                    },
+                    "required": ["predicate", "strength", "scope"],
+                },
+            },
         },
-        "required": ["name", "description", "key_properties", "tradeoffs", "design_rationale", "subsystem", "relationships"],
+        "required": ["name", "description", "key_properties", "tradeoffs", "design_rationale", "subsystem", "relationships", "invariants"],
     },
 }
 
@@ -244,6 +266,7 @@ class ExtractionResult:
     concepts_skipped: int = 0
     subsystem_ids: list[str] = field(default_factory=list)
     relationships_created: int = 0
+    invariants_created: int = 0
     extraction_model: str = ""
     prompt_tokens: int = 0
     response_tokens: int = 0
@@ -379,11 +402,25 @@ def extract_concepts(
 
     rel_result = wire_relationships(conn, concepts_data[:10], name_to_id)
 
+    invariants_created = 0
+    for item in concepts_data[:10]:
+        if not isinstance(item, dict):
+            continue
+        for inv in item.get("invariants", []):
+            inv["concept_name"] = item.get("name", "")
+            validated = validate_invariant_item(inv)
+            if validated is None:
+                continue
+            inv_id = store_kernel_invariant(conn, validated, evidence_id, name_to_id)
+            if inv_id:
+                invariants_created += 1
+
     return ExtractionResult(
         evidence_id=evidence_id,
         concept_ids=concept_ids,
         subsystem_ids=subsystem_ids,
         relationships_created=rel_result.edges_created,
+        invariants_created=invariants_created,
         concepts_created=len(concept_ids),
         concepts_skipped=0,
         extraction_model=model,
