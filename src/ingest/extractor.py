@@ -54,6 +54,13 @@ can observe a partially-updated data structure")
 (violation = deadlock/starvation), "performance" (violation = regression), \
 "structural" (violation = design inconsistency)
   - scope: One of "per-operation", "per-object", "system-wide"
+  Each invariant may include failure_modes â€" what happens when this \
+invariant is violated:
+  - failure_modes: A list of consequences. Each entry has:
+    - symptom: Observable behavior (e.g., "data corruption", "deadlock", \
+"priority inversion")
+    - blast_radius: One of "local", "subsystem", "kernel-wide"
+    - recoverability: One of "self-healing", "requires-restart", "data-loss"
   Extract 1-3 invariants per concept. Focus on the most critical rules. \
 If a concept has no clear invariants, use an empty list.
 
@@ -92,6 +99,18 @@ CONCEPT_SCHEMA = {
                         "predicate": {"type": "string"},
                         "strength": {"type": "string"},
                         "scope": {"type": "string"},
+                        "failure_modes": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "symptom": {"type": "string"},
+                                    "blast_radius": {"type": "string"},
+                                    "recoverability": {"type": "string"},
+                                },
+                                "required": ["symptom", "blast_radius", "recoverability"],
+                            },
+                        },
                     },
                     "required": ["predicate", "strength", "scope"],
                 },
@@ -236,6 +255,50 @@ def store_kernel_invariant(
     return kinv_id
 
 
+VALID_BLAST_RADII = {"local", "subsystem", "kernel-wide"}
+VALID_RECOVERABILITIES = {"self-healing", "requires-restart", "data-loss"}
+
+
+def validate_failure_mode_item(item: Any) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    for key in ("symptom", "blast_radius", "recoverability"):
+        if key not in item:
+            return None
+    symptom = item["symptom"]
+    if not isinstance(symptom, str) or not symptom.strip():
+        return None
+    blast_radius = item["blast_radius"]
+    if not isinstance(blast_radius, str) or blast_radius.strip() not in VALID_BLAST_RADII:
+        return None
+    recoverability = item["recoverability"]
+    if not isinstance(recoverability, str) or recoverability.strip() not in VALID_RECOVERABILITIES:
+        return None
+    return {
+        "symptom": symptom.strip(),
+        "blast_radius": blast_radius.strip(),
+        "recoverability": recoverability.strip(),
+    }
+
+
+def store_failure_mode(
+    conn: sqlite3.Connection,
+    item: dict,
+    evidence_id: str,
+    kinv_id: str,
+) -> str:
+    fm_id = f"fm-{uuid.uuid4().hex[:12]}"
+    add_node(conn, fm_id, "FailureMode", {
+        "symptom": item["symptom"],
+        "blast_radius": item["blast_radius"],
+        "recoverability": item["recoverability"],
+        "artifact_class": "abstracted-mechanism",
+    })
+    add_edge(conn, "triggered-by", fm_id, kinv_id)
+    add_edge(conn, "extracted-from", fm_id, evidence_id)
+    return fm_id
+
+
 def store_rich_concept(
     conn: sqlite3.Connection, item: dict, evidence_id: str,
 ) -> str:
@@ -267,6 +330,7 @@ class ExtractionResult:
     subsystem_ids: list[str] = field(default_factory=list)
     relationships_created: int = 0
     invariants_created: int = 0
+    failure_modes_created: int = 0
     extraction_model: str = ""
     prompt_tokens: int = 0
     response_tokens: int = 0
@@ -403,6 +467,7 @@ def extract_concepts(
     rel_result = wire_relationships(conn, concepts_data[:10], name_to_id)
 
     invariants_created = 0
+    failure_modes_created = 0
     for item in concepts_data[:10]:
         if not isinstance(item, dict):
             continue
@@ -414,6 +479,11 @@ def extract_concepts(
             inv_id = store_kernel_invariant(conn, validated, evidence_id, name_to_id)
             if inv_id:
                 invariants_created += 1
+                for fm in inv.get("failure_modes", []):
+                    validated_fm = validate_failure_mode_item(fm)
+                    if validated_fm:
+                        store_failure_mode(conn, validated_fm, evidence_id, inv_id)
+                        failure_modes_created += 1
 
     return ExtractionResult(
         evidence_id=evidence_id,
@@ -421,6 +491,7 @@ def extract_concepts(
         subsystem_ids=subsystem_ids,
         relationships_created=rel_result.edges_created,
         invariants_created=invariants_created,
+        failure_modes_created=failure_modes_created,
         concepts_created=len(concept_ids),
         concepts_skipped=0,
         extraction_model=model,

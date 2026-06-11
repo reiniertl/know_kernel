@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -19,11 +19,12 @@ EDGE_KINDS = (
     "assessed-by",
     "grounded-in",
     "governed-by",
+    "triggered-by",
 )
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "belongs-to": [("Concept", "Subsystem"), ("KernelInvariant", "Subsystem")],
-    "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence")],
+    "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence")],
     "sourced-from": ("Evidence", "Source"),
     "alternative-to": ("Concept", "Concept"),
     "refines": ("Concept", "Concept"),
@@ -33,6 +34,7 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "assessed-by": ("Source", "Advisory"),
     "grounded-in": ("Proposal", "Concept"),
     "governed-by": ("KernelInvariant", "Concept"),
+    "triggered-by": ("FailureMode", "KernelInvariant"),
 }
 
 REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
@@ -43,6 +45,7 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "Subsystem": ("name",),
     "Proposal": ("name", "description"),
     "KernelInvariant": ("predicate", "strength", "scope", "artifact_class"),
+    "FailureMode": ("symptom", "blast_radius", "recoverability", "artifact_class"),
 }
 
 SCHEMA_SQL = """\
