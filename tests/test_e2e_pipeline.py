@@ -35,7 +35,9 @@ class MockLLMClient:
                     "subsystem": "Virtual Memory",
                     "relationships": [],
                     "invariants": [
-                        {"predicate": "Every virtual address resolves to at most one physical frame", "strength": "safety", "scope": "per-operation"},
+                        {"predicate": "Every virtual address resolves to at most one physical frame", "strength": "safety", "scope": "per-operation", "failure_modes": [
+                            {"symptom": "Multiple physical frames mapped to same virtual address", "blast_radius": "kernel-wide", "recoverability": "data-loss"},
+                        ]},
                     ],
                 },
                 {
@@ -49,7 +51,9 @@ class MockLLMClient:
                         {"target": "Virtual Address Translation", "kind": "prerequisite", "reason": "Requires address translation infrastructure for page fault handling."},
                     ],
                     "invariants": [
-                        {"predicate": "No page fault occurs for an already-resident page", "strength": "performance", "scope": "per-operation"},
+                        {"predicate": "No page fault occurs for an already-resident page", "strength": "performance", "scope": "per-operation", "failure_modes": [
+                            {"symptom": "Spurious page fault on resident page degrades throughput", "blast_radius": "local", "recoverability": "self-healing"},
+                        ]},
                     ],
                 },
             ]),
@@ -135,6 +139,14 @@ class TestE2EPipeline:
             "SELECT COUNT(*) FROM edges WHERE kind = 'governed-by'"
         ).fetchone()[0]
         assert governed_edges == 2
+
+        fm_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'FailureMode'").fetchone()[0]
+        assert fm_count == 2
+
+        triggered_edges = snap_conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE kind = 'triggered-by'"
+        ).fetchone()[0]
+        assert triggered_edges == 2
 
         snap_conn.close()
 
@@ -281,6 +293,7 @@ class TestE2EPipeline:
         review_source(conn, result.source_id, "MIT confirmed.", "weak-copyleft")
         extract = extract_concepts(conn, result.evidence_id, gate, client=MockLLMClient())
         assert extract.invariants_created == 2
+        assert extract.failure_modes_created == 2
         conn.commit()
 
         kinv_nodes = conn.execute("SELECT id, attrs FROM nodes WHERE kind = 'KernelInvariant'").fetchall()
@@ -290,12 +303,19 @@ class TestE2EPipeline:
             assert attrs["artifact_class"] == "abstracted-mechanism"
             assert attrs["strength"] in {"safety", "performance"}
 
+        fm_nodes = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'FailureMode'").fetchone()[0]
+        assert fm_nodes == 2
+
         export_class_b_snapshot(master_db, snapshot_db)
         snap_conn = sqlite3.connect(str(snapshot_db))
         snap_kinv = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'KernelInvariant'").fetchone()[0]
         assert snap_kinv == 2
         snap_governed = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'governed-by'").fetchone()[0]
         assert snap_governed == 2
+        snap_fm = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'FailureMode'").fetchone()[0]
+        assert snap_fm == 2
+        snap_triggered = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'triggered-by'").fetchone()[0]
+        assert snap_triggered == 2
         snap_conn.close()
 
     def test_mcp_rejects_non_class_b_snapshot(self, tmp_path):

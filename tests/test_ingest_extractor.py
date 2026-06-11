@@ -15,9 +15,11 @@ from ingest.extractor import (
     RelationshipResult,
     build_extraction_prompt,
     extract_concepts,
+    store_failure_mode,
     store_kernel_invariant,
     store_rich_concept,
     validate_extraction_item,
+    validate_failure_mode_item,
     validate_invariant_item,
     wire_relationships,
 )
@@ -36,7 +38,9 @@ class MockLLMClient:
                 "subsystem": "Virtual Memory",
                 "relationships": [],
                 "invariants": [
-                    {"predicate": "Every virtual address resolves to at most one physical frame", "strength": "safety", "scope": "per-operation"},
+                    {"predicate": "Every virtual address resolves to at most one physical frame", "strength": "safety", "scope": "per-operation", "failure_modes": [
+                        {"symptom": "Multiple physical frames mapped to same virtual address", "blast_radius": "kernel-wide", "recoverability": "data-loss"},
+                    ]},
                 ],
             },
             {
@@ -50,8 +54,10 @@ class MockLLMClient:
                     {"target": "Page Table Walking", "kind": "prerequisite", "reason": "Requires page table infrastructure for tracking shared pages."},
                 ],
                 "invariants": [
-                    {"predicate": "Shared pages remain unmodified until copy is triggered", "strength": "safety", "scope": "per-object"},
-                    {"predicate": "Reference count is decremented after copy completes", "strength": "structural", "scope": "per-object"},
+                    {"predicate": "Shared pages remain unmodified until copy is triggered", "strength": "safety", "scope": "per-object", "failure_modes": [
+                        {"symptom": "Data corruption from concurrent write to shared page", "blast_radius": "subsystem", "recoverability": "data-loss"},
+                    ]},
+                    {"predicate": "Reference count is decremented after copy completes", "strength": "structural", "scope": "per-object", "failure_modes": []},
                 ],
             },
         ]
@@ -609,3 +615,108 @@ class TestExtractConceptsInvariants:
         result = extract_concepts(conn, evidence_node, gate, client=MockLLMClient())
         actual = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'KernelInvariant'").fetchone()[0]
         assert result.invariants_created == actual
+
+
+# --- validate_failure_mode_item ---
+
+
+_VALID_FM = {
+    "symptom": "Data corruption visible to concurrent readers",
+    "blast_radius": "kernel-wide",
+    "recoverability": "data-loss",
+}
+
+
+class TestValidateFailureModeItem:
+    def test_valid(self):
+        result = validate_failure_mode_item(_VALID_FM)
+        assert result is not None
+        assert result["symptom"] == _VALID_FM["symptom"]
+        assert result["blast_radius"] == "kernel-wide"
+        assert result["recoverability"] == "data-loss"
+
+    def test_missing_symptom(self):
+        item = {k: v for k, v in _VALID_FM.items() if k != "symptom"}
+        assert validate_failure_mode_item(item) is None
+
+    def test_empty_symptom(self):
+        item = {**_VALID_FM, "symptom": "   "}
+        assert validate_failure_mode_item(item) is None
+
+    def test_invalid_blast_radius(self):
+        item = {**_VALID_FM, "blast_radius": "global"}
+        assert validate_failure_mode_item(item) is None
+
+    def test_invalid_recoverability(self):
+        item = {**_VALID_FM, "recoverability": "fixable"}
+        assert validate_failure_mode_item(item) is None
+
+    def test_strips_strings(self):
+        item = {"symptom": "  deadlock  ", "blast_radius": " subsystem ", "recoverability": " self-healing "}
+        result = validate_failure_mode_item(item)
+        assert result is not None
+        assert result["symptom"] == "deadlock"
+        assert result["blast_radius"] == "subsystem"
+        assert result["recoverability"] == "self-healing"
+
+    def test_not_dict(self):
+        assert validate_failure_mode_item("not a dict") is None
+
+
+# --- store_failure_mode ---
+
+
+class TestStoreFailureMode:
+    def test_creates_node(self, conn, evidence_node):
+        cid = store_rich_concept(conn, {
+            "name": "RCU", "description": "read-copy-update",
+            "artifact_class": "B", "key_properties": ["lock-free"],
+            "tradeoffs": [], "design_rationale": "Optimizes reads.",
+        }, evidence_node)
+        kinv_id = store_kernel_invariant(conn, {
+            "predicate": "Test", "strength": "safety",
+            "scope": "per-operation", "concept_name": "RCU",
+        }, evidence_node, {"rcu": cid})
+        fm_id = store_failure_mode(conn, {
+            "symptom": "Data corruption", "blast_radius": "kernel-wide",
+            "recoverability": "data-loss",
+        }, evidence_node, kinv_id)
+        node = conn.execute("SELECT kind, attrs FROM nodes WHERE id = ?", (fm_id,)).fetchone()
+        assert node[0] == "FailureMode"
+        attrs = json.loads(node[1])
+        assert attrs["symptom"] == "Data corruption"
+        assert attrs["artifact_class"] == "abstracted-mechanism"
+
+    def test_triggered_by_edge(self, conn, evidence_node):
+        cid = store_rich_concept(conn, {
+            "name": "RCU", "description": "read-copy-update",
+            "artifact_class": "B", "key_properties": ["lock-free"],
+            "tradeoffs": [], "design_rationale": "Optimizes reads.",
+        }, evidence_node)
+        kinv_id = store_kernel_invariant(conn, {
+            "predicate": "Test", "strength": "safety",
+            "scope": "per-operation", "concept_name": "RCU",
+        }, evidence_node, {"rcu": cid})
+        fm_id = store_failure_mode(conn, {
+            "symptom": "Deadlock", "blast_radius": "subsystem",
+            "recoverability": "requires-restart",
+        }, evidence_node, kinv_id)
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind='triggered-by' AND source_id=? AND target_id=?",
+            (fm_id, kinv_id),
+        ).fetchone()
+        assert edge is not None
+
+
+# --- E2E: extract_concepts with failure modes ---
+
+
+class TestExtractConceptsFailureModes:
+    def test_failure_modes_end_to_end(self, conn, evidence_node):
+        gate = SessionGate()
+        result = extract_concepts(conn, evidence_node, gate, client=MockLLMClient())
+        assert result.failure_modes_created == 2
+        fm_nodes = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'FailureMode'").fetchone()[0]
+        assert fm_nodes == 2
+        triggered_edges = conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'triggered-by'").fetchone()[0]
+        assert triggered_edges == 2
