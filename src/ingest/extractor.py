@@ -163,6 +163,57 @@ def wire_relationships(
     return RelationshipResult(edges_created=created, edges_skipped=skipped)
 
 
+VALID_STRENGTHS = {"safety", "liveness", "performance", "structural"}
+VALID_SCOPES = {"per-operation", "per-object", "system-wide"}
+
+
+def validate_invariant_item(item: Any) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    for key in ("predicate", "strength", "scope", "concept_name"):
+        if key not in item:
+            return None
+    predicate = item["predicate"]
+    if not isinstance(predicate, str) or not predicate.strip():
+        return None
+    strength = item["strength"]
+    if not isinstance(strength, str) or strength.strip() not in VALID_STRENGTHS:
+        return None
+    scope = item["scope"]
+    if not isinstance(scope, str) or scope.strip() not in VALID_SCOPES:
+        return None
+    concept_name = item["concept_name"]
+    if not isinstance(concept_name, str) or not concept_name.strip():
+        return None
+    return {
+        "predicate": predicate.strip(),
+        "strength": strength.strip(),
+        "scope": scope.strip(),
+        "concept_name": concept_name.strip(),
+    }
+
+
+def store_kernel_invariant(
+    conn: sqlite3.Connection,
+    item: dict,
+    evidence_id: str,
+    concept_name_to_id: dict[str, str],
+) -> str | None:
+    concept_id = concept_name_to_id.get(item["concept_name"].lower())
+    if not concept_id:
+        return None
+    kinv_id = f"kinv-{uuid.uuid4().hex[:12]}"
+    add_node(conn, kinv_id, "KernelInvariant", {
+        "predicate": item["predicate"],
+        "strength": item["strength"],
+        "scope": item["scope"],
+        "artifact_class": "abstracted-mechanism",
+    })
+    add_edge(conn, "governed-by", kinv_id, concept_id)
+    add_edge(conn, "extracted-from", kinv_id, evidence_id)
+    return kinv_id
+
+
 def store_rich_concept(
     conn: sqlite3.Connection, item: dict, evidence_id: str,
 ) -> str:

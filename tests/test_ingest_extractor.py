@@ -15,8 +15,10 @@ from ingest.extractor import (
     RelationshipResult,
     build_extraction_prompt,
     extract_concepts,
+    store_kernel_invariant,
     store_rich_concept,
     validate_extraction_item,
+    validate_invariant_item,
     wire_relationships,
 )
 from ingest.gate import SessionGate, SessionViolationError
@@ -432,3 +434,135 @@ class TestWireRelationships:
         result = wire_relationships(conn, concepts_data, name_map)
         assert result.edges_created == 0
         assert result.edges_skipped == 0
+
+
+# --- validate_invariant_item ---
+
+
+_VALID_INV = {
+    "predicate": "No reader observes a partially-updated data structure",
+    "strength": "safety",
+    "scope": "per-operation",
+    "concept_name": "Read-Copy-Update",
+}
+
+
+class TestValidateInvariantItem:
+    def test_valid(self):
+        result = validate_invariant_item(_VALID_INV)
+        assert result is not None
+        assert result["predicate"] == _VALID_INV["predicate"]
+        assert result["strength"] == "safety"
+        assert result["scope"] == "per-operation"
+        assert result["concept_name"] == "Read-Copy-Update"
+
+    def test_missing_predicate(self):
+        item = {k: v for k, v in _VALID_INV.items() if k != "predicate"}
+        assert validate_invariant_item(item) is None
+
+    def test_empty_predicate(self):
+        item = {**_VALID_INV, "predicate": "   "}
+        assert validate_invariant_item(item) is None
+
+    def test_invalid_strength(self):
+        item = {**_VALID_INV, "strength": "critical"}
+        assert validate_invariant_item(item) is None
+
+    def test_invalid_scope(self):
+        item = {**_VALID_INV, "scope": "global"}
+        assert validate_invariant_item(item) is None
+
+    def test_strips_strings(self):
+        item = {
+            "predicate": "  test predicate  ",
+            "strength": " safety ",
+            "scope": " per-object ",
+            "concept_name": "  RCU  ",
+        }
+        result = validate_invariant_item(item)
+        assert result is not None
+        assert result["predicate"] == "test predicate"
+        assert result["strength"] == "safety"
+        assert result["scope"] == "per-object"
+        assert result["concept_name"] == "RCU"
+
+    def test_not_dict(self):
+        assert validate_invariant_item("not a dict") is None
+
+    def test_missing_concept_name(self):
+        item = {k: v for k, v in _VALID_INV.items() if k != "concept_name"}
+        assert validate_invariant_item(item) is None
+
+
+# --- store_kernel_invariant ---
+
+
+class TestStoreKernelInvariant:
+    def test_creates_node(self, conn, evidence_node):
+        cid = store_rich_concept(conn, {
+            "name": "RCU", "description": "read-copy-update",
+            "artifact_class": "B", "key_properties": ["lock-free"],
+            "tradeoffs": [], "design_rationale": "Optimizes reads.",
+        }, evidence_node)
+        name_to_id = {"rcu": cid}
+        inv_item = {
+            "predicate": "No reader observes partial update",
+            "strength": "safety",
+            "scope": "per-operation",
+            "concept_name": "RCU",
+        }
+        kinv_id = store_kernel_invariant(conn, inv_item, evidence_node, name_to_id)
+        assert kinv_id is not None
+        node = conn.execute("SELECT kind, attrs FROM nodes WHERE id = ?", (kinv_id,)).fetchone()
+        assert node[0] == "KernelInvariant"
+        import json
+        attrs = json.loads(node[1])
+        assert attrs["predicate"] == "No reader observes partial update"
+        assert attrs["strength"] == "safety"
+        assert attrs["scope"] == "per-operation"
+        assert attrs["artifact_class"] == "abstracted-mechanism"
+
+    def test_governed_by_edge(self, conn, evidence_node):
+        cid = store_rich_concept(conn, {
+            "name": "RCU", "description": "read-copy-update",
+            "artifact_class": "B", "key_properties": ["lock-free"],
+            "tradeoffs": [], "design_rationale": "Optimizes reads.",
+        }, evidence_node)
+        name_to_id = {"rcu": cid}
+        inv_item = {
+            "predicate": "Test", "strength": "safety",
+            "scope": "per-operation", "concept_name": "RCU",
+        }
+        kinv_id = store_kernel_invariant(conn, inv_item, evidence_node, name_to_id)
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind='governed-by' AND source_id=? AND target_id=?",
+            (kinv_id, cid),
+        ).fetchone()
+        assert edge is not None
+
+    def test_provenance_edge(self, conn, evidence_node):
+        cid = store_rich_concept(conn, {
+            "name": "RCU", "description": "read-copy-update",
+            "artifact_class": "B", "key_properties": ["lock-free"],
+            "tradeoffs": [], "design_rationale": "Optimizes reads.",
+        }, evidence_node)
+        name_to_id = {"rcu": cid}
+        inv_item = {
+            "predicate": "Test", "strength": "safety",
+            "scope": "per-operation", "concept_name": "RCU",
+        }
+        kinv_id = store_kernel_invariant(conn, inv_item, evidence_node, name_to_id)
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind='extracted-from' AND source_id=? AND target_id=?",
+            (kinv_id, evidence_node),
+        ).fetchone()
+        assert edge is not None
+
+    def test_unknown_concept_returns_none(self, conn, evidence_node):
+        result = store_kernel_invariant(
+            conn,
+            {"predicate": "Test", "strength": "safety", "scope": "per-operation", "concept_name": "NonExistent"},
+            evidence_node,
+            {"rcu": "concept-123"},
+        )
+        assert result is None
