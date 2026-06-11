@@ -25,38 +25,49 @@ from mcp_server.server import init_snapshot
 class MockLLMClient:
     def create_message(self, model: str, system: str, user: str, max_tokens: int) -> dict:
         return {
-            "text": json.dumps([
-                {
-                    "name": "Virtual Address Translation",
-                    "description": "A mechanism that maps process-specific virtual addresses to physical memory locations through a hierarchical lookup structure.",
-                    "key_properties": ["hierarchical lookup", "hardware-assisted", "per-process isolation"],
-                    "tradeoffs": ["TLB miss penalty"],
-                    "design_rationale": "Indirection through page tables enables per-process address isolation without physical memory fragmentation.",
-                    "subsystem": "Virtual Memory",
-                    "relationships": [],
-                    "invariants": [
-                        {"predicate": "Every virtual address resolves to at most one physical frame", "strength": "safety", "scope": "per-operation", "failure_modes": [
-                            {"symptom": "Multiple physical frames mapped to same virtual address", "blast_radius": "kernel-wide", "recoverability": "data-loss"},
-                        ]},
-                    ],
-                },
-                {
-                    "name": "Demand Paging",
-                    "description": "A lazy loading strategy that defers page allocation until the first access, reducing memory footprint for large address spaces.",
-                    "key_properties": ["lazy allocation", "page fault driven", "reduced memory footprint"],
-                    "tradeoffs": ["page fault latency on first access"],
-                    "design_rationale": "Deferred allocation avoids wasting physical memory on unused virtual pages.",
-                    "subsystem": "Virtual Memory",
-                    "relationships": [
-                        {"target": "Virtual Address Translation", "kind": "prerequisite", "reason": "Requires address translation infrastructure for page fault handling."},
-                    ],
-                    "invariants": [
-                        {"predicate": "No page fault occurs for an already-resident page", "strength": "performance", "scope": "per-operation", "failure_modes": [
-                            {"symptom": "Spurious page fault on resident page degrades throughput", "blast_radius": "local", "recoverability": "self-healing"},
-                        ]},
-                    ],
-                },
-            ]),
+            "text": json.dumps({
+                "concepts": [
+                    {
+                        "name": "Virtual Address Translation",
+                        "description": "A mechanism that maps process-specific virtual addresses to physical memory locations through a hierarchical lookup structure.",
+                        "key_properties": ["hierarchical lookup", "hardware-assisted", "per-process isolation"],
+                        "tradeoffs": ["TLB miss penalty"],
+                        "design_rationale": "Indirection through page tables enables per-process address isolation without physical memory fragmentation.",
+                        "subsystem": "Virtual Memory",
+                        "relationships": [],
+                        "invariants": [
+                            {"predicate": "Every virtual address resolves to at most one physical frame", "strength": "safety", "scope": "per-operation", "failure_modes": [
+                                {"symptom": "Multiple physical frames mapped to same virtual address", "blast_radius": "kernel-wide", "recoverability": "data-loss"},
+                            ]},
+                        ],
+                    },
+                    {
+                        "name": "Demand Paging",
+                        "description": "A lazy loading strategy that defers page allocation until the first access, reducing memory footprint for large address spaces.",
+                        "key_properties": ["lazy allocation", "page fault driven", "reduced memory footprint"],
+                        "tradeoffs": ["page fault latency on first access"],
+                        "design_rationale": "Deferred allocation avoids wasting physical memory on unused virtual pages.",
+                        "subsystem": "Virtual Memory",
+                        "relationships": [
+                            {"target": "Virtual Address Translation", "kind": "prerequisite", "reason": "Requires address translation infrastructure for page fault handling."},
+                        ],
+                        "invariants": [
+                            {"predicate": "No page fault occurs for an already-resident page", "strength": "performance", "scope": "per-operation", "failure_modes": [
+                                {"symptom": "Spurious page fault on resident page degrades throughput", "blast_radius": "local", "recoverability": "self-healing"},
+                            ]},
+                        ],
+                    },
+                ],
+                "interaction_protocols": [
+                    {
+                        "rule": "Address translation must complete before page fault resolution",
+                        "ordering": "before",
+                        "violation_mode": "Page fault handler cannot resolve without translated address",
+                        "concept_a": "Virtual Address Translation",
+                        "concept_b": "Demand Paging",
+                    },
+                ],
+            }),
             "prompt_tokens": 100,
             "response_tokens": 50,
         }
@@ -147,6 +158,12 @@ class TestE2EPipeline:
             "SELECT COUNT(*) FROM edges WHERE kind = 'triggered-by'"
         ).fetchone()[0]
         assert triggered_edges == 2
+
+        proto_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'InteractionProtocol'").fetchone()[0]
+        assert proto_count == 1
+
+        cc_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'constrains-composition'").fetchone()[0]
+        assert cc_edges == 2
 
         snap_conn.close()
 
@@ -294,6 +311,7 @@ class TestE2EPipeline:
         extract = extract_concepts(conn, result.evidence_id, gate, client=MockLLMClient())
         assert extract.invariants_created == 2
         assert extract.failure_modes_created == 2
+        assert extract.protocols_created == 1
         conn.commit()
 
         kinv_nodes = conn.execute("SELECT id, attrs FROM nodes WHERE kind = 'KernelInvariant'").fetchall()

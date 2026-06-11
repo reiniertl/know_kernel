@@ -16,57 +16,73 @@ from ingest.extractor import (
     build_extraction_prompt,
     extract_concepts,
     store_failure_mode,
+    store_interaction_protocol,
     store_kernel_invariant,
     store_rich_concept,
     validate_extraction_item,
     validate_failure_mode_item,
     validate_invariant_item,
+    validate_protocol_item,
     wire_relationships,
 )
 from ingest.gate import SessionGate, SessionViolationError
 
 
+_DEFAULT_CONCEPTS = [
+    {
+        "name": "Page Table Walking",
+        "description": "A mechanism for translating virtual addresses to physical addresses by traversing a hierarchical table structure.",
+        "key_properties": ["O(log n) lookup", "hardware-assisted", "hierarchical"],
+        "tradeoffs": ["TLB miss penalty"],
+        "design_rationale": "Hierarchical structure balances memory overhead and lookup speed.",
+        "subsystem": "Virtual Memory",
+        "relationships": [],
+        "invariants": [
+            {"predicate": "Every virtual address resolves to at most one physical frame", "strength": "safety", "scope": "per-operation", "failure_modes": [
+                {"symptom": "Multiple physical frames mapped to same virtual address", "blast_radius": "kernel-wide", "recoverability": "data-loss"},
+            ]},
+        ],
+    },
+    {
+        "name": "Copy-on-Write",
+        "description": "A resource management technique that defers duplication of shared memory pages until a write operation occurs.",
+        "key_properties": ["lazy duplication", "shared pages", "write-triggered copy"],
+        "tradeoffs": ["copy latency on first write"],
+        "design_rationale": "Avoids unnecessary memory duplication for forked processes.",
+        "subsystem": "Virtual Memory",
+        "relationships": [
+            {"target": "Page Table Walking", "kind": "prerequisite", "reason": "Requires page table infrastructure for tracking shared pages."},
+        ],
+        "invariants": [
+            {"predicate": "Shared pages remain unmodified until copy is triggered", "strength": "safety", "scope": "per-object", "failure_modes": [
+                {"symptom": "Data corruption from concurrent write to shared page", "blast_radius": "subsystem", "recoverability": "data-loss"},
+            ]},
+            {"predicate": "Reference count is decremented after copy completes", "strength": "structural", "scope": "per-object", "failure_modes": []},
+        ],
+    },
+]
+
+_DEFAULT_PROTOCOLS = [
+    {
+        "rule": "Page table must be walked before copy-on-write fault can be resolved",
+        "ordering": "before",
+        "violation_mode": "Copy-on-write handler cannot determine physical page without translation",
+        "concept_a": "Page Table Walking",
+        "concept_b": "Copy-on-Write",
+    },
+]
+
+
 class MockLLMClient:
-    def __init__(self, concepts: list[dict] | None = None):
-        self.concepts = concepts or [
-            {
-                "name": "Page Table Walking",
-                "description": "A mechanism for translating virtual addresses to physical addresses by traversing a hierarchical table structure.",
-                "key_properties": ["O(log n) lookup", "hardware-assisted", "hierarchical"],
-                "tradeoffs": ["TLB miss penalty"],
-                "design_rationale": "Hierarchical structure balances memory overhead and lookup speed.",
-                "subsystem": "Virtual Memory",
-                "relationships": [],
-                "invariants": [
-                    {"predicate": "Every virtual address resolves to at most one physical frame", "strength": "safety", "scope": "per-operation", "failure_modes": [
-                        {"symptom": "Multiple physical frames mapped to same virtual address", "blast_radius": "kernel-wide", "recoverability": "data-loss"},
-                    ]},
-                ],
-            },
-            {
-                "name": "Copy-on-Write",
-                "description": "A resource management technique that defers duplication of shared memory pages until a write operation occurs.",
-                "key_properties": ["lazy duplication", "shared pages", "write-triggered copy"],
-                "tradeoffs": ["copy latency on first write"],
-                "design_rationale": "Avoids unnecessary memory duplication for forked processes.",
-                "subsystem": "Virtual Memory",
-                "relationships": [
-                    {"target": "Page Table Walking", "kind": "prerequisite", "reason": "Requires page table infrastructure for tracking shared pages."},
-                ],
-                "invariants": [
-                    {"predicate": "Shared pages remain unmodified until copy is triggered", "strength": "safety", "scope": "per-object", "failure_modes": [
-                        {"symptom": "Data corruption from concurrent write to shared page", "blast_radius": "subsystem", "recoverability": "data-loss"},
-                    ]},
-                    {"predicate": "Reference count is decremented after copy completes", "strength": "structural", "scope": "per-object", "failure_modes": []},
-                ],
-            },
-        ]
+    def __init__(self, concepts: list[dict] | None = None, protocols: list[dict] | None = None):
+        self.concepts = concepts if concepts is not None else _DEFAULT_CONCEPTS
+        self.protocols = protocols if protocols is not None else _DEFAULT_PROTOCOLS
         self.calls: list[dict] = []
 
     def create_message(self, model: str, system: str, user: str, max_tokens: int) -> dict:
         self.calls.append({"model": model, "system": system, "user": user})
         return {
-            "text": json.dumps(self.concepts),
+            "text": json.dumps({"concepts": self.concepts, "interaction_protocols": self.protocols}),
             "prompt_tokens": 100,
             "response_tokens": 50,
         }
@@ -720,3 +736,132 @@ class TestExtractConceptsFailureModes:
         assert fm_nodes == 2
         triggered_edges = conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'triggered-by'").fetchone()[0]
         assert triggered_edges == 2
+
+
+# --- validate_protocol_item ---
+
+
+_VALID_PROTO = {
+    "rule": "Page table must be walked before CoW fault resolution",
+    "ordering": "before",
+    "violation_mode": "CoW handler cannot resolve without translation",
+    "concept_a": "Page Table Walking",
+    "concept_b": "Copy-on-Write",
+}
+_PROTO_NAME_MAP = {"page table walking": "c1", "copy-on-write": "c2"}
+
+
+class TestValidateProtocolItem:
+    def test_valid(self):
+        result = validate_protocol_item(_VALID_PROTO, _PROTO_NAME_MAP)
+        assert result is not None
+        assert result["rule"] == _VALID_PROTO["rule"]
+        assert result["ordering"] == "before"
+
+    def test_invalid_ordering(self):
+        item = {**_VALID_PROTO, "ordering": "concurrent"}
+        assert validate_protocol_item(item, _PROTO_NAME_MAP) is None
+
+    def test_unknown_concept(self):
+        item = {**_VALID_PROTO, "concept_a": "Unknown Mechanism"}
+        assert validate_protocol_item(item, _PROTO_NAME_MAP) is None
+
+    def test_same_concept_rejected(self):
+        item = {**_VALID_PROTO, "concept_b": "Page Table Walking"}
+        assert validate_protocol_item(item, _PROTO_NAME_MAP) is None
+
+    def test_missing_rule(self):
+        item = {k: v for k, v in _VALID_PROTO.items() if k != "rule"}
+        assert validate_protocol_item(item, _PROTO_NAME_MAP) is None
+
+    def test_not_dict(self):
+        assert validate_protocol_item("not a dict", _PROTO_NAME_MAP) is None
+
+
+# --- store_interaction_protocol ---
+
+
+class TestStoreInteractionProtocol:
+    def test_creates_node(self, conn, evidence_node):
+        cid_a = store_rich_concept(conn, {
+            "name": "PTW", "description": "page table walking",
+            "artifact_class": "B", "key_properties": ["hierarchical"],
+            "tradeoffs": [], "design_rationale": "Efficient translation.",
+        }, evidence_node)
+        cid_b = store_rich_concept(conn, {
+            "name": "CoW", "description": "copy-on-write",
+            "artifact_class": "B", "key_properties": ["lazy duplication"],
+            "tradeoffs": [], "design_rationale": "Avoids unnecessary copies.",
+        }, evidence_node)
+        name_to_id = {"ptw": cid_a, "cow": cid_b}
+        proto_id = store_interaction_protocol(conn, {
+            "rule": "Walk before fault", "ordering": "before",
+            "violation_mode": "Cannot resolve", "concept_a": "PTW", "concept_b": "CoW",
+        }, evidence_node, name_to_id)
+        assert proto_id is not None
+        node = conn.execute("SELECT kind, attrs FROM nodes WHERE id = ?", (proto_id,)).fetchone()
+        assert node[0] == "InteractionProtocol"
+        attrs = json.loads(node[1])
+        assert attrs["rule"] == "Walk before fault"
+        assert attrs["artifact_class"] == "abstracted-mechanism"
+
+    def test_two_constrains_composition_edges(self, conn, evidence_node):
+        cid_a = store_rich_concept(conn, {
+            "name": "PTW", "description": "page table walking",
+            "artifact_class": "B", "key_properties": ["hierarchical"],
+            "tradeoffs": [], "design_rationale": "Efficient translation.",
+        }, evidence_node)
+        cid_b = store_rich_concept(conn, {
+            "name": "CoW", "description": "copy-on-write",
+            "artifact_class": "B", "key_properties": ["lazy duplication"],
+            "tradeoffs": [], "design_rationale": "Avoids unnecessary copies.",
+        }, evidence_node)
+        name_to_id = {"ptw": cid_a, "cow": cid_b}
+        proto_id = store_interaction_protocol(conn, {
+            "rule": "Walk before fault", "ordering": "before",
+            "violation_mode": "", "concept_a": "PTW", "concept_b": "CoW",
+        }, evidence_node, name_to_id)
+        edges = conn.execute(
+            "SELECT target_id FROM edges WHERE kind='constrains-composition' AND source_id=?",
+            (proto_id,),
+        ).fetchall()
+        assert len(edges) == 2
+        targets = {r[0] for r in edges}
+        assert cid_a in targets
+        assert cid_b in targets
+
+    def test_provenance_edge(self, conn, evidence_node):
+        cid_a = store_rich_concept(conn, {
+            "name": "PTW", "description": "page table walking",
+            "artifact_class": "B", "key_properties": ["hierarchical"],
+            "tradeoffs": [], "design_rationale": "Efficient translation.",
+        }, evidence_node)
+        cid_b = store_rich_concept(conn, {
+            "name": "CoW", "description": "copy-on-write",
+            "artifact_class": "B", "key_properties": ["lazy duplication"],
+            "tradeoffs": [], "design_rationale": "Avoids unnecessary copies.",
+        }, evidence_node)
+        name_to_id = {"ptw": cid_a, "cow": cid_b}
+        proto_id = store_interaction_protocol(conn, {
+            "rule": "Walk before fault", "ordering": "before",
+            "violation_mode": "", "concept_a": "PTW", "concept_b": "CoW",
+        }, evidence_node, name_to_id)
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind='extracted-from' AND source_id=? AND target_id=?",
+            (proto_id, evidence_node),
+        ).fetchone()
+        assert edge is not None
+
+
+# --- E2E: extract_concepts with protocols ---
+
+
+class TestExtractConceptsProtocols:
+    def test_protocols_end_to_end(self, conn, evidence_node):
+        gate = SessionGate()
+        result = extract_concepts(conn, evidence_node, gate, client=MockLLMClient())
+        assert result.protocols_created == 1
+        proto_nodes = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'InteractionProtocol'").fetchone()[0]
+        assert proto_nodes == 1
+        cc_edges = conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'constrains-composition'").fetchone()[0]
+        assert cc_edges == 2
