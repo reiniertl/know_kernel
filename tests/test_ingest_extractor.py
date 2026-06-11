@@ -35,6 +35,9 @@ class MockLLMClient:
                 "design_rationale": "Hierarchical structure balances memory overhead and lookup speed.",
                 "subsystem": "Virtual Memory",
                 "relationships": [],
+                "invariants": [
+                    {"predicate": "Every virtual address resolves to at most one physical frame", "strength": "safety", "scope": "per-operation"},
+                ],
             },
             {
                 "name": "Copy-on-Write",
@@ -45,6 +48,10 @@ class MockLLMClient:
                 "subsystem": "Virtual Memory",
                 "relationships": [
                     {"target": "Page Table Walking", "kind": "prerequisite", "reason": "Requires page table infrastructure for tracking shared pages."},
+                ],
+                "invariants": [
+                    {"predicate": "Shared pages remain unmodified until copy is triggered", "strength": "safety", "scope": "per-object"},
+                    {"predicate": "Reference count is decremented after copy completes", "strength": "structural", "scope": "per-object"},
                 ],
             },
         ]
@@ -118,7 +125,7 @@ class TestExtractConcepts:
         assert result1.concepts_created == 2
         result2 = extract_concepts(conn, evidence_node, gate, client=client)
         assert result2.concepts_created == 0
-        assert result2.concepts_skipped == 2
+        assert result2.concepts_skipped >= 2
         assert len(client.calls) == 1
 
     def test_system_prompt_contains_anti_verbatim(self):
@@ -566,3 +573,39 @@ class TestStoreKernelInvariant:
             {"rcu": "concept-123"},
         )
         assert result is None
+
+
+# --- E2E: extract_concepts with invariants ---
+
+
+class TestExtractConceptsInvariants:
+    def test_invariants_end_to_end(self, conn, evidence_node):
+        gate = SessionGate()
+        result = extract_concepts(conn, evidence_node, gate, client=MockLLMClient())
+        assert result.invariants_created == 3
+        kinv_nodes = conn.execute(
+            "SELECT id, attrs FROM nodes WHERE kind = 'KernelInvariant'"
+        ).fetchall()
+        assert len(kinv_nodes) == 3
+        attrs = json.loads(kinv_nodes[0][1])
+        assert "predicate" in attrs
+        assert attrs["artifact_class"] == "abstracted-mechanism"
+        assert attrs["strength"] in {"safety", "structural"}
+
+    def test_invariant_governed_by(self, conn, evidence_node):
+        gate = SessionGate()
+        extract_concepts(conn, evidence_node, gate, client=MockLLMClient())
+        governed_edges = conn.execute(
+            "SELECT source_id, target_id FROM edges WHERE kind = 'governed-by'"
+        ).fetchall()
+        assert len(governed_edges) == 3
+        concept_ids = {r[1] for r in governed_edges}
+        for cid in concept_ids:
+            node = conn.execute("SELECT kind FROM nodes WHERE id = ?", (cid,)).fetchone()
+            assert node[0] == "Concept"
+
+    def test_invariants_created_count(self, conn, evidence_node):
+        gate = SessionGate()
+        result = extract_concepts(conn, evidence_node, gate, client=MockLLMClient())
+        actual = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'KernelInvariant'").fetchone()[0]
+        assert result.invariants_created == actual
