@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -23,6 +23,8 @@ EDGE_KINDS = (
     "constrains-composition",
     "profiled-by",
     "assesses-compatibility",
+    "contributes-to",
+    "suited-for",
 )
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
@@ -41,6 +43,8 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "constrains-composition": ("InteractionProtocol", "Concept"),
     "profiled-by": ("PerformanceProfile", "Concept"),
     "assesses-compatibility": ("CompatibilityAssessment", "Concept"),
+    "contributes-to": ("Concept", "OptimizationGoal"),
+    "suited-for": ("Concept", "UseCaseScenario"),
 }
 
 REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
@@ -55,6 +59,8 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "InteractionProtocol": ("rule", "ordering", "violation_mode", "artifact_class"),
     "PerformanceProfile": ("metric", "complexity", "best_case", "worst_case", "typical_case", "conditions", "artifact_class"),
     "CompatibilityAssessment": ("synergy", "rationale", "conditions", "artifact_class"),
+    "OptimizationGoal": ("name", "description", "metric", "direction"),
+    "UseCaseScenario": ("name", "description", "workload_type", "constraints"),
 }
 
 SCHEMA_SQL = """\
