@@ -456,6 +456,78 @@ def build_profile_extraction_prompt(concept_names: list[str]) -> str:
     )
 
 
+VALID_SYNERGIES = {"synergistic", "neutral", "antagonistic"}
+
+
+def validate_compatibility_item(item: Any, concept_name_to_id: dict[str, str]) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    for key in ("synergy", "rationale", "conditions", "concept_a", "concept_b"):
+        if key not in item:
+            return None
+    synergy = item["synergy"]
+    if not isinstance(synergy, str) or synergy.strip() not in VALID_SYNERGIES:
+        return None
+    rationale = item["rationale"]
+    if not isinstance(rationale, str) or not rationale.strip():
+        return None
+    conditions = item["conditions"]
+    if not isinstance(conditions, str) or not conditions.strip():
+        return None
+    concept_a = item["concept_a"]
+    concept_b = item["concept_b"]
+    if not isinstance(concept_a, str) or not concept_a.strip():
+        return None
+    if not isinstance(concept_b, str) or not concept_b.strip():
+        return None
+    a_name = concept_a.strip().lower()
+    b_name = concept_b.strip().lower()
+    if a_name == b_name:
+        return None
+    if a_name not in concept_name_to_id or b_name not in concept_name_to_id:
+        return None
+    return {
+        "synergy": synergy.strip(),
+        "rationale": rationale.strip(),
+        "conditions": conditions.strip(),
+        "concept_a": concept_a.strip(),
+        "concept_b": concept_b.strip(),
+    }
+
+
+def store_compatibility_assessment(
+    conn: sqlite3.Connection,
+    item: dict,
+    evidence_id: str,
+    concept_name_to_id: dict[str, str],
+) -> str | None:
+    a_id = concept_name_to_id.get(item["concept_a"].lower())
+    b_id = concept_name_to_id.get(item["concept_b"].lower())
+    if not a_id or not b_id:
+        return None
+    compat_id = f"compat-{uuid.uuid4().hex[:12]}"
+    add_node(conn, compat_id, "CompatibilityAssessment", {
+        "synergy": item["synergy"],
+        "rationale": item["rationale"],
+        "conditions": item["conditions"],
+        "artifact_class": "abstracted-mechanism",
+    })
+    add_edge(conn, "assesses-compatibility", compat_id, a_id)
+    add_edge(conn, "assesses-compatibility", compat_id, b_id)
+    add_edge(conn, "extracted-from", compat_id, evidence_id)
+    return compat_id
+
+
+def build_compatibility_prompt(concept_names: list[str]) -> str:
+    names_list = ", ".join(concept_names)
+    return (
+        f"Given these kernel concepts: {names_list}\n\n"
+        "Analyze compatibility between concept pairs. For each pair, determine "
+        "whether they are synergistic, neutral, or antagonistic. Return a JSON "
+        "array of compatibility assessments."
+    )
+
+
 def store_rich_concept(
     conn: sqlite3.Connection, item: dict, evidence_id: str,
 ) -> str:
@@ -490,6 +562,7 @@ class ExtractionResult:
     failure_modes_created: int = 0
     protocols_created: int = 0
     profiles_created: int = 0
+    compatibilities_created: int = 0
     extraction_model: str = ""
     prompt_tokens: int = 0
     response_tokens: int = 0
@@ -605,17 +678,22 @@ def extract_concepts(
     if isinstance(parsed, dict):
         concepts_data = parsed.get("concepts", [])
         protocols_data = parsed.get("interaction_protocols", [])
+        compat_data = parsed.get("compatibility_assessments", [])
     elif isinstance(parsed, list):
         concepts_data = parsed
         protocols_data = []
+        compat_data = []
     else:
         concepts_data = []
         protocols_data = []
+        compat_data = []
 
     if not isinstance(concepts_data, list):
         concepts_data = []
     if not isinstance(protocols_data, list):
         protocols_data = []
+    if not isinstance(compat_data, list):
+        compat_data = []
 
     concept_ids: list[str] = []
     name_to_id: dict[str, str] = {}
@@ -680,6 +758,15 @@ def extract_concepts(
             if profile_id:
                 profiles_created += 1
 
+    compatibilities_created = 0
+    for compat in compat_data[:10]:
+        validated_compat = validate_compatibility_item(compat, name_to_id)
+        if validated_compat is None:
+            continue
+        compat_id = store_compatibility_assessment(conn, validated_compat, evidence_id, name_to_id)
+        if compat_id:
+            compatibilities_created += 1
+
     return ExtractionResult(
         evidence_id=evidence_id,
         concept_ids=concept_ids,
@@ -689,6 +776,7 @@ def extract_concepts(
         failure_modes_created=failure_modes_created,
         protocols_created=protocols_created,
         profiles_created=profiles_created,
+        compatibilities_created=compatibilities_created,
         concepts_created=len(concept_ids),
         concepts_skipped=0,
         extraction_model=model,
