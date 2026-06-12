@@ -18,8 +18,10 @@ from ingest.extractor import (
     store_failure_mode,
     store_interaction_protocol,
     store_kernel_invariant,
+    store_compatibility_assessment,
     store_performance_profile,
     store_rich_concept,
+    validate_compatibility_item,
     validate_extraction_item,
     validate_failure_mode_item,
     validate_invariant_item,
@@ -85,17 +87,28 @@ _DEFAULT_PROTOCOLS = [
     },
 ]
 
+_DEFAULT_COMPAT_ASSESSMENTS = [
+    {
+        "synergy": "synergistic",
+        "rationale": "Copy-on-Write leverages page table walking infrastructure for fault detection",
+        "conditions": "When both mechanisms operate within the same virtual memory subsystem",
+        "concept_a": "Page Table Walking",
+        "concept_b": "Copy-on-Write",
+    },
+]
+
 
 class MockLLMClient:
-    def __init__(self, concepts: list[dict] | None = None, protocols: list[dict] | None = None):
+    def __init__(self, concepts: list[dict] | None = None, protocols: list[dict] | None = None, compat_assessments: list[dict] | None = None):
         self.concepts = concepts if concepts is not None else _DEFAULT_CONCEPTS
         self.protocols = protocols if protocols is not None else _DEFAULT_PROTOCOLS
+        self.compat_assessments = compat_assessments if compat_assessments is not None else _DEFAULT_COMPAT_ASSESSMENTS
         self.calls: list[dict] = []
 
     def create_message(self, model: str, system: str, user: str, max_tokens: int) -> dict:
         self.calls.append({"model": model, "system": system, "user": user})
         return {
-            "text": json.dumps({"concepts": self.concepts, "interaction_protocols": self.protocols}),
+            "text": json.dumps({"concepts": self.concepts, "interaction_protocols": self.protocols, "compatibility_assessments": self.compat_assessments}),
             "prompt_tokens": 100,
             "response_tokens": 50,
         }
@@ -1025,3 +1038,140 @@ class TestExtractConceptsProfiles:
         attrs = json.loads(profile_node[0])
         assert attrs["artifact_class"] == "abstracted-mechanism"
         assert attrs["metric"] == "translation latency"
+
+
+# --- validate_compatibility_item ---
+
+
+_VALID_COMPAT = {
+    "synergy": "synergistic",
+    "rationale": "Both mechanisms share page table infrastructure",
+    "conditions": "When operating in same address space",
+    "concept_a": "Page Table Walking",
+    "concept_b": "Copy-on-Write",
+}
+_COMPAT_NAME_MAP = {"page table walking": "c1", "copy-on-write": "c2"}
+
+
+class TestValidateCompatibilityItem:
+    def test_validate_compat_valid(self):
+        result = validate_compatibility_item(_VALID_COMPAT, _COMPAT_NAME_MAP)
+        assert result is not None
+        assert result["synergy"] == "synergistic"
+        assert result["rationale"] == "Both mechanisms share page table infrastructure"
+        assert result["conditions"] == "When operating in same address space"
+        assert result["concept_a"] == "Page Table Walking"
+        assert result["concept_b"] == "Copy-on-Write"
+
+    def test_validate_compat_invalid_synergy(self):
+        item = {**_VALID_COMPAT, "synergy": "compatible"}
+        assert validate_compatibility_item(item, _COMPAT_NAME_MAP) is None
+
+    def test_validate_compat_empty_rationale(self):
+        item = {**_VALID_COMPAT, "rationale": "   "}
+        assert validate_compatibility_item(item, _COMPAT_NAME_MAP) is None
+
+    def test_validate_compat_unknown_concept(self):
+        item = {**_VALID_COMPAT, "concept_a": "Unknown Mechanism"}
+        assert validate_compatibility_item(item, _COMPAT_NAME_MAP) is None
+
+    def test_validate_compat_same_concept_rejected(self):
+        item = {**_VALID_COMPAT, "concept_b": "Page Table Walking"}
+        assert validate_compatibility_item(item, _COMPAT_NAME_MAP) is None
+
+    def test_validate_compat_not_dict(self):
+        assert validate_compatibility_item("not a dict", _COMPAT_NAME_MAP) is None
+
+
+# --- store_compatibility_assessment ---
+
+
+class TestStoreCompatibilityAssessment:
+    def test_store_compat_creates_node(self, conn, evidence_node):
+        cid_a = store_rich_concept(conn, {
+            "name": "PTW", "description": "page table walking",
+            "artifact_class": "B", "key_properties": ["hierarchical"],
+            "tradeoffs": [], "design_rationale": "Efficient translation.",
+        }, evidence_node)
+        cid_b = store_rich_concept(conn, {
+            "name": "CoW", "description": "copy-on-write",
+            "artifact_class": "B", "key_properties": ["lazy duplication"],
+            "tradeoffs": [], "design_rationale": "Avoids unnecessary copies.",
+        }, evidence_node)
+        name_to_id = {"ptw": cid_a, "cow": cid_b}
+        compat_id = store_compatibility_assessment(conn, {
+            "synergy": "synergistic", "rationale": "Shared infrastructure",
+            "conditions": "Same address space", "concept_a": "PTW", "concept_b": "CoW",
+        }, evidence_node, name_to_id)
+        assert compat_id is not None
+        node = conn.execute("SELECT kind, attrs FROM nodes WHERE id = ?", (compat_id,)).fetchone()
+        assert node[0] == "CompatibilityAssessment"
+        attrs = json.loads(node[1])
+        assert attrs["synergy"] == "synergistic"
+        assert attrs["rationale"] == "Shared infrastructure"
+        assert attrs["artifact_class"] == "abstracted-mechanism"
+
+    def test_store_compat_assesses_pair(self, conn, evidence_node):
+        cid_a = store_rich_concept(conn, {
+            "name": "PTW", "description": "page table walking",
+            "artifact_class": "B", "key_properties": ["hierarchical"],
+            "tradeoffs": [], "design_rationale": "Efficient translation.",
+        }, evidence_node)
+        cid_b = store_rich_concept(conn, {
+            "name": "CoW", "description": "copy-on-write",
+            "artifact_class": "B", "key_properties": ["lazy duplication"],
+            "tradeoffs": [], "design_rationale": "Avoids unnecessary copies.",
+        }, evidence_node)
+        name_to_id = {"ptw": cid_a, "cow": cid_b}
+        compat_id = store_compatibility_assessment(conn, {
+            "synergy": "neutral", "rationale": "Independent",
+            "conditions": "Always", "concept_a": "PTW", "concept_b": "CoW",
+        }, evidence_node, name_to_id)
+        edges = conn.execute(
+            "SELECT target_id FROM edges WHERE kind='assesses-compatibility' AND source_id=?",
+            (compat_id,),
+        ).fetchall()
+        assert len(edges) == 2
+        targets = {r[0] for r in edges}
+        assert cid_a in targets
+        assert cid_b in targets
+
+    def test_store_compat_provenance(self, conn, evidence_node):
+        cid_a = store_rich_concept(conn, {
+            "name": "PTW", "description": "page table walking",
+            "artifact_class": "B", "key_properties": ["hierarchical"],
+            "tradeoffs": [], "design_rationale": "Efficient translation.",
+        }, evidence_node)
+        cid_b = store_rich_concept(conn, {
+            "name": "CoW", "description": "copy-on-write",
+            "artifact_class": "B", "key_properties": ["lazy duplication"],
+            "tradeoffs": [], "design_rationale": "Avoids unnecessary copies.",
+        }, evidence_node)
+        name_to_id = {"ptw": cid_a, "cow": cid_b}
+        compat_id = store_compatibility_assessment(conn, {
+            "synergy": "antagonistic", "rationale": "Conflict",
+            "conditions": "Under contention", "concept_a": "PTW", "concept_b": "CoW",
+        }, evidence_node, name_to_id)
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind='extracted-from' AND source_id=? AND target_id=?",
+            (compat_id, evidence_node),
+        ).fetchone()
+        assert edge is not None
+
+
+# --- E2E: extract_concepts with compatibility assessments ---
+
+
+class TestExtractConceptsCompat:
+    def test_extract_concepts_with_compat_e2e(self, conn, evidence_node):
+        gate = SessionGate()
+        result = extract_concepts(conn, evidence_node, gate, client=MockLLMClient())
+        assert result.compatibilities_created == 1
+        compat_nodes = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'CompatibilityAssessment'").fetchone()[0]
+        assert compat_nodes == 1
+        ac_edges = conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'assesses-compatibility'").fetchone()[0]
+        assert ac_edges == 2
+        compat_node = conn.execute("SELECT attrs FROM nodes WHERE kind = 'CompatibilityAssessment'").fetchone()
+        attrs = json.loads(compat_node[0])
+        assert attrs["artifact_class"] == "abstracted-mechanism"
+        assert attrs["synergy"] == "synergistic"

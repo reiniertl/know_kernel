@@ -78,6 +78,15 @@ class MockLLMClient:
                         "concept_b": "Demand Paging",
                     },
                 ],
+                "compatibility_assessments": [
+                    {
+                        "synergy": "synergistic",
+                        "rationale": "Demand paging relies on virtual address translation for page fault resolution",
+                        "conditions": "When both operate in the same virtual memory subsystem",
+                        "concept_a": "Virtual Address Translation",
+                        "concept_b": "Demand Paging",
+                    },
+                ],
             }),
             "prompt_tokens": 100,
             "response_tokens": 50,
@@ -186,6 +195,17 @@ class TestE2EPipeline:
             attrs = json.loads(row[0])
             assert attrs["artifact_class"] == "abstracted-mechanism"
             assert attrs["metric"] == "translation latency"
+
+        compat_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'CompatibilityAssessment'").fetchone()[0]
+        assert compat_count == 1
+
+        ac_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'assesses-compatibility'").fetchone()[0]
+        assert ac_edges == 2
+
+        for row in snap_conn.execute("SELECT attrs FROM nodes WHERE kind = 'CompatibilityAssessment'").fetchall():
+            attrs = json.loads(row[0])
+            assert attrs["artifact_class"] == "abstracted-mechanism"
+            assert attrs["synergy"] == "synergistic"
 
         snap_conn.close()
 
@@ -335,6 +355,7 @@ class TestE2EPipeline:
         assert extract.failure_modes_created == 2
         assert extract.protocols_created == 1
         assert extract.profiles_created == 1
+        assert extract.compatibilities_created == 1
         conn.commit()
 
         kinv_nodes = conn.execute("SELECT id, attrs FROM nodes WHERE kind = 'KernelInvariant'").fetchall()
