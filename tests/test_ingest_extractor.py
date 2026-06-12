@@ -18,10 +18,12 @@ from ingest.extractor import (
     store_failure_mode,
     store_interaction_protocol,
     store_kernel_invariant,
+    store_performance_profile,
     store_rich_concept,
     validate_extraction_item,
     validate_failure_mode_item,
     validate_invariant_item,
+    validate_performance_profile_item,
     validate_protocol_item,
     wire_relationships,
 )
@@ -42,6 +44,16 @@ _DEFAULT_CONCEPTS = [
                 {"symptom": "Multiple physical frames mapped to same virtual address", "blast_radius": "kernel-wide", "recoverability": "data-loss"},
             ]},
         ],
+        "performance_profiles": [
+            {
+                "metric": "translation latency",
+                "complexity": "O(log n)",
+                "best_case": "TLB hit returns in 1 cycle",
+                "worst_case": "Full 4-level walk on TLB miss",
+                "typical_case": "TLB hit rate above 99%",
+                "conditions": "Under normal workload with warm TLB",
+            },
+        ],
     },
     {
         "name": "Copy-on-Write",
@@ -59,6 +71,7 @@ _DEFAULT_CONCEPTS = [
             ]},
             {"predicate": "Reference count is decremented after copy completes", "strength": "structural", "scope": "per-object", "failure_modes": []},
         ],
+        "performance_profiles": [],
     },
 ]
 
@@ -865,3 +878,150 @@ class TestExtractConceptsProtocols:
         assert proto_nodes == 1
         cc_edges = conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'constrains-composition'").fetchone()[0]
         assert cc_edges == 2
+
+
+# --- validate_performance_profile_item ---
+
+
+_VALID_PROFILE = {
+    "metric": "read latency",
+    "complexity": "O(1)",
+    "best_case": "Single atomic read with no contention",
+    "worst_case": "Grace period extends to milliseconds under heavy load",
+    "typical_case": "Sub-microsecond reads in common workloads",
+    "conditions": "Under normal read-heavy workload with infrequent updates",
+}
+
+
+class TestValidatePerformanceProfileItem:
+    def test_validate_profile_valid(self):
+        result = validate_performance_profile_item(_VALID_PROFILE)
+        assert result is not None
+        assert result["metric"] == "read latency"
+        assert result["complexity"] == "O(1)"
+        assert result["best_case"] == "Single atomic read with no contention"
+        assert result["worst_case"] == "Grace period extends to milliseconds under heavy load"
+        assert result["typical_case"] == "Sub-microsecond reads in common workloads"
+        assert result["conditions"] == "Under normal read-heavy workload with infrequent updates"
+
+    def test_validate_profile_missing_metric(self):
+        item = {k: v for k, v in _VALID_PROFILE.items() if k != "metric"}
+        assert validate_performance_profile_item(item) is None
+
+    def test_validate_profile_empty_metric(self):
+        item = {**_VALID_PROFILE, "metric": "   "}
+        assert validate_performance_profile_item(item) is None
+
+    def test_validate_profile_missing_complexity(self):
+        item = {k: v for k, v in _VALID_PROFILE.items() if k != "complexity"}
+        assert validate_performance_profile_item(item) is None
+
+    def test_validate_profile_missing_cases(self):
+        for case_field in ("best_case", "worst_case", "typical_case"):
+            item = {k: v for k, v in _VALID_PROFILE.items() if k != case_field}
+            assert validate_performance_profile_item(item) is None, f"Should reject missing {case_field}"
+
+    def test_validate_profile_empty_conditions(self):
+        item = {**_VALID_PROFILE, "conditions": ""}
+        assert validate_performance_profile_item(item) is None
+
+    def test_validate_profile_not_dict(self):
+        assert validate_performance_profile_item("not a dict") is None
+        assert validate_performance_profile_item(None) is None
+
+    def test_validate_profile_strips_strings(self):
+        item = {k: f"  {v}  " for k, v in _VALID_PROFILE.items()}
+        result = validate_performance_profile_item(item)
+        assert result is not None
+        assert result["metric"] == "read latency"
+        assert result["complexity"] == "O(1)"
+
+
+# --- store_performance_profile ---
+
+
+class TestStorePerformanceProfile:
+    def test_store_profile_creates_node(self, conn, evidence_node):
+        cid = store_rich_concept(conn, {
+            "name": "RCU", "description": "read-copy-update",
+            "artifact_class": "B", "key_properties": ["lock-free"],
+            "tradeoffs": [], "design_rationale": "Optimizes reads.",
+        }, evidence_node)
+        name_to_id = {"rcu": cid}
+        profile_id = store_performance_profile(
+            conn, _VALID_PROFILE, evidence_node, name_to_id, "RCU",
+        )
+        assert profile_id is not None
+        node = conn.execute("SELECT kind, attrs FROM nodes WHERE id = ?", (profile_id,)).fetchone()
+        assert node[0] == "PerformanceProfile"
+        attrs = json.loads(node[1])
+        assert attrs["metric"] == "read latency"
+        assert attrs["complexity"] == "O(1)"
+        assert attrs["best_case"] == "Single atomic read with no contention"
+        assert attrs["worst_case"] == "Grace period extends to milliseconds under heavy load"
+        assert attrs["typical_case"] == "Sub-microsecond reads in common workloads"
+        assert attrs["conditions"] == "Under normal read-heavy workload with infrequent updates"
+        assert attrs["artifact_class"] == "abstracted-mechanism"
+
+    def test_store_profile_profiled_by_edge(self, conn, evidence_node):
+        cid = store_rich_concept(conn, {
+            "name": "RCU", "description": "read-copy-update",
+            "artifact_class": "B", "key_properties": ["lock-free"],
+            "tradeoffs": [], "design_rationale": "Optimizes reads.",
+        }, evidence_node)
+        name_to_id = {"rcu": cid}
+        profile_id = store_performance_profile(
+            conn, _VALID_PROFILE, evidence_node, name_to_id, "RCU",
+        )
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind='profiled-by' AND source_id=? AND target_id=?",
+            (profile_id, cid),
+        ).fetchone()
+        assert edge is not None
+
+    def test_store_profile_provenance_edge(self, conn, evidence_node):
+        cid = store_rich_concept(conn, {
+            "name": "RCU", "description": "read-copy-update",
+            "artifact_class": "B", "key_properties": ["lock-free"],
+            "tradeoffs": [], "design_rationale": "Optimizes reads.",
+        }, evidence_node)
+        name_to_id = {"rcu": cid}
+        profile_id = store_performance_profile(
+            conn, _VALID_PROFILE, evidence_node, name_to_id, "RCU",
+        )
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind='extracted-from' AND source_id=? AND target_id=?",
+            (profile_id, evidence_node),
+        ).fetchone()
+        assert edge is not None
+
+    def test_store_profile_unknown_concept(self, conn, evidence_node):
+        result = store_performance_profile(
+            conn, _VALID_PROFILE, evidence_node,
+            {"rcu": "concept-123"}, "NonExistent",
+        )
+        assert result is None
+        nodes = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'PerformanceProfile'").fetchone()[0]
+        assert nodes == 0
+
+
+# --- E2E: extract_concepts with profiles ---
+
+
+class TestExtractConceptsProfiles:
+    def test_extract_concepts_with_profiles_e2e(self, conn, evidence_node):
+        gate = SessionGate()
+        result = extract_concepts(conn, evidence_node, gate, client=MockLLMClient())
+        assert result.profiles_created == 1
+        profile_nodes = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'PerformanceProfile'").fetchone()[0]
+        assert profile_nodes == 1
+        profiled_edges = conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'profiled-by'").fetchone()[0]
+        assert profiled_edges == 1
+        prov_edges = conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE kind = 'extracted-from' AND source_id IN (SELECT id FROM nodes WHERE kind = 'PerformanceProfile')"
+        ).fetchone()[0]
+        assert prov_edges == 1
+        profile_node = conn.execute("SELECT attrs FROM nodes WHERE kind = 'PerformanceProfile'").fetchone()
+        attrs = json.loads(profile_node[0])
+        assert attrs["artifact_class"] == "abstracted-mechanism"
+        assert attrs["metric"] == "translation latency"

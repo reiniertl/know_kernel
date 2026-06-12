@@ -40,6 +40,16 @@ class MockLLMClient:
                                 {"symptom": "Multiple physical frames mapped to same virtual address", "blast_radius": "kernel-wide", "recoverability": "data-loss"},
                             ]},
                         ],
+                        "performance_profiles": [
+                            {
+                                "metric": "translation latency",
+                                "complexity": "O(log n)",
+                                "best_case": "TLB hit returns in 1 cycle",
+                                "worst_case": "Full 4-level walk on TLB miss",
+                                "typical_case": "TLB hit rate above 99%",
+                                "conditions": "Under normal workload with warm TLB",
+                            },
+                        ],
                     },
                     {
                         "name": "Demand Paging",
@@ -56,6 +66,7 @@ class MockLLMClient:
                                 {"symptom": "Spurious page fault on resident page degrades throughput", "blast_radius": "local", "recoverability": "self-healing"},
                             ]},
                         ],
+                        "performance_profiles": [],
                     },
                 ],
                 "interaction_protocols": [
@@ -164,6 +175,17 @@ class TestE2EPipeline:
 
         cc_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'constrains-composition'").fetchone()[0]
         assert cc_edges == 2
+
+        profile_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'PerformanceProfile'").fetchone()[0]
+        assert profile_count == 1
+
+        profiled_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'profiled-by'").fetchone()[0]
+        assert profiled_edges == 1
+
+        for row in snap_conn.execute("SELECT attrs FROM nodes WHERE kind = 'PerformanceProfile'").fetchall():
+            attrs = json.loads(row[0])
+            assert attrs["artifact_class"] == "abstracted-mechanism"
+            assert attrs["metric"] == "translation latency"
 
         snap_conn.close()
 
@@ -312,6 +334,7 @@ class TestE2EPipeline:
         assert extract.invariants_created == 2
         assert extract.failure_modes_created == 2
         assert extract.protocols_created == 1
+        assert extract.profiles_created == 1
         conn.commit()
 
         kinv_nodes = conn.execute("SELECT id, attrs FROM nodes WHERE kind = 'KernelInvariant'").fetchall()
