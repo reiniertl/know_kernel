@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode", "InteractionProtocol")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -21,11 +21,12 @@ EDGE_KINDS = (
     "governed-by",
     "triggered-by",
     "constrains-composition",
+    "profiled-by",
 )
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "belongs-to": [("Concept", "Subsystem"), ("KernelInvariant", "Subsystem")],
-    "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence"), ("InteractionProtocol", "Evidence")],
+    "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence"), ("InteractionProtocol", "Evidence"), ("PerformanceProfile", "Evidence")],
     "sourced-from": ("Evidence", "Source"),
     "alternative-to": ("Concept", "Concept"),
     "refines": ("Concept", "Concept"),
@@ -37,6 +38,7 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "governed-by": ("KernelInvariant", "Concept"),
     "triggered-by": ("FailureMode", "KernelInvariant"),
     "constrains-composition": ("InteractionProtocol", "Concept"),
+    "profiled-by": ("PerformanceProfile", "Concept"),
 }
 
 REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
@@ -49,6 +51,7 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "KernelInvariant": ("predicate", "strength", "scope", "artifact_class"),
     "FailureMode": ("symptom", "blast_radius", "recoverability", "artifact_class"),
     "InteractionProtocol": ("rule", "ordering", "violation_mode", "artifact_class"),
+    "PerformanceProfile": ("metric", "complexity", "best_case", "worst_case", "typical_case", "conditions", "artifact_class"),
 }
 
 SCHEMA_SQL = """\

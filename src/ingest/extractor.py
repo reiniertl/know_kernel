@@ -64,6 +64,16 @@ invariant is violated:
   Extract 1-3 invariants per concept. Focus on the most critical rules. \
 If a concept has no clear invariants, use an empty list.
 
+For each concept, also extract performance_profiles — quantitative \
+performance characteristics. Each entry has:
+- metric: What is measured (e.g., "read latency", "memory overhead")
+- complexity: Big-O or qualitative bound (e.g., "O(1)", "O(log n)", "constant")
+- best_case: Behavior description under best conditions
+- worst_case: Behavior description under worst conditions
+- typical_case: Behavior description under typical conditions
+- conditions: Under what workload or configuration this holds
+Extract 1-3 profiles per concept. Empty list if no clear metrics.
+
 After listing ALL concepts, add a top-level "interaction_protocols" key \
 with coordination rules between concept PAIRS. Each protocol has:
 - rule: The coordination constraint in natural language
@@ -123,6 +133,21 @@ CONCEPT_SCHEMA = {
                         },
                     },
                     "required": ["predicate", "strength", "scope"],
+                },
+            },
+            "performance_profiles": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "metric": {"type": "string"},
+                        "complexity": {"type": "string"},
+                        "best_case": {"type": "string"},
+                        "worst_case": {"type": "string"},
+                        "typical_case": {"type": "string"},
+                        "conditions": {"type": "string"},
+                    },
+                    "required": ["metric", "complexity", "best_case", "worst_case", "typical_case", "conditions"],
                 },
             },
         },
@@ -378,6 +403,59 @@ def build_protocol_extraction_prompt(concept_names: list[str]) -> str:
     )
 
 
+def validate_performance_profile_item(item: Any) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    for key in ("metric", "complexity", "best_case", "worst_case", "typical_case", "conditions"):
+        if key not in item:
+            return None
+        val = item[key]
+        if not isinstance(val, str) or not val.strip():
+            return None
+    return {
+        "metric": item["metric"].strip(),
+        "complexity": item["complexity"].strip(),
+        "best_case": item["best_case"].strip(),
+        "worst_case": item["worst_case"].strip(),
+        "typical_case": item["typical_case"].strip(),
+        "conditions": item["conditions"].strip(),
+    }
+
+
+def store_performance_profile(
+    conn: sqlite3.Connection,
+    item: dict,
+    evidence_id: str,
+    concept_name_to_id: dict[str, str],
+    concept_name: str,
+) -> str | None:
+    concept_id = concept_name_to_id.get(concept_name.lower())
+    if not concept_id:
+        return None
+    profile_id = f"profile-{uuid.uuid4().hex[:12]}"
+    add_node(conn, profile_id, "PerformanceProfile", {
+        "metric": item["metric"],
+        "complexity": item["complexity"],
+        "best_case": item["best_case"],
+        "worst_case": item["worst_case"],
+        "typical_case": item["typical_case"],
+        "conditions": item["conditions"],
+        "artifact_class": "abstracted-mechanism",
+    })
+    add_edge(conn, "profiled-by", profile_id, concept_id)
+    add_edge(conn, "extracted-from", profile_id, evidence_id)
+    return profile_id
+
+
+def build_profile_extraction_prompt(concept_names: list[str]) -> str:
+    names_list = ", ".join(concept_names)
+    return (
+        f"Given these kernel concepts: {names_list}\n\n"
+        "Identify quantitative performance characteristics for each concept. "
+        "Return a JSON array of performance profiles."
+    )
+
+
 def store_rich_concept(
     conn: sqlite3.Connection, item: dict, evidence_id: str,
 ) -> str:
@@ -411,6 +489,7 @@ class ExtractionResult:
     invariants_created: int = 0
     failure_modes_created: int = 0
     protocols_created: int = 0
+    profiles_created: int = 0
     extraction_model: str = ""
     prompt_tokens: int = 0
     response_tokens: int = 0
@@ -586,6 +665,21 @@ def extract_concepts(
         if proto_id:
             protocols_created += 1
 
+    profiles_created = 0
+    for item in concepts_data[:10]:
+        if not isinstance(item, dict):
+            continue
+        concept_name = item.get("name", "")
+        for profile in item.get("performance_profiles", []):
+            validated_profile = validate_performance_profile_item(profile)
+            if validated_profile is None:
+                continue
+            profile_id = store_performance_profile(
+                conn, validated_profile, evidence_id, name_to_id, concept_name,
+            )
+            if profile_id:
+                profiles_created += 1
+
     return ExtractionResult(
         evidence_id=evidence_id,
         concept_ids=concept_ids,
@@ -594,6 +688,7 @@ def extract_concepts(
         invariants_created=invariants_created,
         failure_modes_created=failure_modes_created,
         protocols_created=protocols_created,
+        profiles_created=profiles_created,
         concepts_created=len(concept_ids),
         concepts_skipped=0,
         extraction_model=model,
