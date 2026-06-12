@@ -1,0 +1,156 @@
+"""Tests for graph.optimization — OptimizationGoal and UseCaseScenario creation and linking."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from graph.schema import init_db
+from graph.engine import add_node, add_edge
+from graph.optimization import (
+    create_optimization_goal,
+    create_use_case_scenario,
+    link_concept_to_goal,
+    link_concept_to_scenario,
+)
+from export.exporter import export_class_b_snapshot
+
+
+class TestCreateOptimizationGoal:
+    def test_create_goal(self, conn: sqlite3.Connection) -> None:
+        goal_id = create_optimization_goal(conn, "Minimize Latency", "Reduce read latency", "latency", "minimize")
+        assert goal_id.startswith("goal-")
+        row = conn.execute("SELECT kind, attrs FROM nodes WHERE id = ?", (goal_id,)).fetchone()
+        assert row[0] == "OptimizationGoal"
+        attrs = json.loads(row[1])
+        assert attrs["name"] == "Minimize Latency"
+        assert attrs["description"] == "Reduce read latency"
+        assert attrs["metric"] == "latency"
+        assert attrs["direction"] == "minimize"
+
+    def test_create_goal_invalid_direction(self, conn: sqlite3.Connection) -> None:
+        with pytest.raises(ValueError, match="direction"):
+            create_optimization_goal(conn, "Bad Goal", "desc", "metric", "upward")
+
+
+class TestLinkConceptToGoal:
+    def test_link_concept_to_goal(self, conn: sqlite3.Connection) -> None:
+        add_node(conn, "sub1", "Subsystem", {"name": "test"})
+        add_node(conn, "c1", "Concept", {"name": "RCU", "description": "x", "artifact_class": "abstracted-mechanism", "key_properties": ["lock-free"], "tradeoffs": [], "design_rationale": "test"})
+        add_edge(conn, "belongs-to", "c1", "sub1")
+        goal_id = create_optimization_goal(conn, "Min Latency", "desc", "latency", "minimize")
+        link_concept_to_goal(conn, "c1", goal_id, "improves", "strong")
+        edge = conn.execute(
+            "SELECT kind, attrs FROM edges WHERE source_id = ? AND target_id = ?",
+            ("c1", goal_id),
+        ).fetchone()
+        assert edge[0] == "contributes-to"
+        edge_attrs = json.loads(edge[1])
+        assert edge_attrs["direction"] == "improves"
+        assert edge_attrs["magnitude"] == "strong"
+
+    def test_link_concept_to_goal_invalid_direction(self, conn: sqlite3.Connection) -> None:
+        add_node(conn, "sub1", "Subsystem", {"name": "test"})
+        add_node(conn, "c1", "Concept", {"name": "X", "description": "x", "artifact_class": "abstracted-mechanism", "key_properties": ["a"], "tradeoffs": [], "design_rationale": "test"})
+        goal_id = create_optimization_goal(conn, "G", "d", "m", "minimize")
+        with pytest.raises(ValueError, match="direction"):
+            link_concept_to_goal(conn, "c1", goal_id, "up", "strong")
+
+    def test_link_concept_to_goal_invalid_magnitude(self, conn: sqlite3.Connection) -> None:
+        add_node(conn, "sub1", "Subsystem", {"name": "test"})
+        add_node(conn, "c1", "Concept", {"name": "X", "description": "x", "artifact_class": "abstracted-mechanism", "key_properties": ["a"], "tradeoffs": [], "design_rationale": "test"})
+        goal_id = create_optimization_goal(conn, "G", "d", "m", "maximize")
+        with pytest.raises(ValueError, match="magnitude"):
+            link_concept_to_goal(conn, "c1", goal_id, "improves", "huge")
+
+
+class TestCreateUseCaseScenario:
+    def test_create_scenario(self, conn: sqlite3.Connection) -> None:
+        scenario_id = create_use_case_scenario(conn, "CPU-Bound Batch", "Heavy CPU workload", "cpu-bound", "single-node")
+        assert scenario_id.startswith("scenario-")
+        row = conn.execute("SELECT kind, attrs FROM nodes WHERE id = ?", (scenario_id,)).fetchone()
+        assert row[0] == "UseCaseScenario"
+        attrs = json.loads(row[1])
+        assert attrs["name"] == "CPU-Bound Batch"
+        assert attrs["description"] == "Heavy CPU workload"
+        assert attrs["workload_type"] == "cpu-bound"
+        assert attrs["constraints"] == "single-node"
+
+
+class TestLinkConceptToScenario:
+    def test_link_concept_to_scenario(self, conn: sqlite3.Connection) -> None:
+        add_node(conn, "sub1", "Subsystem", {"name": "test"})
+        add_node(conn, "c1", "Concept", {"name": "RCU", "description": "x", "artifact_class": "abstracted-mechanism", "key_properties": ["lock-free"], "tradeoffs": [], "design_rationale": "test"})
+        add_edge(conn, "belongs-to", "c1", "sub1")
+        scenario_id = create_use_case_scenario(conn, "RT Workload", "real-time", "real-time", "< 1ms deadline")
+        link_concept_to_scenario(conn, "c1", scenario_id, "excellent")
+        edge = conn.execute(
+            "SELECT kind, attrs FROM edges WHERE source_id = ? AND target_id = ?",
+            ("c1", scenario_id),
+        ).fetchone()
+        assert edge[0] == "suited-for"
+        edge_attrs = json.loads(edge[1])
+        assert edge_attrs["fitness"] == "excellent"
+
+    def test_link_concept_to_scenario_invalid_fitness(self, conn: sqlite3.Connection) -> None:
+        add_node(conn, "sub1", "Subsystem", {"name": "test"})
+        add_node(conn, "c1", "Concept", {"name": "X", "description": "x", "artifact_class": "abstracted-mechanism", "key_properties": ["a"], "tradeoffs": [], "design_rationale": "test"})
+        scenario_id = create_use_case_scenario(conn, "S", "d", "batch", "none")
+        with pytest.raises(ValueError, match="fitness"):
+            link_concept_to_scenario(conn, "c1", scenario_id, "amazing")
+
+
+class TestGoalScenarioInSnapshot:
+    def test_goal_scenario_in_snapshot(self, tmp_path: Path) -> None:
+        master = tmp_path / "master.db"
+        conn = init_db(master)
+
+        add_node(conn, "sub1", "Subsystem", {"name": "scheduler"})
+        add_node(conn, "c1", "Concept", {
+            "name": "RCU", "description": "Read-Copy-Update",
+            "artifact_class": "abstracted-mechanism",
+            "key_properties": ["lock-free reads"], "tradeoffs": [],
+            "design_rationale": "Fast read-side critical sections",
+        })
+        add_node(conn, "src1", "Source", {"url": "http://ex.com", "source_type": "paper", "license": "PD"})
+        add_node(conn, "ev1", "Evidence", {"artifact_class": "verbatim-extract", "contamination_level": "L1"})
+        add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+        add_edge(conn, "belongs-to", "c1", "sub1")
+        add_edge(conn, "extracted-from", "c1", "ev1")
+        add_edge(conn, "sourced-from", "ev1", "src1")
+        add_edge(conn, "assessed-by", "src1", "adv1")
+
+        goal_id = create_optimization_goal(conn, "Min Latency", "Reduce latency", "latency", "minimize")
+        link_concept_to_goal(conn, "c1", goal_id, "improves", "strong")
+
+        scenario_id = create_use_case_scenario(conn, "RT Workload", "real-time tasks", "real-time", "< 1ms")
+        link_concept_to_scenario(conn, "c1", scenario_id, "excellent")
+
+        conn.commit()
+        conn.close()
+
+        output = tmp_path / "snapshot.db"
+        report = export_class_b_snapshot(master, output)
+        assert report["issues"] == []
+        assert report["class_a_count"] == 0
+
+        snap_conn = sqlite3.connect(str(output))
+        kinds = {row[0] for row in snap_conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
+        assert "OptimizationGoal" in kinds
+        assert "UseCaseScenario" in kinds
+
+        ct_edges = snap_conn.execute("SELECT attrs FROM edges WHERE kind = 'contributes-to'").fetchall()
+        assert len(ct_edges) == 1
+        ct_attrs = json.loads(ct_edges[0][0])
+        assert ct_attrs["direction"] == "improves"
+        assert ct_attrs["magnitude"] == "strong"
+
+        sf_edges = snap_conn.execute("SELECT attrs FROM edges WHERE kind = 'suited-for'").fetchall()
+        assert len(sf_edges) == 1
+        sf_attrs = json.loads(sf_edges[0][0])
+        assert sf_attrs["fitness"] == "excellent"
+
+        snap_conn.close()
