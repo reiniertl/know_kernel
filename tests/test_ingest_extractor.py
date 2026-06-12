@@ -1175,3 +1175,109 @@ class TestExtractConceptsCompat:
         attrs = json.loads(compat_node[0])
         assert attrs["artifact_class"] == "abstracted-mechanism"
         assert attrs["synergy"] == "synergistic"
+
+
+# --- Comparative Analysis validation ---
+
+
+class TestValidateComparativeItem:
+    def test_validate_comparative_valid(self):
+        from ingest.extractor import validate_comparative_item
+        name_to_id = {"rcu": "c1", "spinlock": "c2"}
+        result = validate_comparative_item({
+            "dimension": "read latency",
+            "winner": "RCU",
+            "conditions": "read-heavy workload",
+            "quantitative_delta": "10x faster reads",
+            "concept_a": "RCU",
+            "concept_b": "Spinlock",
+        }, name_to_id)
+        assert result is not None
+        assert result["dimension"] == "read latency"
+        assert result["winner"] == "RCU"
+
+    def test_validate_comparative_missing_dimension(self):
+        from ingest.extractor import validate_comparative_item
+        name_to_id = {"rcu": "c1", "spinlock": "c2"}
+        result = validate_comparative_item({
+            "dimension": "",
+            "winner": "RCU",
+            "conditions": "x",
+            "quantitative_delta": "",
+            "concept_a": "RCU",
+            "concept_b": "Spinlock",
+        }, name_to_id)
+        assert result is None
+
+    def test_validate_comparative_unknown_concept(self):
+        from ingest.extractor import validate_comparative_item
+        name_to_id = {"rcu": "c1"}
+        result = validate_comparative_item({
+            "dimension": "latency",
+            "winner": "RCU",
+            "conditions": "x",
+            "quantitative_delta": "",
+            "concept_a": "RCU",
+            "concept_b": "Unknown",
+        }, name_to_id)
+        assert result is None
+
+
+class TestStoreComparativeAnalysis:
+    def test_store_comparative_creates_node(self, conn, evidence_node):
+        from ingest.extractor import store_comparative_analysis
+        cid_a = store_rich_concept(conn, {
+            "name": "RCU", "description": "read-copy-update",
+            "artifact_class": "B", "key_properties": ["lock-free"],
+            "tradeoffs": [], "design_rationale": "Fast reads.",
+        }, evidence_node)
+        cid_b = store_rich_concept(conn, {
+            "name": "Spinlock", "description": "spin-based lock",
+            "artifact_class": "B", "key_properties": ["simple"],
+            "tradeoffs": [], "design_rationale": "Simple mutual exclusion.",
+        }, evidence_node)
+        name_to_id = {"rcu": cid_a, "spinlock": cid_b}
+        analysis_id = store_comparative_analysis(conn, {
+            "dimension": "read latency",
+            "winner": "RCU",
+            "conditions": "read-heavy",
+            "quantitative_delta": "10x",
+            "concept_a": "RCU",
+            "concept_b": "Spinlock",
+        }, evidence_node, name_to_id)
+        assert analysis_id is not None
+        row = conn.execute("SELECT kind, attrs FROM nodes WHERE id = ?", (analysis_id,)).fetchone()
+        assert row[0] == "ComparativeAnalysis"
+        attrs = json.loads(row[1])
+        assert attrs["dimension"] == "read latency"
+        assert attrs["artifact_class"] == "abstracted-mechanism"
+
+    def test_store_comparative_compares_pair(self, conn, evidence_node):
+        from ingest.extractor import store_comparative_analysis
+        cid_a = store_rich_concept(conn, {
+            "name": "RCU", "description": "read-copy-update",
+            "artifact_class": "B", "key_properties": ["lock-free"],
+            "tradeoffs": [], "design_rationale": "Fast reads.",
+        }, evidence_node)
+        cid_b = store_rich_concept(conn, {
+            "name": "Spinlock", "description": "spin-based lock",
+            "artifact_class": "B", "key_properties": ["simple"],
+            "tradeoffs": [], "design_rationale": "Simple mutual exclusion.",
+        }, evidence_node)
+        name_to_id = {"rcu": cid_a, "spinlock": cid_b}
+        analysis_id = store_comparative_analysis(conn, {
+            "dimension": "read latency",
+            "winner": "RCU",
+            "conditions": "read-heavy",
+            "quantitative_delta": "10x",
+            "concept_a": "RCU",
+            "concept_b": "Spinlock",
+        }, evidence_node, name_to_id)
+        edges = conn.execute(
+            "SELECT target_id FROM edges WHERE kind = 'compares' AND source_id = ?",
+            (analysis_id,),
+        ).fetchall()
+        targets = {e[0] for e in edges}
+        assert len(targets) == 2
+        assert cid_a in targets
+        assert cid_b in targets

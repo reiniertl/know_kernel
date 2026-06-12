@@ -16,6 +16,7 @@ from graph.engine import (
     validate_graph,
 )
 from graph.optimization import (
+    create_comparative_analysis,
     create_optimization_goal,
     create_use_case_scenario,
     link_concept_to_goal,
@@ -39,6 +40,7 @@ __all__ = [
     "Violation",
     "add_edge",
     "add_node",
+    "create_comparative_analysis",
     "create_optimization_goal",
     "create_use_case_scenario",
     "delete_edge",

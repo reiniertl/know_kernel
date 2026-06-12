@@ -518,6 +518,65 @@ def store_compatibility_assessment(
     return compat_id
 
 
+def validate_comparative_item(
+    item: Any, concept_name_to_id: dict[str, str],
+) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    dimension = item.get("dimension", "")
+    winner = item.get("winner", "")
+    conditions = item.get("conditions", "")
+    quantitative_delta = item.get("quantitative_delta", "")
+    concept_a = item.get("concept_a", "")
+    concept_b = item.get("concept_b", "")
+    if not isinstance(dimension, str) or not dimension.strip():
+        return None
+    if not isinstance(winner, str) or not winner.strip():
+        return None
+    if not isinstance(concept_a, str) or not concept_a.strip():
+        return None
+    if not isinstance(concept_b, str) or not concept_b.strip():
+        return None
+    a_name = concept_a.strip().lower()
+    b_name = concept_b.strip().lower()
+    if a_name == b_name:
+        return None
+    if a_name not in concept_name_to_id or b_name not in concept_name_to_id:
+        return None
+    return {
+        "dimension": dimension.strip(),
+        "winner": winner.strip(),
+        "conditions": conditions.strip() if isinstance(conditions, str) else "",
+        "quantitative_delta": quantitative_delta.strip() if isinstance(quantitative_delta, str) else "",
+        "concept_a": concept_a.strip(),
+        "concept_b": concept_b.strip(),
+    }
+
+
+def store_comparative_analysis(
+    conn: sqlite3.Connection,
+    item: dict,
+    evidence_id: str,
+    concept_name_to_id: dict[str, str],
+) -> str | None:
+    a_id = concept_name_to_id.get(item["concept_a"].lower())
+    b_id = concept_name_to_id.get(item["concept_b"].lower())
+    if not a_id or not b_id:
+        return None
+    analysis_id = f"comparative-{uuid.uuid4().hex[:12]}"
+    add_node(conn, analysis_id, "ComparativeAnalysis", {
+        "dimension": item["dimension"],
+        "winner": item["winner"],
+        "conditions": item["conditions"],
+        "quantitative_delta": item["quantitative_delta"],
+        "artifact_class": "abstracted-mechanism",
+    })
+    add_edge(conn, "compares", analysis_id, a_id)
+    add_edge(conn, "compares", analysis_id, b_id)
+    add_edge(conn, "extracted-from", analysis_id, evidence_id)
+    return analysis_id
+
+
 def build_compatibility_prompt(concept_names: list[str]) -> str:
     names_list = ", ".join(concept_names)
     return (
@@ -563,6 +622,7 @@ class ExtractionResult:
     protocols_created: int = 0
     profiles_created: int = 0
     compatibilities_created: int = 0
+    comparatives_created: int = 0
     extraction_model: str = ""
     prompt_tokens: int = 0
     response_tokens: int = 0
@@ -679,14 +739,17 @@ def extract_concepts(
         concepts_data = parsed.get("concepts", [])
         protocols_data = parsed.get("interaction_protocols", [])
         compat_data = parsed.get("compatibility_assessments", [])
+        comparative_data = parsed.get("comparative_analyses", [])
     elif isinstance(parsed, list):
         concepts_data = parsed
         protocols_data = []
         compat_data = []
+        comparative_data = []
     else:
         concepts_data = []
         protocols_data = []
         compat_data = []
+        comparative_data = []
 
     if not isinstance(concepts_data, list):
         concepts_data = []
@@ -694,6 +757,8 @@ def extract_concepts(
         protocols_data = []
     if not isinstance(compat_data, list):
         compat_data = []
+    if not isinstance(comparative_data, list):
+        comparative_data = []
 
     concept_ids: list[str] = []
     name_to_id: dict[str, str] = {}
@@ -767,6 +832,15 @@ def extract_concepts(
         if compat_id:
             compatibilities_created += 1
 
+    comparatives_created = 0
+    for comp in comparative_data[:10]:
+        validated_comp = validate_comparative_item(comp, name_to_id)
+        if validated_comp is None:
+            continue
+        comp_id = store_comparative_analysis(conn, validated_comp, evidence_id, name_to_id)
+        if comp_id:
+            comparatives_created += 1
+
     return ExtractionResult(
         evidence_id=evidence_id,
         concept_ids=concept_ids,
@@ -777,6 +851,7 @@ def extract_concepts(
         protocols_created=protocols_created,
         profiles_created=profiles_created,
         compatibilities_created=compatibilities_created,
+        comparatives_created=comparatives_created,
         concepts_created=len(concept_ids),
         concepts_skipped=0,
         extraction_model=model,

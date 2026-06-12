@@ -11,6 +11,7 @@ import pytest
 from graph.schema import init_db
 from graph.engine import add_node, add_edge
 from graph.optimization import (
+    create_comparative_analysis,
     create_optimization_goal,
     create_use_case_scenario,
     link_concept_to_goal,
@@ -153,4 +154,66 @@ class TestGoalScenarioInSnapshot:
         sf_attrs = json.loads(sf_edges[0][0])
         assert sf_attrs["fitness"] == "excellent"
 
+        snap_conn.close()
+
+
+class TestCreateComparativeAnalysis:
+    def test_create_comparative_manual(self, conn: sqlite3.Connection) -> None:
+        add_node(conn, "sub1", "Subsystem", {"name": "test"})
+        add_node(conn, "c1", "Concept", {"name": "RCU", "description": "x", "artifact_class": "abstracted-mechanism", "key_properties": ["lock-free"], "tradeoffs": [], "design_rationale": "test"})
+        add_node(conn, "c2", "Concept", {"name": "Spinlock", "description": "y", "artifact_class": "abstracted-mechanism", "key_properties": ["simple"], "tradeoffs": [], "design_rationale": "test"})
+        analysis_id = create_comparative_analysis(conn, "c1", "c2", "read latency", "RCU", "read-heavy", "10x faster")
+        assert analysis_id.startswith("comparative-")
+        row = conn.execute("SELECT kind, attrs FROM nodes WHERE id = ?", (analysis_id,)).fetchone()
+        assert row[0] == "ComparativeAnalysis"
+        attrs = json.loads(row[1])
+        assert attrs["dimension"] == "read latency"
+        assert attrs["winner"] == "RCU"
+        assert attrs["artifact_class"] == "abstracted-mechanism"
+        edges = conn.execute("SELECT target_id FROM edges WHERE kind = 'compares' AND source_id = ?", (analysis_id,)).fetchall()
+        targets = {e[0] for e in edges}
+        assert len(targets) == 2
+        assert "c1" in targets
+        assert "c2" in targets
+        prov_edges = conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'extracted-from' AND source_id = ?", (analysis_id,)).fetchone()[0]
+        assert prov_edges == 0
+
+    def test_comparative_in_snapshot(self, tmp_path: Path) -> None:
+        master = tmp_path / "master.db"
+        conn = init_db(master)
+        add_node(conn, "sub1", "Subsystem", {"name": "scheduler"})
+        add_node(conn, "c1", "Concept", {
+            "name": "RCU", "description": "Read-Copy-Update",
+            "artifact_class": "abstracted-mechanism",
+            "key_properties": ["lock-free reads"], "tradeoffs": [],
+            "design_rationale": "Fast read-side critical sections",
+        })
+        add_node(conn, "c2", "Concept", {
+            "name": "Spinlock", "description": "Spin-based lock",
+            "artifact_class": "abstracted-mechanism",
+            "key_properties": ["simple mutual exclusion"], "tradeoffs": [],
+            "design_rationale": "Basic synchronization primitive",
+        })
+        add_node(conn, "src1", "Source", {"url": "http://ex.com", "source_type": "paper", "license": "PD"})
+        add_node(conn, "ev1", "Evidence", {"artifact_class": "verbatim-extract", "contamination_level": "L1"})
+        add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+        add_edge(conn, "belongs-to", "c1", "sub1")
+        add_edge(conn, "belongs-to", "c2", "sub1")
+        add_edge(conn, "extracted-from", "c1", "ev1")
+        add_edge(conn, "extracted-from", "c2", "ev1")
+        add_edge(conn, "sourced-from", "ev1", "src1")
+        add_edge(conn, "assessed-by", "src1", "adv1")
+        analysis_id = create_comparative_analysis(conn, "c1", "c2", "read latency", "RCU", "read-heavy", "10x")
+        conn.commit()
+        conn.close()
+
+        output = tmp_path / "snapshot.db"
+        report = export_class_b_snapshot(master, output)
+        assert report["issues"] == []
+
+        snap_conn = sqlite3.connect(str(output))
+        kinds = {row[0] for row in snap_conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
+        assert "ComparativeAnalysis" in kinds
+        compares_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'compares'").fetchone()[0]
+        assert compares_edges == 2
         snap_conn.close()

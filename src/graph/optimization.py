@@ -6,7 +6,7 @@ import json
 import sqlite3
 import uuid
 
-from graph.engine import add_edge, add_node
+from graph.engine import add_edge, add_node, get_node
 
 
 _VALID_DIRECTIONS = {"minimize", "maximize"}
@@ -87,3 +87,37 @@ def link_concept_to_scenario(
     add_edge(conn, "suited-for", concept_id, scenario_id, {
         "fitness": fitness,
     })
+
+
+def create_comparative_analysis(
+    conn: sqlite3.Connection,
+    concept_a_id: str,
+    concept_b_id: str,
+    dimension: str,
+    winner: str,
+    conditions: str = "",
+    quantitative_delta: str = "",
+) -> str:
+    if not dimension or not dimension.strip():
+        raise ValueError("dimension must be non-empty")
+    if not winner or not winner.strip():
+        raise ValueError("winner must be non-empty")
+    node_a = get_node(conn, concept_a_id)
+    node_b = get_node(conn, concept_b_id)
+    if node_a is None:
+        raise ValueError(f"concept_a_id '{concept_a_id}' does not exist")
+    if node_b is None:
+        raise ValueError(f"concept_b_id '{concept_b_id}' does not exist")
+    if concept_a_id == concept_b_id:
+        raise ValueError("concept_a_id and concept_b_id must be distinct")
+    analysis_id = f"comparative-{uuid.uuid4().hex[:12]}"
+    add_node(conn, analysis_id, "ComparativeAnalysis", {
+        "dimension": dimension.strip(),
+        "winner": winner.strip(),
+        "conditions": conditions.strip() if conditions else "",
+        "quantitative_delta": quantitative_delta.strip() if quantitative_delta else "",
+        "artifact_class": "abstracted-mechanism",
+    })
+    add_edge(conn, "compares", analysis_id, concept_a_id)
+    add_edge(conn, "compares", analysis_id, concept_b_id)
+    return analysis_id

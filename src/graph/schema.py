@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -25,11 +25,12 @@ EDGE_KINDS = (
     "assesses-compatibility",
     "contributes-to",
     "suited-for",
+    "compares",
 )
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "belongs-to": [("Concept", "Subsystem"), ("KernelInvariant", "Subsystem")],
-    "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence"), ("InteractionProtocol", "Evidence"), ("PerformanceProfile", "Evidence"), ("CompatibilityAssessment", "Evidence")],
+    "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence"), ("InteractionProtocol", "Evidence"), ("PerformanceProfile", "Evidence"), ("CompatibilityAssessment", "Evidence"), ("ComparativeAnalysis", "Evidence")],
     "sourced-from": ("Evidence", "Source"),
     "alternative-to": ("Concept", "Concept"),
     "refines": ("Concept", "Concept"),
@@ -45,6 +46,7 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "assesses-compatibility": ("CompatibilityAssessment", "Concept"),
     "contributes-to": ("Concept", "OptimizationGoal"),
     "suited-for": ("Concept", "UseCaseScenario"),
+    "compares": ("ComparativeAnalysis", "Concept"),
 }
 
 REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
@@ -61,6 +63,7 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "CompatibilityAssessment": ("synergy", "rationale", "conditions", "artifact_class"),
     "OptimizationGoal": ("name", "description", "metric", "direction"),
     "UseCaseScenario": ("name", "description", "workload_type", "constraints"),
+    "ComparativeAnalysis": ("dimension", "winner", "conditions", "quantitative_delta", "artifact_class"),
 }
 
 SCHEMA_SQL = """\
