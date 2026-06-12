@@ -18,6 +18,8 @@ from graph.engine import (
     neighbors,
     path_exists,
     query_by_attrs,
+    query_edges_by_attrs,
+    subgraph_around,
     update_node_attrs,
 )
 
@@ -423,3 +425,66 @@ def test_extracted_from_kernel_invariant(populated: sqlite3.Connection):
         "SELECT 1 FROM edges WHERE kind='extracted-from' AND source_id='ki1' AND target_id='ev1'"
     ).fetchone()
     assert row is not None
+
+
+# --- Query layer: subgraph_around + query_edges_by_attrs ---
+
+
+class TestSubgraphAround:
+    def test_subgraph_around_depth_1(self, conn: sqlite3.Connection) -> None:
+        add_node(conn, "sub1", "Subsystem", {"name": "sched"})
+        add_node(conn, "c1", "Concept", {"name": "A", "description": "a", "artifact_class": "abstracted-mechanism", "key_properties": ["x"], "tradeoffs": [], "design_rationale": "r"})
+        add_node(conn, "c2", "Concept", {"name": "B", "description": "b", "artifact_class": "abstracted-mechanism", "key_properties": ["y"], "tradeoffs": [], "design_rationale": "r"})
+        add_node(conn, "c3", "Concept", {"name": "C", "description": "c", "artifact_class": "abstracted-mechanism", "key_properties": ["z"], "tradeoffs": [], "design_rationale": "r"})
+        add_edge(conn, "belongs-to", "c1", "sub1")
+        add_edge(conn, "refines", "c2", "c1")
+        add_edge(conn, "refines", "c3", "c2")
+        result = subgraph_around(conn, "c1", depth=1)
+        assert "nodes" in result
+        assert "edges" in result
+        node_ids = {n["id"] for n in result["nodes"]}
+        assert "c1" in node_ids
+        assert "sub1" in node_ids
+        assert "c2" in node_ids
+        assert "c3" not in node_ids
+
+    def test_subgraph_around_depth_2(self, conn: sqlite3.Connection) -> None:
+        add_node(conn, "sub1", "Subsystem", {"name": "sched"})
+        add_node(conn, "c1", "Concept", {"name": "A", "description": "a", "artifact_class": "abstracted-mechanism", "key_properties": ["x"], "tradeoffs": [], "design_rationale": "r"})
+        add_node(conn, "c2", "Concept", {"name": "B", "description": "b", "artifact_class": "abstracted-mechanism", "key_properties": ["y"], "tradeoffs": [], "design_rationale": "r"})
+        add_node(conn, "c3", "Concept", {"name": "C", "description": "c", "artifact_class": "abstracted-mechanism", "key_properties": ["z"], "tradeoffs": [], "design_rationale": "r"})
+        add_edge(conn, "belongs-to", "c1", "sub1")
+        add_edge(conn, "refines", "c2", "c1")
+        add_edge(conn, "refines", "c3", "c2")
+        result = subgraph_around(conn, "c1", depth=2)
+        node_ids = {n["id"] for n in result["nodes"]}
+        assert "c3" in node_ids
+        assert len(result["edges"]) == 3
+
+    def test_subgraph_around_edge_filter(self, conn: sqlite3.Connection) -> None:
+        add_node(conn, "sub1", "Subsystem", {"name": "sched"})
+        add_node(conn, "c1", "Concept", {"name": "A", "description": "a", "artifact_class": "abstracted-mechanism", "key_properties": ["x"], "tradeoffs": [], "design_rationale": "r"})
+        add_node(conn, "c2", "Concept", {"name": "B", "description": "b", "artifact_class": "abstracted-mechanism", "key_properties": ["y"], "tradeoffs": [], "design_rationale": "r"})
+        add_edge(conn, "belongs-to", "c1", "sub1")
+        add_edge(conn, "refines", "c2", "c1")
+        result = subgraph_around(conn, "c1", depth=1, edge_kinds=["refines"])
+        node_ids = {n["id"] for n in result["nodes"]}
+        assert "c2" in node_ids
+        assert "sub1" not in node_ids
+
+
+class TestQueryEdgesByAttrs:
+    def test_query_edges_by_attrs(self, conn: sqlite3.Connection) -> None:
+        from graph.optimization import create_optimization_goal, link_concept_to_goal
+        add_node(conn, "sub1", "Subsystem", {"name": "test"})
+        add_node(conn, "c1", "Concept", {"name": "A", "description": "a", "artifact_class": "abstracted-mechanism", "key_properties": ["x"], "tradeoffs": [], "design_rationale": "r"})
+        add_node(conn, "c2", "Concept", {"name": "B", "description": "b", "artifact_class": "abstracted-mechanism", "key_properties": ["y"], "tradeoffs": [], "design_rationale": "r"})
+        goal_id = create_optimization_goal(conn, "Min Latency", "d", "latency", "minimize")
+        link_concept_to_goal(conn, "c1", goal_id, "improves", "strong")
+        link_concept_to_goal(conn, "c2", goal_id, "worsens", "weak")
+        improves = query_edges_by_attrs(conn, kind="contributes-to", direction="improves")
+        assert len(improves) == 1
+        assert improves[0]["source_id"] == "c1"
+        assert improves[0]["attrs"]["magnitude"] == "strong"
+        all_ct = query_edges_by_attrs(conn, kind="contributes-to")
+        assert len(all_ct) == 2

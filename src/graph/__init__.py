@@ -12,6 +12,8 @@ from graph.engine import (
     neighbors,
     path_exists,
     query_by_attrs,
+    query_edges_by_attrs,
+    subgraph_around,
     update_node_attrs,
     validate_graph,
 )
@@ -54,6 +56,8 @@ __all__ = [
     "neighbors",
     "path_exists",
     "query_by_attrs",
+    "query_edges_by_attrs",
+    "subgraph_around",
     "update_node_attrs",
     "validate_graph",
     "validate_node",

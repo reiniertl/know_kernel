@@ -220,6 +220,83 @@ def neighbors(
     ]
 
 
+_MAX_SUBGRAPH_DEPTH = 5
+
+
+def subgraph_around(
+    conn: sqlite3.Connection,
+    node_id: str,
+    depth: int = 2,
+    edge_kinds: list[str] | None = None,
+) -> dict[str, Any]:
+    depth = max(0, min(depth, _MAX_SUBGRAPH_DEPTH))
+    root = get_node(conn, node_id)
+    if root is None:
+        return {"nodes": [], "edges": []}
+
+    visited_nodes: dict[str, dict] = {node_id: root}
+    collected_edges: list[dict] = []
+    frontier = {node_id}
+
+    for _ in range(depth):
+        if not frontier:
+            break
+        next_frontier: set[str] = set()
+        for nid in frontier:
+            if edge_kinds is not None:
+                placeholders = ",".join("?" for _ in edge_kinds)
+                rows = conn.execute(
+                    f"SELECT id, kind, source_id, target_id, attrs FROM edges "
+                    f"WHERE (source_id = ? OR target_id = ?) AND kind IN ({placeholders})",
+                    [nid, nid, *edge_kinds],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, kind, source_id, target_id, attrs FROM edges "
+                    "WHERE source_id = ? OR target_id = ?",
+                    (nid, nid),
+                ).fetchall()
+            for eid, ekind, src, tgt, eattrs in rows:
+                edge_dict = {"id": eid, "kind": ekind, "source_id": src, "target_id": tgt, "attrs": json.loads(eattrs)}
+                if not any(e["id"] == eid for e in collected_edges):
+                    collected_edges.append(edge_dict)
+                neighbor_id = tgt if src == nid else src
+                if neighbor_id not in visited_nodes:
+                    neighbor = get_node(conn, neighbor_id)
+                    if neighbor is not None:
+                        visited_nodes[neighbor_id] = neighbor
+                        next_frontier.add(neighbor_id)
+        frontier = next_frontier
+
+    return {"nodes": list(visited_nodes.values()), "edges": collected_edges}
+
+
+def query_edges_by_attrs(
+    conn: sqlite3.Connection,
+    kind: str | None = None,
+    **filters: Any,
+) -> list[dict[str, Any]]:
+    if kind is not None:
+        rows = conn.execute(
+            "SELECT id, kind, source_id, target_id, attrs FROM edges WHERE kind = ?",
+            (kind,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, kind, source_id, target_id, attrs FROM edges"
+        ).fetchall()
+
+    results: list[dict[str, Any]] = []
+    for eid, ekind, src, tgt, eattrs in rows:
+        parsed = json.loads(eattrs)
+        if all(parsed.get(k) == v for k, v in filters.items()):
+            results.append({
+                "id": eid, "kind": ekind, "source_id": src,
+                "target_id": tgt, "attrs": parsed,
+            })
+    return results
+
+
 def path_exists(
     conn: sqlite3.Connection, source_id: str, target_id: str,
     edge_kinds: list[str] | None = None,
