@@ -297,6 +297,143 @@ def query_edges_by_attrs(
     return results
 
 
+_FITNESS_RANK = {"excellent": 0, "good": 1, "acceptable": 2, "poor": 3}
+_MAGNITUDE_SCORE = {"strong": 3, "moderate": 2, "weak": 1}
+
+
+def compare_neighborhoods(
+    conn: sqlite3.Connection,
+    id_a: str,
+    id_b: str,
+    depth: int = 1,
+) -> dict[str, Any]:
+    sub_a = subgraph_around(conn, id_a, depth=depth)
+    sub_b = subgraph_around(conn, id_b, depth=depth)
+    ids_a = {n["id"] for n in sub_a["nodes"]} - {id_a}
+    ids_b = {n["id"] for n in sub_b["nodes"]} - {id_b}
+    all_nodes = {n["id"]: n for n in sub_a["nodes"] + sub_b["nodes"]}
+    shared = sorted(ids_a & ids_b)
+    only_a = sorted(ids_a - ids_b - {id_b})
+    only_b = sorted(ids_b - ids_a - {id_a})
+    return {
+        "shared": [all_nodes[nid] for nid in shared],
+        "only_a": [all_nodes[nid] for nid in only_a],
+        "only_b": [all_nodes[nid] for nid in only_b],
+    }
+
+
+def match_scenarios(
+    conn: sqlite3.Connection,
+    workload_type: str | None = None,
+) -> list[dict[str, Any]]:
+    scenarios = list_nodes(conn, "UseCaseScenario")
+    if workload_type is not None:
+        scenarios = [s for s in scenarios if s["attrs"].get("workload_type") == workload_type]
+    results: list[dict[str, Any]] = []
+    for scenario in scenarios:
+        edges = conn.execute(
+            "SELECT e.source_id, e.attrs, n.id, n.kind, n.attrs "
+            "FROM edges e JOIN nodes n ON e.source_id = n.id "
+            "WHERE e.kind = 'suited-for' AND e.target_id = ?",
+            (scenario["id"],),
+        ).fetchall()
+        concepts = []
+        for src_id, eattrs, nid, nkind, nattrs in edges:
+            parsed_eattrs = json.loads(eattrs)
+            concepts.append({
+                "id": nid,
+                "kind": nkind,
+                "attrs": json.loads(nattrs),
+                "fitness": parsed_eattrs.get("fitness", "poor"),
+            })
+        concepts.sort(key=lambda c: _FITNESS_RANK.get(c["fitness"], 99))
+        results.append({"scenario": scenario, "concepts": concepts})
+    return results
+
+
+def transitive_impact(
+    conn: sqlite3.Connection,
+    concept_id: str,
+) -> dict[str, Any]:
+    result: dict[str, list[dict]] = {
+        "invariants": [],
+        "failure_modes": [],
+        "protocols": [],
+        "profiles": [],
+        "goals": [],
+        "compatibilities": [],
+        "comparatives": [],
+        "scenarios": [],
+    }
+    edge_map = {
+        "governed-by": ("invariants", "in"),
+        "constrains-composition": ("protocols", "in"),
+        "profiled-by": ("profiles", "in"),
+        "assesses-compatibility": ("compatibilities", "in"),
+        "compares": ("comparatives", "in"),
+        "contributes-to": ("goals", "out"),
+        "suited-for": ("scenarios", "out"),
+    }
+    for edge_kind, (key, direction) in edge_map.items():
+        if direction == "in":
+            rows = conn.execute(
+                "SELECT n.id, n.kind, n.attrs FROM edges e "
+                "JOIN nodes n ON e.source_id = n.id "
+                "WHERE e.kind = ? AND e.target_id = ?",
+                (edge_kind, concept_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT n.id, n.kind, n.attrs FROM edges e "
+                "JOIN nodes n ON e.target_id = n.id "
+                "WHERE e.kind = ? AND e.source_id = ?",
+                (edge_kind, concept_id),
+            ).fetchall()
+        for nid, nkind, nattrs in rows:
+            result[key].append({"id": nid, "kind": nkind, "attrs": json.loads(nattrs)})
+    for inv in list(result["invariants"]):
+        fm_rows = conn.execute(
+            "SELECT n.id, n.kind, n.attrs FROM edges e "
+            "JOIN nodes n ON e.source_id = n.id "
+            "WHERE e.kind = 'triggered-by' AND e.target_id = ?",
+            (inv["id"],),
+        ).fetchall()
+        for nid, nkind, nattrs in fm_rows:
+            if not any(f["id"] == nid for f in result["failure_modes"]):
+                result["failure_modes"].append({"id": nid, "kind": nkind, "attrs": json.loads(nattrs)})
+    return result
+
+
+def ranked_recommendations(
+    conn: sqlite3.Connection,
+    goal_id: str,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    edges = conn.execute(
+        "SELECT e.source_id, e.attrs, n.id, n.kind, n.attrs "
+        "FROM edges e JOIN nodes n ON e.source_id = n.id "
+        "WHERE e.kind = 'contributes-to' AND e.target_id = ?",
+        (goal_id,),
+    ).fetchall()
+    candidates = []
+    for src_id, eattrs, nid, nkind, nattrs in edges:
+        parsed_eattrs = json.loads(eattrs)
+        if parsed_eattrs.get("direction") != "improves":
+            continue
+        impact = transitive_impact(conn, nid)
+        impact_size = sum(len(v) for v in impact.values())
+        magnitude = _MAGNITUDE_SCORE.get(parsed_eattrs.get("magnitude", ""), 0)
+        score = magnitude + impact_size
+        candidates.append({
+            "concept": {"id": nid, "kind": nkind, "attrs": json.loads(nattrs)},
+            "contribution": parsed_eattrs,
+            "score": score,
+            "impact": impact,
+        })
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+    return candidates[:limit]
+
+
 def path_exists(
     conn: sqlite3.Connection, source_id: str, target_id: str,
     edge_kinds: list[str] | None = None,

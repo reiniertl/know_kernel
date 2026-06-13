@@ -10,16 +10,20 @@ from graph.engine import (
     AdmissibilityError,
     add_edge,
     add_node,
+    compare_neighborhoods,
     delete_edge,
     delete_node,
     get_edge,
     get_node,
     list_nodes,
+    match_scenarios,
     neighbors,
     path_exists,
     query_by_attrs,
     query_edges_by_attrs,
+    ranked_recommendations,
     subgraph_around,
+    transitive_impact,
     update_node_attrs,
 )
 
@@ -488,3 +492,124 @@ class TestQueryEdgesByAttrs:
         assert improves[0]["attrs"]["magnitude"] == "strong"
         all_ct = query_edges_by_attrs(conn, kind="contributes-to")
         assert len(all_ct) == 2
+
+
+# --- Query layer part 2: compare_neighborhoods, match_scenarios, transitive_impact, ranked_recommendations ---
+
+CONCEPT_ATTRS = {"name": "X", "description": "d", "artifact_class": "abstracted-mechanism", "key_properties": ["x"], "tradeoffs": [], "design_rationale": "r"}
+
+
+class TestCompareNeighborhoods:
+    def test_compare_neighborhoods_shared(self, conn: sqlite3.Connection) -> None:
+        add_node(conn, "sub1", "Subsystem", {"name": "sched"})
+        add_node(conn, "c1", "Concept", {**CONCEPT_ATTRS, "name": "A"})
+        add_node(conn, "c2", "Concept", {**CONCEPT_ATTRS, "name": "B"})
+        add_node(conn, "c3", "Concept", {**CONCEPT_ATTRS, "name": "Shared"})
+        add_edge(conn, "belongs-to", "c1", "sub1")
+        add_edge(conn, "belongs-to", "c2", "sub1")
+        add_edge(conn, "refines", "c3", "c1")
+        add_edge(conn, "refines", "c3", "c2")
+        result = compare_neighborhoods(conn, "c1", "c2", depth=1)
+        shared_ids = {n["id"] for n in result["shared"]}
+        assert "sub1" in shared_ids
+        assert "c3" in shared_ids
+        only_a_ids = {n["id"] for n in result["only_a"]}
+        only_b_ids = {n["id"] for n in result["only_b"]}
+        assert "c2" not in only_a_ids
+        assert "c1" not in only_b_ids
+
+    def test_compare_neighborhoods_symmetric(self, conn: sqlite3.Connection) -> None:
+        add_node(conn, "sub1", "Subsystem", {"name": "sched"})
+        add_node(conn, "c1", "Concept", {**CONCEPT_ATTRS, "name": "A"})
+        add_node(conn, "c2", "Concept", {**CONCEPT_ATTRS, "name": "B"})
+        add_node(conn, "c3", "Concept", {**CONCEPT_ATTRS, "name": "OnlyA"})
+        add_edge(conn, "belongs-to", "c1", "sub1")
+        add_edge(conn, "belongs-to", "c2", "sub1")
+        add_edge(conn, "refines", "c3", "c1")
+        ab = compare_neighborhoods(conn, "c1", "c2", depth=1)
+        ba = compare_neighborhoods(conn, "c2", "c1", depth=1)
+        assert {n["id"] for n in ab["shared"]} == {n["id"] for n in ba["shared"]}
+        assert {n["id"] for n in ab["only_a"]} == {n["id"] for n in ba["only_b"]}
+        assert {n["id"] for n in ab["only_b"]} == {n["id"] for n in ba["only_a"]}
+
+
+class TestMatchScenarios:
+    def test_match_scenarios(self, conn: sqlite3.Connection) -> None:
+        from graph.optimization import create_use_case_scenario, link_concept_to_scenario
+        add_node(conn, "sub1", "Subsystem", {"name": "test"})
+        add_node(conn, "c1", "Concept", {**CONCEPT_ATTRS, "name": "A"})
+        add_node(conn, "c2", "Concept", {**CONCEPT_ATTRS, "name": "B"})
+        sc_id = create_use_case_scenario(conn, "RT Workload", "realtime", "cpu-bound", "low-latency")
+        link_concept_to_scenario(conn, "c1", sc_id, "excellent")
+        link_concept_to_scenario(conn, "c2", sc_id, "poor")
+        results = match_scenarios(conn, workload_type="cpu-bound")
+        assert len(results) == 1
+        concepts = results[0]["concepts"]
+        assert len(concepts) == 2
+        assert concepts[0]["fitness"] == "excellent"
+        assert concepts[1]["fitness"] == "poor"
+        assert concepts[0]["id"] == "c1"
+        empty = match_scenarios(conn, workload_type="io-bound")
+        assert len(empty) == 0
+
+
+class TestTransitiveImpact:
+    def test_transitive_impact(self, conn: sqlite3.Connection) -> None:
+        from graph.optimization import create_optimization_goal, create_use_case_scenario, link_concept_to_goal, link_concept_to_scenario
+        add_node(conn, "sub1", "Subsystem", {"name": "mm"})
+        add_node(conn, "c1", "Concept", {**CONCEPT_ATTRS, "name": "RCU"})
+        add_edge(conn, "belongs-to", "c1", "sub1")
+        add_node(conn, "ki1", "KernelInvariant", KINV_ATTRS)
+        add_edge(conn, "governed-by", "ki1", "c1")
+        add_node(conn, "fm1", "FailureMode", {"symptom": "crash", "blast_radius": "subsystem", "recoverability": "reboot", "artifact_class": "abstracted-mechanism"})
+        add_edge(conn, "triggered-by", "fm1", "ki1")
+        add_node(conn, "ip1", "InteractionProtocol", {"rule": "lock-order", "ordering": "strict", "violation_mode": "deadlock", "artifact_class": "abstracted-mechanism"})
+        add_edge(conn, "constrains-composition", "ip1", "c1")
+        add_node(conn, "pp1", "PerformanceProfile", {"metric": "read latency", "complexity": "O(1)", "best_case": "fast", "worst_case": "slow", "typical_case": "fast", "conditions": "normal", "artifact_class": "abstracted-mechanism"})
+        add_edge(conn, "profiled-by", "pp1", "c1")
+        goal_id = create_optimization_goal(conn, "Min Latency", "d", "latency", "minimize")
+        link_concept_to_goal(conn, "c1", goal_id, "improves", "strong")
+        sc_id = create_use_case_scenario(conn, "RT", "realtime", "cpu-bound", "low-latency")
+        link_concept_to_scenario(conn, "c1", sc_id, "excellent")
+        result = transitive_impact(conn, "c1")
+        assert len(result["invariants"]) == 1
+        assert result["invariants"][0]["id"] == "ki1"
+        assert len(result["failure_modes"]) == 1
+        assert result["failure_modes"][0]["id"] == "fm1"
+        assert len(result["protocols"]) == 1
+        assert len(result["profiles"]) == 1
+        assert len(result["goals"]) == 1
+        assert len(result["scenarios"]) == 1
+
+
+class TestRankedRecommendations:
+    def test_ranked_recommendations(self, conn: sqlite3.Connection) -> None:
+        from graph.optimization import create_optimization_goal, link_concept_to_goal
+        add_node(conn, "sub1", "Subsystem", {"name": "test"})
+        add_node(conn, "c1", "Concept", {**CONCEPT_ATTRS, "name": "A"})
+        add_node(conn, "c2", "Concept", {**CONCEPT_ATTRS, "name": "B"})
+        add_node(conn, "c3", "Concept", {**CONCEPT_ATTRS, "name": "C"})
+        goal_id = create_optimization_goal(conn, "Min Latency", "d", "latency", "minimize")
+        link_concept_to_goal(conn, "c1", goal_id, "improves", "strong")
+        link_concept_to_goal(conn, "c2", goal_id, "improves", "weak")
+        link_concept_to_goal(conn, "c3", goal_id, "worsens", "strong")
+        recs = ranked_recommendations(conn, goal_id)
+        assert len(recs) == 2
+        assert recs[0]["concept"]["id"] == "c1"
+        assert recs[1]["concept"]["id"] == "c2"
+        assert recs[0]["score"] >= recs[1]["score"]
+        assert "impact" in recs[0]
+
+    def test_ranked_recommendations_limit(self, conn: sqlite3.Connection) -> None:
+        from graph.optimization import create_optimization_goal, link_concept_to_goal
+        add_node(conn, "sub1", "Subsystem", {"name": "test"})
+        add_node(conn, "c1", "Concept", {**CONCEPT_ATTRS, "name": "A"})
+        add_node(conn, "c2", "Concept", {**CONCEPT_ATTRS, "name": "B"})
+        add_node(conn, "c3", "Concept", {**CONCEPT_ATTRS, "name": "C"})
+        goal_id = create_optimization_goal(conn, "Min Latency", "d", "latency", "minimize")
+        link_concept_to_goal(conn, "c1", goal_id, "improves", "strong")
+        link_concept_to_goal(conn, "c2", goal_id, "improves", "moderate")
+        link_concept_to_goal(conn, "c3", goal_id, "improves", "weak")
+        recs = ranked_recommendations(conn, goal_id, limit=2)
+        assert len(recs) == 2
+        assert recs[0]["score"] >= recs[1]["score"]
