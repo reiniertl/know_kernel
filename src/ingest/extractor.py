@@ -83,8 +83,29 @@ with coordination rules between concept PAIRS. Each protocol has:
 - concept_b: Exact name of second participating concept (from your list)
 Extract 0-5 protocols. Only include genuine cross-concept constraints.
 
-Return a JSON object with "concepts" (array, at most 10) and \
-"interaction_protocols" (array, at most 5). Focus on the most \
+Add a top-level "compatibility_assessments" key with synergy analyses \
+between concept PAIRS. Each assessment has:
+- synergy: One of "synergistic", "neutral", "antagonistic"
+- rationale: Why these concepts are or are not compatible
+- conditions: Under what conditions this assessment holds
+- concept_a: Exact name of first concept (from your list)
+- concept_b: Exact name of second concept (from your list)
+Extract 0-5 assessments. Only include genuine synergy analyses.
+
+Add a top-level "comparative_analyses" key with head-to-head comparisons \
+between concept PAIRS on specific dimensions. Each analysis has:
+- dimension: What is compared (e.g., "memory overhead", "latency")
+- winner: Which concept is better on this dimension (or "tie")
+- conditions: Under what conditions
+- quantitative_delta: Measured difference if available (empty string if not)
+- concept_a: Exact name of first concept (from your list)
+- concept_b: Exact name of second concept (from your list)
+Extract 0-5 analyses. Only include genuine measurable comparisons.
+
+Return a JSON object with "concepts" (array, at most 10), \
+"interaction_protocols" (array, at most 5), \
+"compatibility_assessments" (array, at most 5), and \
+"comparative_analyses" (array, at most 5). Focus on the most \
 significant ideas.\
 """
 
@@ -447,15 +468,6 @@ def store_performance_profile(
     return profile_id
 
 
-def build_profile_extraction_prompt(concept_names: list[str]) -> str:
-    names_list = ", ".join(concept_names)
-    return (
-        f"Given these kernel concepts: {names_list}\n\n"
-        "Identify quantitative performance characteristics for each concept. "
-        "Return a JSON array of performance profiles."
-    )
-
-
 VALID_SYNERGIES = {"synergistic", "neutral", "antagonistic"}
 
 
@@ -575,16 +587,6 @@ def store_comparative_analysis(
     add_edge(conn, "compares", analysis_id, b_id)
     add_edge(conn, "extracted-from", analysis_id, evidence_id)
     return analysis_id
-
-
-def build_compatibility_prompt(concept_names: list[str]) -> str:
-    names_list = ", ".join(concept_names)
-    return (
-        f"Given these kernel concepts: {names_list}\n\n"
-        "Analyze compatibility between concept pairs. For each pair, determine "
-        "whether they are synergistic, neutral, or antagonistic. Return a JSON "
-        "array of compatibility assessments."
-    )
 
 
 def store_rich_concept(

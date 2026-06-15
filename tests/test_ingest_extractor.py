@@ -1281,3 +1281,16 @@ class TestStoreComparativeAnalysis:
         assert len(targets) == 2
         assert cid_a in targets
         assert cid_b in targets
+
+
+class TestExtractionPromptKeys:
+    def test_extraction_prompt_contains_all_return_keys(self) -> None:
+        assert "compatibility_assessments" in EXTRACTION_SYSTEM_PROMPT
+        assert "comparative_analyses" in EXTRACTION_SYSTEM_PROMPT
+        assert "concepts" in EXTRACTION_SYSTEM_PROMPT
+        assert "interaction_protocols" in EXTRACTION_SYSTEM_PROMPT
+
+    def test_no_dead_prompt_builders(self) -> None:
+        import ingest.extractor as extractor
+        assert not hasattr(extractor, "build_compatibility_prompt")
+        assert not hasattr(extractor, "build_profile_extraction_prompt")
