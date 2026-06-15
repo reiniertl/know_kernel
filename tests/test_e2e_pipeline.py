@@ -1,6 +1,6 @@
-﻿"""E2E integration test â€” INV-KK-E2E-PIPELINE-SOUND.
+"""E2E integration test -- INV-KK-E2E-PIPELINE-SOUND.
 
-Verifies the full pipeline: ingest â†’ review â†’ extract â†’ export â†’ MCP verify.
+Verifies the full pipeline: ingest -> review -> extract -> export -> MCP verify.
 Uses a mock LLM client to avoid real API calls.
 """
 
@@ -12,7 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from graph.engine import add_node
+from graph.engine import add_node, compare_neighborhoods, ranked_recommendations, transitive_impact
+from graph.optimization import (
+    create_comparative_analysis,
+    create_optimization_goal,
+    create_use_case_scenario,
+    link_concept_to_goal,
+    link_concept_to_scenario,
+)
 from graph.schema import init_db
 from export.exporter import export_class_b_snapshot
 from ingest.extractor import extract_concepts
@@ -87,6 +94,16 @@ class MockLLMClient:
                         "concept_b": "Demand Paging",
                     },
                 ],
+                "comparative_analyses": [
+                    {
+                        "dimension": "memory overhead",
+                        "winner": "Demand Paging",
+                        "conditions": "Large address spaces with sparse access patterns",
+                        "quantitative_delta": "Up to 90% less physical memory",
+                        "concept_a": "Virtual Address Translation",
+                        "concept_b": "Demand Paging",
+                    },
+                ],
             }),
             "prompt_tokens": 100,
             "response_tokens": 50,
@@ -101,6 +118,20 @@ def master_db(tmp_path):
 @pytest.fixture
 def snapshot_db(tmp_path):
     return tmp_path / "snapshot.db"
+
+
+def _run_full_pipeline(master_db, snapshot_db):
+    """Run the full pipeline and return (master_conn, snap_path, concept_ids)."""
+    conn = init_db(master_db)
+    doc = master_db.parent / "test_doc.txt"
+    doc.write_text("MIT License. This paper describes virtual memory management and demand paging in modern kernels.")
+    gate = SessionGate()
+    ingest_result = ingest_document(conn, str(doc), "https://example.com/vm.txt", "paper", gate=gate)
+    review_source(conn, ingest_result.source_id, "License confirmed as MIT.", "weak-copyleft")
+    extract_result = extract_concepts(conn, ingest_result.evidence_id, gate, model="test-model", client=MockLLMClient())
+    conn.commit()
+    export_class_b_snapshot(master_db, snapshot_db)
+    return conn, extract_result
 
 
 class TestE2EPipeline:
@@ -131,7 +162,7 @@ class TestE2EPipeline:
         assert extract_result.concepts_created == 2
         assert all(cid.startswith("concept-") for cid in extract_result.concept_ids)
 
-        # Auto-classification creates belongs-to edges — verify
+        # Auto-classification creates belongs-to edges
         for cid in extract_result.concept_ids:
             edge = conn.execute(
                 "SELECT 1 FROM edges WHERE kind = 'belongs-to' AND source_id = ?",
@@ -144,7 +175,7 @@ class TestE2EPipeline:
         # Step 4: Export
         report = export_class_b_snapshot(master_db, snapshot_db)
 
-        # Step 5: Verify snapshot contents â€” Class B only
+        # Step 5: Verify snapshot contents -- Class B only
         snap_conn = sqlite3.connect(str(snapshot_db))
         kinds = [row[0] for row in snap_conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()]
         assert "Evidence" not in kinds
@@ -206,6 +237,18 @@ class TestE2EPipeline:
             attrs = json.loads(row[0])
             assert attrs["artifact_class"] == "abstracted-mechanism"
             assert attrs["synergy"] == "synergistic"
+
+        # ComparativeAnalysis from LLM extraction
+        cmpan_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'ComparativeAnalysis'").fetchone()[0]
+        assert cmpan_count == 1
+
+        compares_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'compares'").fetchone()[0]
+        assert compares_edges == 2
+
+        for row in snap_conn.execute("SELECT attrs FROM nodes WHERE kind = 'ComparativeAnalysis'").fetchall():
+            attrs = json.loads(row[0])
+            assert attrs["artifact_class"] == "abstracted-mechanism"
+            assert attrs["dimension"] == "memory overhead"
 
         snap_conn.close()
 
@@ -270,7 +313,7 @@ class TestE2EPipeline:
         snap_conn.close()
 
     def test_extraction_idempotent_in_pipeline(self, master_db):
-        """Re-extraction from same Evidence skips â€” no duplicates."""
+        """Re-extraction from same Evidence skips -- no duplicates."""
         conn = init_db(master_db)
         doc = master_db.parent / "test_doc5.txt"
         doc.write_text("MIT License. Scheduler design patterns.")
@@ -356,6 +399,7 @@ class TestE2EPipeline:
         assert extract.protocols_created == 1
         assert extract.profiles_created == 1
         assert extract.compatibilities_created == 1
+        assert extract.comparatives_created == 1
         conn.commit()
 
         kinv_nodes = conn.execute("SELECT id, attrs FROM nodes WHERE kind = 'KernelInvariant'").fetchall()
@@ -393,3 +437,93 @@ class TestE2EPipeline:
 
         with pytest.raises(ValueError, match="Not a Class B-only snapshot"):
             init_snapshot(str(bad_db))
+
+
+class TestE2EAllKinds:
+    """Full pipeline with all 14 node kinds + query chain verification."""
+
+    def _setup_full_graph(self, master_db, snapshot_db):
+        """Run pipeline + seed optimization nodes. Returns (master_conn, concept_ids)."""
+        conn = init_db(master_db)
+        doc = master_db.parent / "test_all_kinds.txt"
+        doc.write_text("MIT License. Virtual memory and demand paging mechanisms.")
+        gate = SessionGate()
+        ingest_result = ingest_document(conn, str(doc), "https://example.com/vm.txt", "paper", gate=gate)
+        review_source(conn, ingest_result.source_id, "MIT confirmed.", "weak-copyleft")
+        extract_result = extract_concepts(conn, ingest_result.evidence_id, gate, model="test", client=MockLLMClient())
+        concept_ids = extract_result.concept_ids
+
+        goal_id = create_optimization_goal(conn, "Min Latency", "Reduce latency", "latency", "minimize")
+        link_concept_to_goal(conn, concept_ids[0], goal_id, "improves", "strong")
+        link_concept_to_goal(conn, concept_ids[1], goal_id, "improves", "weak")
+
+        sc_id = create_use_case_scenario(conn, "RT Workload", "Realtime", "cpu-bound", "low-latency")
+        link_concept_to_scenario(conn, concept_ids[0], sc_id, "excellent")
+        link_concept_to_scenario(conn, concept_ids[1], sc_id, "good")
+
+        conn.commit()
+        export_class_b_snapshot(master_db, snapshot_db)
+        return conn, concept_ids, goal_id
+
+    def test_e2e_full_pipeline_all_kinds(self, master_db, snapshot_db):
+        """All 14 node kinds present in master, all Class B in snapshot."""
+        conn, concept_ids, goal_id = self._setup_full_graph(master_db, snapshot_db)
+
+        master_kinds = {row[0] for row in conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
+        assert master_kinds >= {
+            "Source", "Evidence", "Advisory",
+            "Concept", "Subsystem", "KernelInvariant", "FailureMode",
+            "InteractionProtocol", "PerformanceProfile",
+            "CompatibilityAssessment", "ComparativeAnalysis",
+            "OptimizationGoal", "UseCaseScenario",
+        }
+
+        snap_conn = sqlite3.connect(str(snapshot_db))
+        snap_kinds = {row[0] for row in snap_conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
+        assert "Evidence" not in snap_kinds
+        assert "Source" not in snap_kinds
+        assert "Advisory" not in snap_kinds
+        assert snap_kinds >= {
+            "Concept", "Subsystem", "KernelInvariant", "FailureMode",
+            "InteractionProtocol", "PerformanceProfile",
+            "CompatibilityAssessment", "ComparativeAnalysis",
+            "OptimizationGoal", "UseCaseScenario",
+        }
+        snap_conn.close()
+
+    def test_e2e_impact_surface(self, master_db, snapshot_db):
+        """INV-KK-QUERY-IMPACT-COMPLETE: transitive_impact returns complete surface."""
+        conn, concept_ids, _ = self._setup_full_graph(master_db, snapshot_db)
+        impact = transitive_impact(conn, concept_ids[0])
+        assert len(impact["invariants"]) >= 1
+        assert len(impact["failure_modes"]) >= 1
+        assert len(impact["protocols"]) >= 1
+        assert len(impact["profiles"]) >= 1
+        assert len(impact["goals"]) >= 1
+        assert len(impact["scenarios"]) >= 1
+        assert "compatibilities" in impact
+        assert "comparatives" in impact
+
+    def test_e2e_ranked_recommendations(self, master_db, snapshot_db):
+        """INV-KK-QUERY-RANK-SORTED: ranked_recommendations returns sorted results."""
+        conn, concept_ids, goal_id = self._setup_full_graph(master_db, snapshot_db)
+        recs = ranked_recommendations(conn, goal_id)
+        assert len(recs) == 2
+        assert recs[0]["score"] >= recs[1]["score"]
+        assert recs[0]["concept"]["id"] == concept_ids[0]
+        assert "impact" in recs[0]
+        assert len(recs[0]["impact"]["invariants"]) >= 1
+
+    def test_e2e_comparative_query(self, master_db, snapshot_db):
+        """compare_neighborhoods returns diff + ComparativeAnalysis nodes exist."""
+        conn, concept_ids, _ = self._setup_full_graph(master_db, snapshot_db)
+        diff = compare_neighborhoods(conn, concept_ids[0], concept_ids[1], depth=1)
+        assert "shared" in diff
+        assert "only_a" in diff
+        assert "only_b" in diff
+        shared_ids = {n["id"] for n in diff["shared"]}
+        sub_nodes = conn.execute("SELECT id FROM nodes WHERE kind = 'Subsystem'").fetchall()
+        assert any(s[0] in shared_ids for s in sub_nodes)
+
+        cmpan = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'ComparativeAnalysis'").fetchone()[0]
+        assert cmpan >= 1
