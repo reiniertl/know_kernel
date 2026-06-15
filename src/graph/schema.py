@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -26,6 +26,7 @@ EDGE_KINDS = (
     "contributes-to",
     "suited-for",
     "compares",
+    "implemented-in",
 )
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
@@ -47,6 +48,7 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "contributes-to": ("Concept", "OptimizationGoal"),
     "suited-for": ("Concept", "UseCaseScenario"),
     "compares": ("ComparativeAnalysis", "Concept"),
+    "implemented-in": ("Concept", "Kernel"),
 }
 
 REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
@@ -64,6 +66,7 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "OptimizationGoal": ("name", "description", "metric", "direction"),
     "UseCaseScenario": ("name", "description", "workload_type", "constraints"),
     "ComparativeAnalysis": ("dimension", "winner", "conditions", "quantitative_delta", "artifact_class"),
+    "Kernel": ("name", "description", "kernel_type"),
 }
 
 SCHEMA_SQL = """\

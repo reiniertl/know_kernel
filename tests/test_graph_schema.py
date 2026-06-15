@@ -14,7 +14,7 @@ from graph.schema import (
 
 
 def test_node_kinds_complete():
-    assert set(NODE_KINDS) == {"Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis"}
+    assert set(NODE_KINDS) == {"Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel"}
 
 
 def test_edge_kinds_complete():
@@ -22,7 +22,7 @@ def test_edge_kinds_complete():
         "belongs-to", "extracted-from", "sourced-from", "alternative-to",
         "refines", "contradicts", "prerequisite", "supersedes",
         "assessed-by", "grounded-in", "governed-by", "triggered-by", "constrains-composition", "profiled-by", "assesses-compatibility",
-        "contributes-to", "suited-for", "compares",
+        "contributes-to", "suited-for", "compares", "implemented-in",
     }
     assert set(EDGE_KINDS) == expected
 

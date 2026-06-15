@@ -23,9 +23,11 @@ from graph.engine import (
 )
 from graph.optimization import (
     create_comparative_analysis,
+    create_kernel,
     create_optimization_goal,
     create_use_case_scenario,
     link_concept_to_goal,
+    link_concept_to_kernel,
     link_concept_to_scenario,
 )
 from graph.rules import Violation, validate_node
@@ -48,6 +50,7 @@ __all__ = [
     "add_node",
     "compare_neighborhoods",
     "create_comparative_analysis",
+    "create_kernel",
     "create_optimization_goal",
     "create_use_case_scenario",
     "delete_edge",
@@ -56,6 +59,7 @@ __all__ = [
     "get_node",
     "init_db",
     "link_concept_to_goal",
+    "link_concept_to_kernel",
     "link_concept_to_scenario",
     "list_nodes",
     "match_scenarios",

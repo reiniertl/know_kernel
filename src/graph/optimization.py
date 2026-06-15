@@ -10,6 +10,8 @@ from graph.engine import add_edge, add_node, get_node
 
 
 _VALID_DIRECTIONS = {"minimize", "maximize"}
+_VALID_KERNEL_TYPES = {"monolithic", "microkernel", "rtos", "hybrid", "unikernel"}
+_VALID_MATURITIES = {"production", "experimental", "deprecated", "removed"}
 _VALID_CONTRIBUTION_DIRECTIONS = {"improves", "worsens", "neutral"}
 _VALID_MAGNITUDES = {"strong", "moderate", "weak"}
 _VALID_FITNESS = {"excellent", "good", "acceptable", "poor"}
@@ -121,3 +123,41 @@ def create_comparative_analysis(
     add_edge(conn, "compares", analysis_id, concept_a_id)
     add_edge(conn, "compares", analysis_id, concept_b_id)
     return analysis_id
+
+
+def create_kernel(
+    conn: sqlite3.Connection,
+    name: str,
+    description: str,
+    kernel_type: str,
+) -> str:
+    if not name or not name.strip():
+        raise ValueError("name must be non-empty")
+    if not description or not description.strip():
+        raise ValueError("description must be non-empty")
+    if kernel_type not in _VALID_KERNEL_TYPES:
+        raise ValueError(f"kernel_type must be one of {_VALID_KERNEL_TYPES}, got '{kernel_type}'")
+    kernel_id = f"kernel-{uuid.uuid4().hex[:12]}"
+    add_node(conn, kernel_id, "Kernel", {
+        "name": name.strip(),
+        "description": description.strip(),
+        "kernel_type": kernel_type,
+    })
+    return kernel_id
+
+
+def link_concept_to_kernel(
+    conn: sqlite3.Connection,
+    concept_id: str,
+    kernel_id: str,
+    since_version: str = "",
+    maturity: str = "production",
+    variant_notes: str = "",
+) -> None:
+    if maturity not in _VALID_MATURITIES:
+        raise ValueError(f"maturity must be one of {_VALID_MATURITIES}, got '{maturity}'")
+    add_edge(conn, "implemented-in", concept_id, kernel_id, {
+        "since_version": since_version,
+        "maturity": maturity,
+        "variant_notes": variant_notes,
+    })
