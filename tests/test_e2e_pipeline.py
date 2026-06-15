@@ -12,12 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from graph.engine import add_node, compare_neighborhoods, ranked_recommendations, transitive_impact
+from graph.engine import add_node, compare_neighborhoods, ranked_recommendations, subgraph_around, transitive_impact
 from graph.optimization import (
     create_comparative_analysis,
+    create_kernel,
     create_optimization_goal,
     create_use_case_scenario,
     link_concept_to_goal,
+    link_concept_to_kernel,
     link_concept_to_scenario,
 )
 from graph.schema import init_db
@@ -440,10 +442,10 @@ class TestE2EPipeline:
 
 
 class TestE2EAllKinds:
-    """Full pipeline with all 14 node kinds + query chain verification."""
+    """Full pipeline with all 15 node kinds + query chain verification."""
 
     def _setup_full_graph(self, master_db, snapshot_db):
-        """Run pipeline + seed optimization nodes. Returns (master_conn, concept_ids)."""
+        """Run pipeline + seed optimization/kernel nodes. Returns (master_conn, concept_ids, goal_id, kernel_id)."""
         conn = init_db(master_db)
         doc = master_db.parent / "test_all_kinds.txt"
         doc.write_text("MIT License. Virtual memory and demand paging mechanisms.")
@@ -461,13 +463,17 @@ class TestE2EAllKinds:
         link_concept_to_scenario(conn, concept_ids[0], sc_id, "excellent")
         link_concept_to_scenario(conn, concept_ids[1], sc_id, "good")
 
+        kernel_id = create_kernel(conn, "Linux", "Monolithic Unix-like kernel", "monolithic")
+        link_concept_to_kernel(conn, concept_ids[0], kernel_id, since_version="2.5", maturity="production")
+        link_concept_to_kernel(conn, concept_ids[1], kernel_id, since_version="2.6", maturity="production")
+
         conn.commit()
         export_class_b_snapshot(master_db, snapshot_db)
-        return conn, concept_ids, goal_id
+        return conn, concept_ids, goal_id, kernel_id
 
     def test_e2e_full_pipeline_all_kinds(self, master_db, snapshot_db):
-        """All 14 node kinds present in master, all Class B in snapshot."""
-        conn, concept_ids, goal_id = self._setup_full_graph(master_db, snapshot_db)
+        """All 15 node kinds present in master, all Class B in snapshot."""
+        conn, concept_ids, goal_id, kernel_id = self._setup_full_graph(master_db, snapshot_db)
 
         master_kinds = {row[0] for row in conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
         assert master_kinds >= {
@@ -475,7 +481,7 @@ class TestE2EAllKinds:
             "Concept", "Subsystem", "KernelInvariant", "FailureMode",
             "InteractionProtocol", "PerformanceProfile",
             "CompatibilityAssessment", "ComparativeAnalysis",
-            "OptimizationGoal", "UseCaseScenario",
+            "OptimizationGoal", "UseCaseScenario", "Kernel",
         }
 
         snap_conn = sqlite3.connect(str(snapshot_db))
@@ -487,13 +493,16 @@ class TestE2EAllKinds:
             "Concept", "Subsystem", "KernelInvariant", "FailureMode",
             "InteractionProtocol", "PerformanceProfile",
             "CompatibilityAssessment", "ComparativeAnalysis",
-            "OptimizationGoal", "UseCaseScenario",
+            "OptimizationGoal", "UseCaseScenario", "Kernel",
         }
+
+        impl_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'implemented-in'").fetchone()[0]
+        assert impl_edges == 2
         snap_conn.close()
 
     def test_e2e_impact_surface(self, master_db, snapshot_db):
         """INV-KK-QUERY-IMPACT-COMPLETE: transitive_impact returns complete surface."""
-        conn, concept_ids, _ = self._setup_full_graph(master_db, snapshot_db)
+        conn, concept_ids, _, _ = self._setup_full_graph(master_db, snapshot_db)
         impact = transitive_impact(conn, concept_ids[0])
         assert len(impact["invariants"]) >= 1
         assert len(impact["failure_modes"]) >= 1
@@ -506,7 +515,7 @@ class TestE2EAllKinds:
 
     def test_e2e_ranked_recommendations(self, master_db, snapshot_db):
         """INV-KK-QUERY-RANK-SORTED: ranked_recommendations returns sorted results."""
-        conn, concept_ids, goal_id = self._setup_full_graph(master_db, snapshot_db)
+        conn, concept_ids, goal_id, _ = self._setup_full_graph(master_db, snapshot_db)
         recs = ranked_recommendations(conn, goal_id)
         assert len(recs) == 2
         assert recs[0]["score"] >= recs[1]["score"]
@@ -516,7 +525,7 @@ class TestE2EAllKinds:
 
     def test_e2e_comparative_query(self, master_db, snapshot_db):
         """compare_neighborhoods returns diff + ComparativeAnalysis nodes exist."""
-        conn, concept_ids, _ = self._setup_full_graph(master_db, snapshot_db)
+        conn, concept_ids, _, _ = self._setup_full_graph(master_db, snapshot_db)
         diff = compare_neighborhoods(conn, concept_ids[0], concept_ids[1], depth=1)
         assert "shared" in diff
         assert "only_a" in diff
@@ -527,3 +536,43 @@ class TestE2EAllKinds:
 
         cmpan = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'ComparativeAnalysis'").fetchone()[0]
         assert cmpan >= 1
+
+    def test_e2e_kernel_implementation(self, master_db, snapshot_db):
+        """Kernel nodes survive export, implemented-in edges have correct attrs, and query functions include Kernel neighbors."""
+        conn, concept_ids, _, kernel_id = self._setup_full_graph(master_db, snapshot_db)
+
+        snap_conn = sqlite3.connect(str(snapshot_db))
+
+        kernel_row = snap_conn.execute("SELECT attrs FROM nodes WHERE id = ?", (kernel_id,)).fetchone()
+        assert kernel_row is not None
+        kernel_attrs = json.loads(kernel_row[0])
+        assert kernel_attrs["name"] == "Linux"
+        assert kernel_attrs["kernel_type"] == "monolithic"
+
+        impl_edges = snap_conn.execute(
+            "SELECT source_id, attrs FROM edges WHERE kind = 'implemented-in' AND target_id = ?",
+            (kernel_id,),
+        ).fetchall()
+        assert len(impl_edges) == 2
+        versions = set()
+        for _, attrs_json in impl_edges:
+            attrs = json.loads(attrs_json)
+            assert attrs["maturity"] == "production"
+            versions.add(attrs["since_version"])
+        assert versions == {"2.5", "2.6"}
+
+        prov_edges = snap_conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE kind = 'extracted-from' AND source_id = ?",
+            (kernel_id,),
+        ).fetchone()[0]
+        assert prov_edges == 0
+
+        snap_conn.close()
+
+        sub = subgraph_around(conn, concept_ids[0], depth=1)
+        neighbor_ids = {n["id"] for n in sub["nodes"]}
+        assert kernel_id in neighbor_ids
+
+        diff = compare_neighborhoods(conn, concept_ids[0], concept_ids[1], depth=1)
+        shared_ids = {n["id"] for n in diff["shared"]}
+        assert kernel_id in shared_ids
