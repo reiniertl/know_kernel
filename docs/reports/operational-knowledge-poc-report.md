@@ -307,7 +307,12 @@ Concept <-------------- governed-by ---- KernelInvariant
   |-- prerequisite ----> Concept
   |-- extracted-from --> Evidence         InteractionProtocol
   |                                          | constrains-composition
-  <------------------------------------------+ (to both participating Concepts)
+  |<-- profiled-by -- PerformanceProfile     + (to both Concepts)
+  |<-- assesses-compatibility -- CompatibilityAssessment --> Concept
+  |<-- compares -- ComparativeAnalysis --> Concept
+  |
+  |-- contributes-to -> OptimizationGoal
+  |-- suited-for -> UseCaseScenario
 
 Proposal (future)
   |-- grounded-in --> Concept
@@ -317,19 +322,29 @@ Proposal (future)
 
 This graph answers:
 
-| Question | Layer | Edge |
-|----------|-------|------|
+| Question | Layer | Edge/Query |
+|----------|-------|------------|
 | What exists? | Concepts | (root nodes) |
 | How does it relate? | Concept edges | refines, contradicts, prerequisite |
 | What must hold? | KernelInvariants | governed-by -> Concept |
 | What breaks? | FailureModes | triggered-by -> KernelInvariant |
 | How must things compose? | InteractionProtocols | constrains-composition -> Concept (x2) |
+| How fast is it? | PerformanceProfiles | profiled-by -> Concept |
+| Do concepts compose well? | CompatibilityAssessments | assesses-compatibility -> Concept (x2) |
+| How do two compare? | ComparativeAnalyses | compares -> Concept (x2) |
+| What goal does it serve? | OptimizationGoals | contributes-to (with direction + magnitude) |
+| What workloads suit it? | UseCaseScenarios | suited-for (with fitness rating) |
+| Full impact of adopting X? | Query: transitive_impact() | All connected kinds in one call |
+| Best concepts for goal Y? | Query: ranked_recommendations() | Scored + sorted candidates |
 
-Together, these five layers provide the complete operational knowledge an LLM needs to reason about kernel design.
+Together, these layers provide the complete operational and optimization
+knowledge an LLM needs to reason about kernel design.
 
 ---
 
 ## 8. Implementation Summary
+
+### Operational Knowledge (Phases 1-3)
 
 | Phase | What | Spec Nodes | Code Files | Tests Added |
 |-------|------|-----------|------------|-------------|
@@ -338,29 +353,26 @@ Together, these five layers provide the complete operational knowledge an LLM ne
 | **Phase 3** | InteractionProtocol | 3 invariants + 3 algorithms + 1 interface + 2 updated | schema.py, exporter.py, extractor.py | 12 new |
 | **Total** | 3 phases, 20 stages | 30 spec mutations | 4 source files | 266 tests (from 222 baseline) |
 
-### Stages completed
+### Optimization Assessment Layer (Phases 4-9)
 
-| # | Stage | Phase | Type | Status |
-|---|-------|-------|------|--------|
-| 1 | P1-S1 | Phase 1 | spec: invariant nodes | DONE |
-| 2 | P1-S2 | Phase 1 | spec: algorithm + interface nodes | DONE |
-| 3 | P1-S3 | Phase 1 | spec: update existing nodes | DONE |
-| 4 | P1-AUDIT-A | Phase 1 | audit: spec completeness | PASS |
-| 5 | P1-S4 | Phase 1 | code: schema changes | DONE |
-| 6 | P1-S5 | Phase 1 | code: validate + store functions | DONE |
-| 7 | P1-S6 | Phase 1 | code: orchestrator + prompt | DONE |
-| 8 | P1-S7 | Phase 1 | code: mocks + tests | DONE |
-| 9 | P1-AUDIT-B | Phase 1 | audit: final Phase 1 | PASS |
-| 10 | P2-S1 | Phase 2 | spec: invariant nodes | DONE |
-| 11 | P2-S2 | Phase 2 | spec: algorithms + update existing | DONE |
-| 12 | P2-S3 | Phase 2 | code: schema + validate + store + orchestrator | DONE |
-| 13 | P2-S4 | Phase 2 | code: mocks + tests | DONE |
-| 14 | P2-AUDIT | Phase 2 | audit: final Phase 2 | PASS |
-| 15 | P3-S1 | Phase 3 | spec: invariant nodes | DONE |
-| 16 | P3-S2 | Phase 3 | spec: algorithms + update existing | DONE |
-| 17 | P3-S3 | Phase 3 | code: schema + validate + store + orchestrator | DONE |
-| 18 | P3-S4 | Phase 3 | code: mocks + tests | DONE |
-| 19 | P3-AUDIT | Phase 3 | audit: final all-phases | PASS |
-| 20 | PoC | — | demo with real data | DONE |
+| Phase | What | New Spec Nodes | Code Changes | Tests Added |
+|-------|------|---------------|--------------|-------------|
+| **Phase 4** | PerformanceProfile | 7 INV + 3 ALG + 1 IF | schema.py, extractor.py, exporter.py | 13 new |
+| **Phase 5** | CompatibilityAssessment | 6 INV + 3 ALG + 1 IF | schema.py, extractor.py, exporter.py | 10 new |
+| **Phase 6** | OptimizationGoal + UseCaseScenario | 9 INV + 4 ALG + 2 IF + 1 MOD | schema.py, optimization.py (new), exporter.py | 9 new |
+| **Phase 7** | ComparativeAnalysis | 4 INV + 3 ALG + 1 IF | schema.py, extractor.py, optimization.py, exporter.py | 7 new |
+| **Phase 8** | Query Layer (6 functions) | 6 INV + 6 ALG + 1 IF | engine.py | 11 new |
+| **Phase 9** | MCP Server (5 new tools + search fix) | 2 INV + updates | server.py | 7 new |
+| **E2E** | Integration tests | updates | test_e2e_pipeline.py | 4 new |
+| **Total** | 7 phases, 22 stages | ~50 spec mutations | 6 source files | 60 new tests (266 -> 326) |
 
-All audits passed. All tests green. All 20 stages complete.
+### Cumulative totals
+
+- **14 node kinds**, 18 edge kinds
+- **~80 spec nodes** across both layers
+- **326 tests**, zero failures
+- **9 MCP tools** (from 4)
+- **6 query functions** in the graph engine
+- **5 audits passed** (all milestones verified)
+
+All audits passed. All tests green. All 42 stages complete across both layers.

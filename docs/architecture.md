@@ -114,14 +114,18 @@ Four applications and one shared library.
 The graph engine is a Python library used by all four apps.
 Responsibilities:
 
-- SQLite schema management
+- SQLite schema management (14 node kinds, 18 edge kinds)
 - Node/edge CRUD operations
 - Admissibility rule enforcement (every Concept needs `belongs-to`,
   every Evidence needs `sourced-from`, etc.)
 - Contamination level propagation
-- Query API for traversal, neighborhood, impact analysis
+- Optimization module (`optimization.py`): create/link OptimizationGoals,
+  UseCaseScenarios, ComparativeAnalyses
+- Query layer (6 functions): `subgraph_around`, `query_edges_by_attrs`,
+  `compare_neighborhoods`, `match_scenarios`, `transitive_impact`,
+  `ranked_recommendations`
 
-This is **not a service** — it is imported as a dependency by each app.
+This is **not a service** -- it is imported as a dependency by each app.
 The SQLite database file is the integration point.
 
 ### App 1: Ingestion Service
@@ -212,9 +216,11 @@ protocol.
 
 **Responsibilities:**
 
-- Serve the Class B-only DB snapshot via MCP tools
-- Expose query tools to opencode: concept lookup by subsystem,
-  mechanism, relationship traversal, tradeoff analysis
+- Serve the Class B-only DB snapshot via 9 MCP tools
+- Search across all Class B node kinds (dynamic ALLOWED_KINDS)
+- Query tools: concept lookup, impact surface analysis,
+  goal-based recommendations, concept comparison, workload matching,
+  subgraph exploration (depth capped at 3)
 - Enforce proposal-mode only: no evidence endpoints, no write path
 - Lightweight, offline-capable, no external dependencies
 
@@ -466,31 +472,47 @@ Humans never see the graph. The graph powers curated views (cards,
 tables, timelines). The LLM traverses the raw graph directly. One
 graph, two rendering strategies.
 
-### Node Kinds
+### Node Kinds (14)
 
-| Node kind  | What it represents                                      |
-|------------|---------------------------------------------------------|
-| Concept    | A kernel design idea/mechanism (the primary entity)     |
-| Source     | A document, repo, paper, mailing list thread            |
-| Evidence   | A specific excerpt/code fragment from a source (Class A)|
-| Advisory   | License/contamination metadata for a source or concept  |
-| Subsystem  | Kernel domain (scheduler, MM, IPC, etc.)                |
-| Proposal   | An LLM-generated design suggestion for the target kernel|
+| Node kind  | What it represents | Class |
+|------------|-----------------------------------------------------|-------|
+| Source | A document, repo, paper, mailing list thread | A |
+| Evidence | A specific excerpt/code fragment from a source | A |
+| Advisory | License/contamination metadata for a source | A |
+| Concept | A kernel design idea/mechanism (the primary entity) | B |
+| Subsystem | Kernel domain (scheduler, MM, IPC, etc.) | B |
+| Proposal | An LLM-generated design suggestion for the target kernel | B |
+| KernelInvariant | A rule that must hold for a mechanism to be correct | B |
+| FailureMode | What breaks when an invariant is violated | B |
+| InteractionProtocol | Cross-concept composition constraint | B |
+| PerformanceProfile | Quantitative bounds per concept per metric | B |
+| CompatibilityAssessment | Synergy analysis between concept pairs | B |
+| OptimizationGoal | Measurable objective (minimize latency, etc.) | B |
+| UseCaseScenario | Workload pattern (cpu-bound, real-time, etc.) | B |
+| ComparativeAnalysis | Head-to-head comparison on a dimension | B |
 
-### Edge Kinds
+### Edge Kinds (18)
 
-| Edge kind       | From --> To          | Meaning                              |
-|-----------------|----------------------|--------------------------------------|
-| belongs-to      | Concept --> Subsystem| Domain classification                |
-| extracted-from  | Concept --> Evidence | Provenance chain                     |
-| sourced-from    | Evidence --> Source   | Where the raw material came from     |
-| alternative-to  | Concept --> Concept  | Competing approaches                 |
-| refines         | Concept --> Concept  | Evolutionary improvement             |
-| contradicts     | Concept --> Concept  | Conflicting claims                   |
-| prerequisite    | Concept --> Concept  | Must exist for this to work          |
-| supersedes      | Concept --> Concept  | Replaces an older idea               |
-| assessed-by     | Concept --> Advisory | Contamination/license assessment     |
-| grounded-in     | Proposal --> Concept | What clean concepts back the proposal|
+| Edge kind | From --> To | Meaning |
+|-----------|-------------|---------|
+| belongs-to | Concept/KernelInvariant --> Subsystem | Domain classification |
+| extracted-from | (7 kinds) --> Evidence | Provenance chain |
+| sourced-from | Evidence --> Source | Where the raw material came from |
+| alternative-to | Concept --> Concept | Competing approaches |
+| refines | Concept --> Concept | Evolutionary improvement |
+| contradicts | Concept --> Concept | Conflicting claims (symmetric) |
+| prerequisite | Concept --> Concept | Must exist for this to work |
+| supersedes | Concept --> Concept | Replaces an older idea (acyclic) |
+| assessed-by | Source --> Advisory | Contamination/license assessment |
+| grounded-in | Proposal --> Concept | What clean concepts back the proposal |
+| governed-by | KernelInvariant --> Concept | Invariant constrains mechanism |
+| triggered-by | FailureMode --> KernelInvariant | Violation consequence |
+| constrains-composition | InteractionProtocol --> Concept | Composition rule (2 edges per protocol) |
+| profiled-by | PerformanceProfile --> Concept | Performance data attached to mechanism |
+| assesses-compatibility | CompatibilityAssessment --> Concept | Synergy analysis (2 edges per assessment) |
+| contributes-to | Concept --> OptimizationGoal | Goal contribution with direction + magnitude |
+| suited-for | Concept --> UseCaseScenario | Workload fitness rating |
+| compares | ComparativeAnalysis --> Concept | Head-to-head comparison (2 edges per analysis) |
 
 ### Admissibility Rules
 
@@ -502,10 +524,20 @@ graph, two rendering strategies.
   origin)
 - Proposal nodes may only have `grounded-in` edges to Concept nodes,
   never to Evidence nodes (contamination firewall)
-- `contradicts` is symmetric — if A contradicts B, B contradicts A
-- `supersedes` is acyclic — no circular replacement chains
+- `contradicts` is symmetric -- if A contradicts B, B contradicts A
+- `supersedes` is acyclic -- no circular replacement chains
 - Every Source must have an Advisory (license status always known,
   even if "unknown")
+- Every KernelInvariant has exactly one `governed-by` edge to a Concept
+- Every FailureMode has exactly one `triggered-by` edge to a KernelInvariant
+- Every InteractionProtocol has exactly 2 `constrains-composition` edges
+  to distinct Concepts
+- Every CompatibilityAssessment has exactly 2 `assesses-compatibility`
+  edges to distinct Concepts
+- Every ComparativeAnalysis has exactly 2 `compares` edges to distinct
+  Concepts
+- OptimizationGoal and UseCaseScenario are seeded/curated (no provenance
+  edge required)
 
 ---
 
@@ -515,20 +547,24 @@ Each concept in the runtime graph carries:
 
 ```
 name
-source provenance
-abstract description
-problem addressed
-mechanism
-required assumptions
-kernel subsystems affected
-invariants
-performance model
-security model
-portability concerns
-maturity level
-evidence strength
-license contamination risk
-recommendation (adopt | study | reject | quarantine)
+description
+artifact_class (always "abstracted-mechanism" for Class B)
+key_properties (list of defining characteristics)
+tradeoffs (list of limitations or costs)
+design_rationale (why this approach was chosen)
+```
+
+Related node kinds attached to each concept via edges:
+
+```
+KernelInvariant (via governed-by): predicate, strength, scope
+FailureMode (via triggered-by on invariant): symptom, blast_radius, recoverability
+InteractionProtocol (via constrains-composition): rule, ordering, violation_mode
+PerformanceProfile (via profiled-by): metric, complexity, best/worst/typical case, conditions
+CompatibilityAssessment (via assesses-compatibility): synergy, rationale, conditions
+ComparativeAnalysis (via compares): dimension, winner, conditions, quantitative_delta
+OptimizationGoal (via contributes-to): name, metric, direction (minimize/maximize)
+UseCaseScenario (via suited-for): workload_type, constraints, fitness rating
 ```
 
 ---
@@ -580,11 +616,36 @@ is all application code.
 
 | Component | Type | Language | Reads | Writes | Deployment |
 |-----------|------|----------|-------|--------|------------|
-| Graph engine | Shared library | Python | — | — | Imported by all apps |
+| Graph engine | Shared library | Python | -- | -- | Imported by all apps |
 | Ingestion service | Batch service | Python | Documents, repos, papers | Full master DB (A+B) | Internet-connected |
 | Web API | Long-running server | Python | Full master DB (A+B) | Nothing (read-only) | Air-gapped, single server |
-| Snapshot exporter | CLI utility | Python | Full master DB (A+B) | Class B-only DB | Runs at transfer time |
-| MCP server | Container service | Python | Class B-only DB | Nothing (read-only) | Air-gapped, per-dev Docker |
+| Snapshot exporter | CLI utility | Python | Full master DB (A+B) | Class B-only DB (11 kinds) | Runs at transfer time |
+| MCP server | Container service | Python | Class B-only DB | Nothing (read-only, 9 tools) | Air-gapped, per-dev Docker |
+
+---
+
+## LLM Query Chain
+
+The complete reasoning chain when an LLM queries the knowledge graph:
+
+```
+Question ("reduce latency in subsystem X")
+  -> OptimizationGoal lookup ("minimize latency")
+  -> contributes-to edges (direction=improves)
+  -> Candidate Concepts (ranked by magnitude + impact surface size)
+  -> For each candidate: transitive_impact() returns full surface:
+      invariants, failure_modes, protocols, profiles,
+      goals, compatibilities, comparatives, scenarios
+  -> Answer + complete impact surface
+```
+
+The graph also supports direct queries:
+
+```
+compare_concepts(A, B)    -> neighborhood diff + ComparativeAnalysis nodes
+match_workload("cpu-bound") -> scenarios with suited concepts by fitness
+explore_subgraph(node, 2) -> multi-hop BFS neighborhood
+```
 
 ---
 
@@ -598,6 +659,8 @@ It says:
 
 > "This source discusses a design pattern where X is handled by
 > separating policy from mechanism, using Y invariant, with
-> tradeoff Z."
+> tradeoff Z. The mechanism has O(1) read latency, composes
+> synergistically with mechanism B, and contributes strongly
+> to the goal of minimizing latency in cpu-bound workloads."
 
 That distinction is central.
