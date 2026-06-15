@@ -1,9 +1,11 @@
-﻿"""MCP server â€” exposes Class B concepts to opencode via MCP protocol.
+"""MCP server -- exposes Class B concepts to opencode via MCP protocol.
 
-ALG-KK-MCP-QUERY: query the Class B-only snapshot DB.
+ALG-KK-MCP-QUERY: query the Class B-only snapshot DB (9 tools).
 INV-KK-MCP-SNAPSHOT-ONLY: only the snapshot path is opened; master DB never accessed.
 INV-KK-MCP-NO-WRITE: snapshot DB opened read-only (uri mode=ro).
-INV-KK-MCP-TOOLS-EXPOSED: exactly 4 tools; no Evidence/Source/Advisory in results.
+INV-KK-MCP-TOOLS-EXPOSED: exactly 9 tools; no Evidence/Source/Advisory in results.
+INV-KK-MCP-EXPLORE-DEPTH-CAP: explore_subgraph caps depth at 3.
+INV-KK-MCP-SEARCH-ALL-KINDS: search_concepts uses dynamic ALLOWED_KINDS from exporter.
 """
 
 from __future__ import annotations
@@ -14,12 +16,20 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from export.exporter import ALLOWED_KINDS
+from graph.engine import (
+    compare_neighborhoods,
+    match_scenarios,
+    ranked_recommendations,
+    subgraph_around,
+    transitive_impact,
+)
+
 mcp = FastMCP("know_kernel")
 
 _conn: sqlite3.Connection | None = None
 
 _FORBIDDEN_KINDS = frozenset({"Evidence", "Source", "Advisory"})
-_ALLOWED_KINDS = frozenset({"Concept", "Subsystem", "Proposal"})
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -67,19 +77,20 @@ def init_snapshot(path: str) -> None:
 def search_concepts(query: str) -> list[dict[str, Any]]:
     """Search Class B nodes by name or description keyword.
 
-    Returns Concept, Subsystem, and Proposal nodes whose name or description
-    contains the query string (case-insensitive). Evidence, Source, and Advisory
-    nodes are never returned (INV-KK-MCP-TOOLS-EXPOSED).
+    Uses dynamic ALLOWED_KINDS from exporter (INV-KK-MCP-SEARCH-ALL-KINDS).
+    Evidence, Source, and Advisory nodes are never returned (INV-KK-MCP-TOOLS-EXPOSED).
     """
     conn = _get_conn()
+    placeholders = ",".join("?" for _ in ALLOWED_KINDS)
     rows = conn.execute(
-        """SELECT id, kind, attrs FROM nodes
-           WHERE kind IN ('Concept', 'Subsystem', 'Proposal')
+        f"""SELECT id, kind, attrs FROM nodes
+           WHERE kind IN ({placeholders})
              AND (json_extract(attrs, '$.name') LIKE ?
-                  OR json_extract(attrs, '$.description') LIKE ?)
+                  OR json_extract(attrs, '$.description') LIKE ?
+                  OR attrs LIKE ?)
            ORDER BY kind, id
            LIMIT 50""",
-        (f"%{query}%", f"%{query}%"),
+        (*ALLOWED_KINDS, f"%{query}%", f"%{query}%", f"%{query}%"),
     ).fetchall()
     return [_row_to_dict(r) for r in rows]
 
@@ -131,12 +142,74 @@ def get_subsystem_concepts(subsystem_id: str) -> list[dict[str, Any]]:
     return [_row_to_dict(r) for r in rows]
 
 
+_MCP_MAX_DEPTH = 3
+
+
+@mcp.tool()
+def get_impact_surface(concept_id: str) -> dict[str, Any]:
+    """Get the full impact surface for a Concept: invariants, failure modes,
+    protocols, profiles, goals, compatibilities, comparatives, scenarios."""
+    conn = _get_conn()
+    return transitive_impact(conn, concept_id)
+
+
+@mcp.tool()
+def find_concepts_for_goal(goal_name: str) -> list[dict[str, Any]]:
+    """Find Concepts that contribute to an OptimizationGoal, ranked by score.
+
+    Looks up the goal by name, then calls ranked_recommendations().
+    """
+    conn = _get_conn()
+    goals = conn.execute(
+        "SELECT id FROM nodes WHERE kind = 'OptimizationGoal' "
+        "AND json_extract(attrs, '$.name') = ?",
+        (goal_name,),
+    ).fetchall()
+    if not goals:
+        return []
+    return ranked_recommendations(conn, goals[0][0])
+
+
+@mcp.tool()
+def compare_concepts(id_a: str, id_b: str) -> dict[str, Any]:
+    """Compare two Concepts: neighborhood diff + any ComparativeAnalysis nodes."""
+    conn = _get_conn()
+    diff = compare_neighborhoods(conn, id_a, id_b, depth=1)
+    comp_rows = conn.execute(
+        """SELECT n.id, n.kind, n.attrs FROM nodes n
+           JOIN edges e1 ON e1.source_id = n.id AND e1.kind = 'compares' AND e1.target_id = ?
+           JOIN edges e2 ON e2.source_id = n.id AND e2.kind = 'compares' AND e2.target_id = ?
+           WHERE n.kind = 'ComparativeAnalysis'""",
+        (id_a, id_b),
+    ).fetchall()
+    comparatives = [_row_to_dict(r) for r in comp_rows]
+    return {"diff": diff, "comparatives": comparatives}
+
+
+@mcp.tool()
+def match_workload(workload_type: str) -> list[dict[str, Any]]:
+    """Find UseCaseScenarios matching a workload type with suited Concepts."""
+    conn = _get_conn()
+    return match_scenarios(conn, workload_type=workload_type)
+
+
+@mcp.tool()
+def explore_subgraph(node_id: str, depth: int = 2) -> dict[str, Any]:
+    """Explore the neighborhood of a node via multi-hop BFS.
+
+    INV-KK-MCP-EXPLORE-DEPTH-CAP: depth is capped at 3.
+    """
+    conn = _get_conn()
+    capped_depth = min(depth, _MCP_MAX_DEPTH)
+    return subgraph_around(conn, node_id, depth=capped_depth)
+
+
 def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
         prog="kk-mcp",
-        description="know_kernel MCP server â€” serves Class B concepts to LLM tools.",
+        description="know_kernel MCP server -- serves Class B concepts to LLM tools.",
     )
     parser.add_argument(
         "--snapshot", required=True,
