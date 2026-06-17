@@ -8,9 +8,16 @@ from __future__ import annotations
 
 import json
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+
+from graph.engine import (
+    compare_neighborhoods,
+    match_scenarios,
+    ranked_recommendations,
+    transitive_impact,
+)
 
 
 def _rows_to_dicts(rows) -> list[dict]:
@@ -120,3 +127,43 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "nodes": _rows_to_dicts(node_rows),
             "edges": [dict(e) for e in edge_rows],
         }
+
+    @app.get("/api/impact/{node_id}")
+    async def api_impact(request: Request, node_id: str):
+        conn = request.app.state.conn
+        row = conn.execute("SELECT id FROM nodes WHERE id = ?", (node_id,)).fetchone()
+        if row is None:
+            return JSONResponse({"error": "Node not found"}, status_code=404)
+        return transitive_impact(conn, node_id)
+
+    @app.get("/api/compare/{id_a}/{id_b}")
+    async def api_compare(request: Request, id_a: str, id_b: str):
+        conn = request.app.state.conn
+        for nid in (id_a, id_b):
+            if conn.execute("SELECT id FROM nodes WHERE id = ?", (nid,)).fetchone() is None:
+                return JSONResponse({"error": f"Node {nid} not found"}, status_code=404)
+        diff = compare_neighborhoods(conn, id_a, id_b, depth=1)
+        comp_rows = conn.execute(
+            "SELECT n.id, n.kind, n.attrs FROM nodes n "
+            "JOIN edges e1 ON e1.source_id = n.id AND e1.kind = 'compares' AND e1.target_id = ? "
+            "JOIN edges e2 ON e2.source_id = n.id AND e2.kind = 'compares' AND e2.target_id = ? "
+            "WHERE n.kind = 'ComparativeAnalysis'",
+            (id_a, id_b),
+        ).fetchall()
+        comparatives = _rows_to_dicts(comp_rows)
+        return {"diff": diff, "comparatives": comparatives}
+
+    @app.get("/api/recommendations/{goal_id}")
+    async def api_recommendations(request: Request, goal_id: str, limit: int = Query(10)):
+        conn = request.app.state.conn
+        row = conn.execute("SELECT id FROM nodes WHERE id = ?", (goal_id,)).fetchone()
+        if row is None:
+            return JSONResponse({"error": "Goal not found"}, status_code=404)
+        return ranked_recommendations(conn, goal_id, limit)
+
+    @app.get("/api/match")
+    async def api_match(request: Request, workload_type: str = Query(None)):
+        if workload_type is None:
+            return JSONResponse({"error": "workload_type parameter required"}, status_code=400)
+        conn = request.app.state.conn
+        return match_scenarios(conn, workload_type=workload_type)

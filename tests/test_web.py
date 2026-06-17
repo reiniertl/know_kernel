@@ -231,3 +231,51 @@ def test_web_all_allowed_kinds_have_detail(rich_client):
         text = response.text
         assert "attrs-section" in text or "edge-group" in text, \
             f"{kind} ({nid}) missing structured rendering"
+
+
+# --- ALG-KK-WEB-QUERY-ROUTES tests (INV-KK-WEB-QUERY-DELEGATES) ---
+
+def test_web_api_impact_returns_all_categories(rich_client):
+    response = rich_client.get("/api/impact/c-1")
+    assert response.status_code == 200
+    data = response.json()
+    assert "invariants" in data
+    assert "failure_modes" in data
+    assert "protocols" in data
+    assert len(data["invariants"]) >= 1
+
+
+def test_web_api_impact_404_on_missing_node(rich_client):
+    response = rich_client.get("/api/impact/nonexistent")
+    assert response.status_code == 404
+
+
+def test_web_api_compare_returns_diff_structure(rich_client):
+    response = rich_client.get("/api/compare/c-1/kinv-1")
+    assert response.status_code == 200
+    data = response.json()
+    assert "diff" in data
+    assert "comparatives" in data
+    diff = data["diff"]
+    assert "shared" in diff
+    assert "only_a" in diff
+    assert "only_b" in diff
+
+
+def test_web_api_recommendations_returns_list(rich_client):
+    response = rich_client.get("/api/recommendations/og-1")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+
+
+def test_web_api_match_returns_scenarios(rich_client):
+    response = rich_client.get("/api/match?workload_type=high-throughput")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+
+
+def test_web_api_match_400_on_missing_param(rich_client):
+    response = rich_client.get("/api/match")
+    assert response.status_code == 400
