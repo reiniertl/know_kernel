@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
+from graph.diagnostics import diagnose_graph
 from graph.engine import (
     compare_neighborhoods,
     match_scenarios,
@@ -167,6 +168,14 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             return JSONResponse({"error": "workload_type parameter required"}, status_code=400)
         conn = request.app.state.conn
         return match_scenarios(conn, workload_type=workload_type)
+
+    @app.get("/api/diagnostics")
+    async def api_diagnostics(request: Request):
+        import dataclasses
+
+        conn = request.app.state.conn
+        report = diagnose_graph(conn)
+        return dataclasses.asdict(report)
 
     @app.get("/viz", response_class=HTMLResponse)
     async def viz(request: Request):

@@ -1,5 +1,6 @@
-﻿"""Shared graph engine library â€” SQLite-backed concept store."""
+"""Shared graph engine library -- SQLite-backed concept store."""
 
+from graph.diagnostics import DiagnosticReport, diagnose_graph
 from graph.engine import (
     AdmissibilityError,
     add_edge,
@@ -41,6 +42,7 @@ from graph.schema import (
 
 __all__ = [
     "AdmissibilityError",
+    "DiagnosticReport",
     "EDGE_KINDS",
     "EDGE_VALID_PAIRS",
     "NODE_KINDS",
@@ -53,6 +55,7 @@ __all__ = [
     "create_kernel",
     "create_optimization_goal",
     "create_use_case_scenario",
+    "diagnose_graph",
     "delete_edge",
     "delete_node",
     "get_edge",
