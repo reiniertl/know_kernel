@@ -1,33 +1,171 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>{{ node.id }}</h1>
-<p><strong>Kind:</strong> {{ node.kind }}</p>
-<h2>Attributes</h2>
-<table>
-  <thead><tr><th>Key</th><th>Value</th></tr></thead>
-  <tbody>
-  {% if node.attrs %}
-    {% for key, val in node.attrs.items() %}
+<p><span class="badge badge-kind">{{ node.kind }}</span></p>
+
+{% set attrs = node.attrs or {} %}
+
+{% if node.kind == 'Concept' %}
+<div class="attrs-section">
+  <h2>{{ attrs.get('name', node.id) }}</h2>
+  {% if attrs.get('description') %}<p>{{ attrs.description }}</p>{% endif %}
+  {% if attrs.get('key_properties') %}
+  <h3>Key Properties</h3>
+  <ul>{% for prop in attrs.key_properties %}<li>{{ prop }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if attrs.get('tradeoffs') %}
+  <h3>Tradeoffs</h3>
+  <ul>{% for t in attrs.tradeoffs %}<li>{{ t }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if attrs.get('design_rationale') %}
+  <h3>Design Rationale</h3>
+  <p>{{ attrs.design_rationale }}</p>
+  {% endif %}
+</div>
+
+{% elif node.kind == 'KernelInvariant' %}
+<div class="attrs-section">
+  {% if attrs.get('predicate') %}
+  <h3>Predicate</h3>
+  <blockquote>{{ attrs.predicate }}</blockquote>
+  {% endif %}
+  {% if attrs.get('strength') %}
+  <h3>Strength</h3>
+  {% set strength_class = {'safety': 'badge-safety', 'liveness': 'badge-liveness', 'performance': 'badge-performance', 'structural': 'badge-structural'} %}
+  <span class="badge {{ strength_class.get(attrs.strength, 'badge-structural') }}">{{ attrs.strength }}</span>
+  {% endif %}
+  {% if attrs.get('scope') %}<p><strong>Scope:</strong> {{ attrs.scope }}</p>{% endif %}
+</div>
+
+{% elif node.kind == 'FailureMode' %}
+<div class="attrs-section">
+  {% if attrs.get('symptom') %}
+  <h3>Symptom</h3>
+  <p>{{ attrs.symptom }}</p>
+  {% endif %}
+  {% if attrs.get('blast_radius') %}
+  <h3>Blast Radius</h3>
+  {% set blast_class = {'kernel-wide': 'badge-blast-kernel-wide', 'subsystem': 'badge-blast-subsystem', 'local': 'badge-blast-local'} %}
+  <span class="badge {{ blast_class.get(attrs.blast_radius, 'badge-structural') }}">{{ attrs.blast_radius }}</span>
+  {% endif %}
+  {% if attrs.get('recoverability') %}
+  <h3>Recoverability</h3>
+  {% set recovery_class = {'data-loss': 'badge-recovery-data-loss', 'requires-restart': 'badge-recovery-requires-restart', 'self-healing': 'badge-recovery-self-healing'} %}
+  <span class="badge {{ recovery_class.get(attrs.recoverability, 'badge-structural') }}">{{ attrs.recoverability }}</span>
+  {% endif %}
+</div>
+
+{% elif node.kind == 'InteractionProtocol' %}
+<div class="attrs-section">
+  {% if attrs.get('rule') %}
+  <h3>Rule</h3>
+  <p>{{ attrs.rule }}</p>
+  {% endif %}
+  {% if attrs.get('ordering') %}
+  <h3>Ordering</h3>
+  {% set ordering_icons = {'before': '→', 'after': '←', 'never-during': '⊘', 'must-hold-while': '⟳'} %}
+  <span class="badge badge-structural">{{ ordering_icons.get(attrs.ordering, '') }} {{ attrs.ordering }}</span>
+  {% endif %}
+  {% if attrs.get('violation_mode') %}
+  <h3>Violation Mode</h3>
+  <p>{{ attrs.violation_mode }}</p>
+  {% endif %}
+</div>
+
+{% elif node.kind == 'PerformanceProfile' %}
+<div class="attrs-section">
+  {% if attrs.get('metric') %}<p><strong>Metric:</strong> {{ attrs.metric }}</p>{% endif %}
+  {% if attrs.get('complexity') %}<p><strong>Complexity:</strong> {{ attrs.complexity }}</p>{% endif %}
+  {% if attrs.get('best_case') or attrs.get('worst_case') or attrs.get('typical_case') %}
+  <table>
+    <thead><tr><th>Case</th><th>Value</th></tr></thead>
+    <tbody>
+      {% if attrs.get('best_case') %}<tr><td>Best</td><td>{{ attrs.best_case }}</td></tr>{% endif %}
+      {% if attrs.get('typical_case') %}<tr><td>Typical</td><td>{{ attrs.typical_case }}</td></tr>{% endif %}
+      {% if attrs.get('worst_case') %}<tr><td>Worst</td><td>{{ attrs.worst_case }}</td></tr>{% endif %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if attrs.get('conditions') %}<p><strong>Conditions:</strong> {{ attrs.conditions }}</p>{% endif %}
+</div>
+
+{% elif node.kind == 'CompatibilityAssessment' %}
+<div class="attrs-section">
+  {% if attrs.get('synergy') %}<p><strong>Synergy:</strong> {{ attrs.synergy }}</p>{% endif %}
+  {% if attrs.get('rationale') %}<p><strong>Rationale:</strong> {{ attrs.rationale }}</p>{% endif %}
+  {% if attrs.get('conditions') %}<p><strong>Conditions:</strong> {{ attrs.conditions }}</p>{% endif %}
+</div>
+
+{% elif node.kind == 'ComparativeAnalysis' %}
+<div class="attrs-section">
+  {% if attrs.get('dimension') %}<p><strong>Dimension:</strong> {{ attrs.dimension }}</p>{% endif %}
+  {% if attrs.get('winner') %}<p><strong>Winner:</strong> <strong>{{ attrs.winner }}</strong></p>{% endif %}
+  {% if attrs.get('quantitative_delta') %}<p><strong>Delta:</strong> {{ attrs.quantitative_delta }}</p>{% endif %}
+  {% if attrs.get('conditions') %}<p><strong>Conditions:</strong> {{ attrs.conditions }}</p>{% endif %}
+</div>
+
+{% elif node.kind == 'OptimizationGoal' %}
+<div class="attrs-section">
+  {% if attrs.get('name') %}<h2>{{ attrs.name }}</h2>{% endif %}
+  {% if attrs.get('description') %}<p>{{ attrs.description }}</p>{% endif %}
+  {% if attrs.get('metric') %}<p><strong>Metric:</strong> {{ attrs.metric }}</p>{% endif %}
+  {% if attrs.get('direction') %}
+  <p><strong>Direction:</strong> {% if attrs.direction == 'maximize' %}↑{% else %}↓{% endif %} {{ attrs.direction }}</p>
+  {% endif %}
+</div>
+
+{% elif node.kind == 'UseCaseScenario' %}
+<div class="attrs-section">
+  {% if attrs.get('name') %}<h2>{{ attrs.name }}</h2>{% endif %}
+  {% if attrs.get('description') %}<p>{{ attrs.description }}</p>{% endif %}
+  {% if attrs.get('workload_type') %}<p><strong>Workload Type:</strong> {{ attrs.workload_type }}</p>{% endif %}
+  {% if attrs.get('constraints') %}<p><strong>Constraints:</strong> {{ attrs.constraints }}</p>{% endif %}
+</div>
+
+{% elif node.kind == 'Kernel' %}
+<div class="attrs-section">
+  {% if attrs.get('name') %}<h2>{{ attrs.name }}</h2>{% endif %}
+  {% if attrs.get('description') %}<p>{{ attrs.description }}</p>{% endif %}
+  {% if attrs.get('kernel_type') %}<p><strong>Kernel Type:</strong> {{ attrs.kernel_type }}</p>{% endif %}
+</div>
+
+{% else %}
+<div class="attrs-section">
+  <h2>Attributes</h2>
+  {% if attrs %}
+  <table>
+    <thead><tr><th>Key</th><th>Value</th></tr></thead>
+    <tbody>
+    {% for key, val in attrs.items() %}
       <tr><td>{{ key }}</td><td>{{ val }}</td></tr>
     {% endfor %}
+    </tbody>
+  </table>
   {% else %}
-    <tr><td colspan="2">No attributes.</td></tr>
+  <p>No attributes.</p>
   {% endif %}
-  </tbody>
-</table>
+</div>
+{% endif %}
+
 <h2>Edges</h2>
-<table>
-  <thead><tr><th>Kind</th><th>Source</th><th>Target</th></tr></thead>
-  <tbody>
-  {% for edge in edges %}
-    <tr>
-      <td>{{ edge.kind }}</td>
-      <td><a href="/concepts/{{ edge.source_id }}">{{ edge.source_id }}</a></td>
-      <td><a href="/concepts/{{ edge.target_id }}">{{ edge.target_id }}</a></td>
-    </tr>
-  {% else %}
-    <tr><td colspan="3">No edges.</td></tr>
+{% if grouped_edges %}
+  {% for edge_kind, edge_list in grouped_edges.items() %}
+  <details class="edge-group" open>
+    <summary>{{ edge_kind }} <span class="count">{{ edge_list|length }}</span></summary>
+    <ul>
+    {% for e in edge_list %}
+      <li>
+        {% if e.source_id == node.id %}
+        → <a href="/concepts/{{ e.target_id }}">{{ e.target_id }}</a>
+        {% else %}
+        ← <a href="/concepts/{{ e.source_id }}">{{ e.source_id }}</a>
+        {% endif %}
+      </li>
+    {% endfor %}
+    </ul>
+  </details>
   {% endfor %}
-  </tbody>
-</table>
+{% else %}
+  <p>No edges.</p>
+{% endif %}
 {% endblock %}

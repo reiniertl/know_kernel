@@ -71,10 +71,13 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             (node_id, node_id),
         ).fetchall()
         edges = [dict(e) for e in edge_rows]
+        grouped_edges: dict[str, list[dict]] = {}
+        for e in edges:
+            grouped_edges.setdefault(e["kind"], []).append(e)
         return templates.TemplateResponse(
             request,
             "concept_detail.html",
-            {"node": node, "edges": edges},
+            {"node": node, "edges": edges, "grouped_edges": grouped_edges},
         )
 
     @app.get("/subsystems", response_class=HTMLResponse)
