@@ -1,9 +1,9 @@
 """MCP server -- exposes Class B concepts to opencode via MCP protocol.
 
-ALG-KK-MCP-QUERY: query the Class B-only snapshot DB (9 tools).
+ALG-KK-MCP-QUERY: query the Class B-only snapshot DB (11 tools).
 INV-KK-MCP-SNAPSHOT-ONLY: only the snapshot path is opened; master DB never accessed.
 INV-KK-MCP-NO-WRITE: snapshot DB opened read-only (uri mode=ro).
-INV-KK-MCP-TOOLS-EXPOSED: exactly 9 tools; no Evidence/Source/Advisory in results.
+INV-KK-MCP-TOOLS-EXPOSED: exactly 11 tools; no Evidence/Source/Advisory in results.
 INV-KK-MCP-EXPLORE-DEPTH-CAP: explore_subgraph caps depth at 3.
 INV-KK-MCP-SEARCH-ALL-KINDS: search_concepts uses dynamic ALLOWED_KINDS from exporter.
 """
@@ -20,6 +20,8 @@ from export.exporter import ALLOWED_KINDS
 from graph.engine import (
     compare_neighborhoods,
     match_scenarios,
+    path_exists,
+    query_edges_by_attrs,
     ranked_recommendations,
     subgraph_around,
     transitive_impact,
@@ -103,9 +105,10 @@ def get_concept(id: str) -> dict[str, Any] | None:
     Only returns edges between allowed kinds.
     """
     conn = _get_conn()
+    placeholders = ",".join("?" for _ in ALLOWED_KINDS)
     row = conn.execute(
-        "SELECT id, kind, attrs FROM nodes WHERE id = ? AND kind IN ('Concept', 'Subsystem', 'Proposal')",
-        (id,),
+        f"SELECT id, kind, attrs FROM nodes WHERE id = ? AND kind IN ({placeholders})",
+        (id, *ALLOWED_KINDS),
     ).fetchone()
     if row is None:
         return None
@@ -202,6 +205,47 @@ def explore_subgraph(node_id: str, depth: int = 2) -> dict[str, Any]:
     conn = _get_conn()
     capped_depth = min(depth, _MCP_MAX_DEPTH)
     return subgraph_around(conn, node_id, depth=capped_depth)
+
+
+@mcp.tool()
+def check_path(source_id: str, target_id: str, edge_kinds: list[str] | None = None) -> dict[str, Any]:
+    """Check if a path exists between two nodes in the graph.
+
+    ALG-KK-MCP-PATH-EXISTS: delegates to engine.path_exists().
+    Returns {reachable: bool}. If edge_kinds is provided, only follows those edge kinds.
+    """
+    conn = _get_conn()
+    row_s = conn.execute("SELECT id FROM nodes WHERE id = ?", (source_id,)).fetchone()
+    row_t = conn.execute("SELECT id FROM nodes WHERE id = ?", (target_id,)).fetchone()
+    if row_s is None or row_t is None:
+        return {"reachable": False}
+    reachable = path_exists(conn, source_id, target_id, edge_kinds)
+    return {"reachable": reachable}
+
+
+@mcp.tool()
+def query_edges(kind: str, filters: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    """Query edges by kind and optional attribute filters.
+
+    ALG-KK-MCP-QUERY-EDGES: delegates to engine.query_edges_by_attrs().
+    Filters results to edges where both endpoints are ALLOWED_KINDS.
+    Returns at most 50 results.
+    """
+    conn = _get_conn()
+    results = query_edges_by_attrs(conn, kind, **(filters or {}))
+    allowed = set(ALLOWED_KINDS)
+    node_kinds: dict[str, str] = {}
+    for edge in results:
+        for nid in (edge["source_id"], edge["target_id"]):
+            if nid not in node_kinds:
+                row = conn.execute("SELECT kind FROM nodes WHERE id = ?", (nid,)).fetchone()
+                node_kinds[nid] = row["kind"] if row else ""
+    filtered = [
+        e for e in results
+        if node_kinds.get(e["source_id"], "") in allowed
+        and node_kinds.get(e["target_id"], "") in allowed
+    ]
+    return filtered[:50]
 
 
 def main() -> None:

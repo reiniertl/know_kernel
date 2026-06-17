@@ -280,3 +280,61 @@ def test_search_concepts_all_kinds(rich_snapshot_path):
     results_lock = srv.search_concepts("lock ordering")
     kinds_lock = {r["kind"] for r in results_lock}
     assert "KernelInvariant" in kinds_lock
+
+
+# --- B1: get_concept expanded to ALLOWED_KINDS ---
+
+def test_mcp_get_concept_returns_kernel_invariant(rich_snapshot_path):
+    result = srv.get_concept("ki1")
+    assert result is not None
+    assert result["kind"] == "KernelInvariant"
+
+
+def test_mcp_get_concept_returns_performance_profile(rich_snapshot_path):
+    result = srv.get_concept("pp1")
+    assert result is not None
+    assert result["kind"] == "PerformanceProfile"
+
+
+def test_mcp_get_concept_still_rejects_evidence(snapshot_path):
+    """Evidence is excluded from snapshot, so get_concept returns None."""
+    result = srv.get_concept("ev-1")
+    assert result is None
+
+
+# --- B2: check_path tool ---
+
+def test_mcp_check_path_reachable(rich_snapshot_path):
+    result = srv.check_path("c1", "sub-sched")
+    assert result["reachable"] is True
+
+
+def test_mcp_check_path_unreachable(rich_snapshot_path):
+    result = srv.check_path("c1", "ki1")
+    assert result["reachable"] is False
+
+
+def test_mcp_check_path_with_edge_kind_filter(rich_snapshot_path):
+    result = srv.check_path("c1", "sub-sched", edge_kinds=["belongs-to"])
+    assert result["reachable"] is True
+    result2 = srv.check_path("c1", "sub-sched", edge_kinds=["governed-by"])
+    assert result2["reachable"] is False
+
+
+def test_mcp_check_path_missing_node(rich_snapshot_path):
+    result = srv.check_path("nonexistent", "c1")
+    assert result["reachable"] is False
+
+
+# --- B3: query_edges tool ---
+
+def test_mcp_query_edges_by_kind(rich_snapshot_path):
+    results = srv.query_edges("belongs-to")
+    assert len(results) >= 2
+    assert all(e["kind"] == "belongs-to" for e in results)
+
+
+def test_mcp_query_edges_returns_list(rich_snapshot_path):
+    results = srv.query_edges("governed-by")
+    assert isinstance(results, list)
+    assert len(results) >= 1
