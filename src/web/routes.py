@@ -167,3 +167,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             return JSONResponse({"error": "workload_type parameter required"}, status_code=400)
         conn = request.app.state.conn
         return match_scenarios(conn, workload_type=workload_type)
+
+    @app.get("/viz", response_class=HTMLResponse)
+    async def viz(request: Request):
+        return templates.TemplateResponse(request, "graph_viz.html", {})

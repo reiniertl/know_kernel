@@ -279,3 +279,21 @@ def test_web_api_match_returns_scenarios(rich_client):
 def test_web_api_match_400_on_missing_param(rich_client):
     response = rich_client.get("/api/match")
     assert response.status_code == 400
+
+
+# --- ALG-KK-WEB-GRAPH-VIZ tests ---
+
+def test_web_viz_route_returns_html(client):
+    response = client.get("/viz")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+
+
+def test_web_viz_contains_graph_fetch(client):
+    response = client.get("/viz")
+    assert "/graph" in response.text
+
+
+def test_web_viz_contains_d3_reference(client):
+    response = client.get("/viz")
+    assert "d3" in response.text.lower()
