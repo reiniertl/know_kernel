@@ -215,6 +215,17 @@ def test_web_edges_grouped_by_kind(rich_client):
     assert '<span class="count">' in text
 
 
+def test_web_edge_links_show_names(rich_client):
+    """ALG-KK-WEB-KIND-DETAIL: edge links display resolved names, not raw IDs."""
+    response = rich_client.get("/concepts/c-1")
+    assert response.status_code == 200
+    text = response.text
+    assert "kinv-1" not in text or "No partial updates" in text, \
+        "Edge link should show invariant predicate, not raw ID"
+    assert "(KernelInvariant)" in text
+    assert "(Subsystem)" in text
+
+
 def test_web_all_allowed_kinds_have_detail(rich_client):
     """INV-KK-WEB-KIND-AWARE-DETAIL: no kind renders as raw JSON dump."""
     kind_to_id = {

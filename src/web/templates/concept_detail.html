@@ -156,9 +156,9 @@
     {% for e in edge_list %}
       <li>
         {% if e.source_id == node.id %}
-        → <a href="/concepts/{{ e.target_id }}">{{ e.target_id }}</a>
+        → <a href="/concepts/{{ e.target_id }}">{{ node_labels.get(e.target_id, e.target_id) }}</a>
         {% else %}
-        ← <a href="/concepts/{{ e.source_id }}">{{ e.source_id }}</a>
+        ← <a href="/concepts/{{ e.source_id }}">{{ node_labels.get(e.source_id, e.source_id) }}</a>
         {% endif %}
       </li>
     {% endfor %}

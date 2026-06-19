@@ -82,10 +82,40 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         grouped_edges: dict[str, list[dict]] = {}
         for e in edges:
             grouped_edges.setdefault(e["kind"], []).append(e)
+        neighbor_ids = {
+            nid
+            for e in edges
+            for nid in (e["source_id"], e["target_id"])
+            if nid != node_id
+        }
+        node_labels: dict[str, str] = {}
+        if neighbor_ids:
+            placeholders = ",".join("?" for _ in neighbor_ids)
+            label_rows = conn.execute(
+                f"SELECT id, kind, attrs FROM nodes WHERE id IN ({placeholders})",
+                tuple(neighbor_ids),
+            ).fetchall()
+            for lr in label_rows:
+                lr_dict = _rows_to_dicts([lr])[0]
+                attrs = lr_dict.get("attrs") or {}
+                kind = lr_dict["kind"]
+                label = (
+                    attrs.get("name")
+                    or (attrs.get("predicate", "") or "")[:60]
+                    or (attrs.get("rule", "") or "")[:60]
+                    or (attrs.get("metric", "") or "")[:40]
+                    or lr_dict["id"]
+                )
+                node_labels[lr_dict["id"]] = f"{label} ({kind})"
         return templates.TemplateResponse(
             request,
             "concept_detail.html",
-            {"node": node, "edges": edges, "grouped_edges": grouped_edges},
+            {
+                "node": node,
+                "edges": edges,
+                "grouped_edges": grouped_edges,
+                "node_labels": node_labels,
+            },
         )
 
     @app.get("/subsystems", response_class=HTMLResponse)
