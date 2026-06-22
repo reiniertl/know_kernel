@@ -711,3 +711,114 @@ def test_non_concept_detail_no_impact_link(rich_client):
     response = rich_client.get("/concepts/kinv-1")
     assert response.status_code == 200
     assert "/impact/" not in response.text
+
+
+# --- INV-KK-WEB-PAGINATION tests ---
+
+
+@pytest.fixture
+def paginated_client(tmp_path):
+    """Client with 15 Concept nodes for pagination testing."""
+    db_path = tmp_path / "page_test.db"
+    conn = init_db(db_path)
+    for i in range(15):
+        add_node(conn, f"c-{i:02d}", "Concept", {
+            "name": f"Concept {i:02d}",
+            "description": f"Description {i}",
+            "artifact_class": "B",
+            "key_properties": [],
+            "tradeoffs": [],
+            "design_rationale": "test",
+        })
+    add_node(conn, "sub-1", "Subsystem", {"name": "TestSub"})
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        yield c
+
+
+def test_pagination_limits_results(paginated_client):
+    """INV-KK-WEB-PAGINATION: per_page limits results."""
+    response = paginated_client.get("/concepts?per_page=10")
+    assert response.status_code == 200
+    assert response.text.count('<td><code>c-') == 10
+
+
+def test_pagination_has_next(paginated_client):
+    """INV-KK-WEB-PAGINATION: has_next shows Next link when more pages exist."""
+    response = paginated_client.get("/concepts?per_page=10")
+    assert response.status_code == 200
+    assert "Next →" in response.text
+
+
+def test_pagination_page_2_different(paginated_client):
+    """INV-KK-WEB-PAGINATION: page=2 returns different nodes than page=1."""
+    r1 = paginated_client.get("/concepts?per_page=10&page=1")
+    r2 = paginated_client.get("/concepts?per_page=10&page=2")
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert "c-00" in r1.text
+    assert "c-00" not in r2.text
+
+
+def test_pagination_last_page_no_next(paginated_client):
+    """INV-KK-WEB-PAGINATION: last page has no Next link."""
+    response = paginated_client.get("/concepts?per_page=10&page=2")
+    assert response.status_code == 200
+    assert "Next →" not in response.text
+
+
+def test_pagination_first_page_no_previous(paginated_client):
+    """INV-KK-WEB-PAGINATION: first page has no Previous link."""
+    response = paginated_client.get("/concepts?per_page=10&page=1")
+    assert response.status_code == 200
+    assert "← Previous" not in response.text
+
+
+def test_pagination_page_2_has_previous(paginated_client):
+    response = paginated_client.get("/concepts?per_page=10&page=2")
+    assert response.status_code == 200
+    assert "← Previous" in response.text
+
+
+def test_pagination_per_page_too_small(paginated_client):
+    """INV-KK-WEB-PAGINATION: per_page < 10 rejected."""
+    response = paginated_client.get("/concepts?per_page=5")
+    assert response.status_code == 422
+
+
+def test_pagination_per_page_too_large(paginated_client):
+    """INV-KK-WEB-PAGINATION: per_page > 200 rejected."""
+    response = paginated_client.get("/concepts?per_page=500")
+    assert response.status_code == 422
+
+
+def test_pagination_preserves_kind_filter(paginated_client):
+    """INV-KK-WEB-PAGINATION: kind filter preserved in pagination links."""
+    response = paginated_client.get("/concepts?kind=Concept&per_page=10")
+    assert response.status_code == 200
+    assert "kind=Concept" in response.text
+    assert "Next →" in response.text
+
+
+def test_pagination_default_values(paginated_client):
+    """INV-KK-WEB-PAGINATION: defaults are page=1, per_page=50."""
+    response = paginated_client.get("/concepts")
+    assert response.status_code == 200
+    assert "Page 1" in response.text
+    assert "Next →" not in response.text
+
+
+def test_subsystems_pagination(paginated_client):
+    """INV-KK-WEB-PAGINATION: /subsystems supports pagination."""
+    response = paginated_client.get("/subsystems?per_page=10")
+    assert response.status_code == 200
+    assert "Page 1" in response.text
+
+
+def test_sources_pagination(paginated_client):
+    """INV-KK-WEB-PAGINATION: /sources supports pagination."""
+    response = paginated_client.get("/sources?per_page=10")
+    assert response.status_code == 200
+    assert "Page 1" in response.text

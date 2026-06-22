@@ -4,7 +4,7 @@
 {% if active_kind %}
 <p>Showing {{ nodes | length }} {{ active_kind }} node(s) · <a href="/concepts">View all</a></p>
 {% else %}
-<p>{{ nodes | length }} item(s)</p>
+<p>{{ nodes | length }} item(s){% if page and page > 1 %} (page {{ page }}){% endif %}</p>
 {% endif %}
 <table>
   <thead><tr><th>Name</th><th>Kind</th><th>ID</th></tr></thead>
@@ -20,4 +20,15 @@
   {% endfor %}
   </tbody>
 </table>
+{% if page is defined %}
+<div class="pagination" style="margin-top:1rem;">
+  {% if page > 1 %}
+    <a href="?page={{ page - 1 }}&per_page={{ per_page }}{% if active_kind %}&kind={{ active_kind }}{% endif %}">← Previous</a>
+  {% endif %}
+  <span style="margin:0 0.5rem;">Page {{ page }}</span>
+  {% if has_next %}
+    <a href="?page={{ page + 1 }}&per_page={{ per_page }}{% if active_kind %}&kind={{ active_kind }}{% endif %}">Next →</a>
+  {% endif %}
+</div>
+{% endif %}
 {% endblock %}
