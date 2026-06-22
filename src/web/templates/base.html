@@ -39,7 +39,30 @@
   <a href="/sources">Sources</a>
   <a href="/graph">Graph JSON</a>
   <a href="/viz">Graph</a>
+  <span style="display:inline-block;position:relative;margin-left:1rem;">
+    <input type="text" id="search-input" placeholder="Search nodes..."
+           hx-get="/api/search" hx-trigger="keyup changed delay:300ms"
+           hx-target="#search-results" hx-swap="innerHTML"
+           name="q" autocomplete="off"
+           style="font-family:monospace;padding:0.2rem 0.4rem;">
+    <div id="search-results" style="position:absolute;top:100%;left:0;z-index:100;background:#fff;border:1px solid #ccc;max-height:300px;overflow-y:auto;min-width:300px;display:none;"></div>
+  </span>
 </nav>
+<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+<script>
+document.body.addEventListener('htmx:afterSwap', function(e) {
+  if (e.detail.target.id === 'search-results') {
+    e.detail.target.style.display = e.detail.target.innerHTML.trim() ? 'block' : 'none';
+  }
+});
+document.getElementById('search-input').addEventListener('blur', function() {
+  setTimeout(function(){ document.getElementById('search-results').style.display = 'none'; }, 200);
+});
+document.getElementById('search-input').addEventListener('focus', function() {
+  var r = document.getElementById('search-results');
+  if (r.innerHTML.trim()) r.style.display = 'block';
+});
+</script>
 {% block content %}{% endblock %}
 </body>
 </html>

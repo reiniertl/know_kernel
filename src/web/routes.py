@@ -242,6 +242,40 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         conn = request.app.state.conn
         return match_scenarios(conn, workload_type=workload_type)
 
+    @app.get("/api/search")
+    async def api_search(request: Request, q: str = Query(""), kind: str | None = None):
+        """Search nodes by name/description/attrs (ALG-KK-WEB-SEARCH, INV-KK-WEB-SEARCH-FULL-ACCESS)."""
+        conn = request.app.state.conn
+        if not q.strip():
+            if request.headers.get("HX-Request"):
+                return HTMLResponse("")
+            return JSONResponse([])
+        pattern = f"%{q}%"
+        sql = (
+            "SELECT id, kind, attrs FROM nodes"
+            " WHERE (json_extract(attrs, '$.name') LIKE ?"
+            " OR json_extract(attrs, '$.description') LIKE ?"
+            " OR attrs LIKE ?)"
+        )
+        params: list[str] = [pattern, pattern, pattern]
+        if kind:
+            sql += " AND kind = ?"
+            params.append(kind)
+        sql += " ORDER BY kind, id LIMIT 30"
+        rows = conn.execute(sql, params).fetchall()
+        results = _rows_to_dicts(rows)
+        for r in results:
+            r["display_name"] = display_name_for_node(
+                r["kind"], r.get("attrs") or {}, r["id"]
+            )
+        if request.headers.get("HX-Request"):
+            return templates.TemplateResponse(
+                request, "search_results.html", {"results": results}
+            )
+        return JSONResponse(
+            [{"id": r["id"], "kind": r["kind"], "attrs": r["attrs"], "display_name": r["display_name"]} for r in results]
+        )
+
     @app.get("/api/diagnostics")
     async def api_diagnostics(request: Request):
         import dataclasses

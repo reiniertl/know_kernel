@@ -1,0 +1,9 @@
+{% for r in results %}
+<a href="/concepts/{{ r.id }}" style="display:block;padding:0.3rem 0.5rem;text-decoration:none;color:#2c3e50;border-bottom:1px solid #eee;">
+  <strong>{{ r.display_name }}</strong>
+  <span style="color:#7f8c8d;font-size:0.85em;margin-left:0.3rem;">{{ r.kind }}</span>
+</a>
+{% endfor %}
+{% if not results %}
+<div style="padding:0.3rem 0.5rem;color:#7f8c8d;">No results found</div>
+{% endif %}

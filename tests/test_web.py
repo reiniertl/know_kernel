@@ -503,3 +503,102 @@ def test_dashboard_kind_links(client):
     assert response.status_code == 200
     assert 'href="/concepts?kind=Concept"' in response.text
     assert 'href="/concepts?kind=Subsystem"' in response.text
+
+
+# --- ALG-KK-WEB-SEARCH tests (INV-KK-WEB-SEARCH-FULL-ACCESS) ---
+
+
+def test_search_returns_matching_results(client):
+    """ALG-KK-WEB-SEARCH: matching q returns results with display_name."""
+    response = client.get("/api/search?q=Lock-free")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) >= 1
+    assert data[0]["id"] == "concept-1"
+    assert data[0]["display_name"] == "Lock-free Queue"
+    assert "kind" in data[0]
+    assert "attrs" in data[0]
+
+
+def test_search_empty_q_returns_empty(client):
+    """ALG-KK-WEB-SEARCH: empty q returns empty result set."""
+    response = client.get("/api/search?q=")
+    assert response.status_code == 200
+    data = response.json()
+    assert data == []
+
+
+def test_search_whitespace_q_returns_empty(client):
+    response = client.get("/api/search?q=%20%20")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_search_no_q_returns_empty(client):
+    response = client.get("/api/search")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_search_kind_filter(rich_client):
+    """ALG-KK-WEB-SEARCH: kind filter restricts results to matching kind."""
+    response = rich_client.get("/api/search?q=RCU&kind=Concept")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) >= 1
+    assert all(r["kind"] == "Concept" for r in data)
+
+
+def test_search_kind_filter_excludes_other_kinds(rich_client):
+    response = rich_client.get("/api/search?q=RCU&kind=KernelInvariant")
+    assert response.status_code == 200
+    data = response.json()
+    assert all(r["kind"] == "KernelInvariant" for r in data)
+
+
+def test_search_full_access_no_class_filter(rich_client):
+    """INV-KK-WEB-SEARCH-FULL-ACCESS: search returns all kinds without class-based filtering."""
+    response = rich_client.get("/api/search?q=e")
+    assert response.status_code == 200
+    data = response.json()
+    kinds_found = {r["kind"] for r in data}
+    assert len(kinds_found) >= 2
+
+
+def test_search_no_match_returns_empty(client):
+    response = client.get("/api/search?q=zzzznonexistent")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_search_sql_injection_safe(client):
+    """Parameterized queries prevent SQL injection."""
+    response = client.get("/api/search?q=' OR 1=1 --")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 0
+
+
+def test_search_htmx_returns_html_partial(client):
+    """ALG-KK-WEB-SEARCH: HTMX requests get HTML partial response."""
+    response = client.get("/api/search?q=Lock-free", headers={"HX-Request": "true"})
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Lock-free Queue" in response.text
+    assert "Concept" in response.text
+
+
+def test_search_htmx_empty_returns_empty_html(client):
+    response = client.get("/api/search?q=", headers={"HX-Request": "true"})
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert response.text.strip() == ""
+
+
+def test_base_html_has_htmx_and_search(client):
+    """base.html includes HTMX script and search input."""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "htmx.org" in response.text
+    assert 'id="search-input"' in response.text
+    assert 'hx-get="/api/search"' in response.text
