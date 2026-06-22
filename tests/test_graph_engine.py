@@ -265,8 +265,10 @@ def test_delete_node_succeeds_when_alternate_path_exists(conn: sqlite3.Connectio
 
 
 def test_delete_edge_removes_by_id(populated: sqlite3.Connection):
+    add_node(populated, "sub2", "Subsystem", {"name": "mm"})
+    add_edge(populated, "belongs-to", "c1", "sub2")
     eid = populated.execute(
-        "SELECT id FROM edges WHERE kind='belongs-to' AND source_id='c1'"
+        "SELECT id FROM edges WHERE kind='belongs-to' AND source_id='c1' AND target_id='sub1'"
     ).fetchone()[0]
     delete_edge(populated, eid)
     assert get_edge(populated, eid) is None

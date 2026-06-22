@@ -42,7 +42,10 @@ def get_node(conn: sqlite3.Connection, node_id: str) -> dict[str, Any] | None:
     return {"id": row[0], "kind": row[1], "attrs": json.loads(row[2])}
 
 
-def _check_supersedes_cycle(conn: sqlite3.Connection, source_id: str, target_id: str) -> bool:
+_ACYCLIC_EDGE_KINDS = {"supersedes", "refines", "prerequisite"}
+
+
+def _check_edge_cycle(conn: sqlite3.Connection, kind: str, source_id: str, target_id: str) -> bool:
     visited = set()
     stack = [target_id]
     while stack:
@@ -53,8 +56,8 @@ def _check_supersedes_cycle(conn: sqlite3.Connection, source_id: str, target_id:
             continue
         visited.add(current)
         rows = conn.execute(
-            "SELECT target_id FROM edges WHERE kind = 'supersedes' AND source_id = ?",
-            (current,),
+            "SELECT target_id FROM edges WHERE kind = ? AND source_id = ?",
+            (kind, current),
         ).fetchall()
         stack.extend(r[0] for r in rows)
     return False
@@ -84,9 +87,9 @@ def add_edge(
             f"Edge '{kind}' requires {allowed}, "
             f"got ({source_node['kind']} -> {target_node['kind']})"
         )
-    if kind == "supersedes" and _check_supersedes_cycle(conn, source_id, target_id):
+    if kind in _ACYCLIC_EDGE_KINDS and _check_edge_cycle(conn, kind, source_id, target_id):
         raise ValueError(
-            f"Adding supersedes edge {source_id} -> {target_id} would create a cycle"
+            f"Adding {kind} edge {source_id} -> {target_id} would create a cycle"
         )
     conn.execute(
         "INSERT INTO edges (kind, source_id, target_id, attrs) VALUES (?, ?, ?, ?)",
@@ -158,12 +161,23 @@ def delete_edge(conn: sqlite3.Connection, edge_id: int) -> None:
     ).fetchone()
     if row is None:
         raise ValueError(f"Edge {edge_id} does not exist")
+    edge_kind, source_id, target_id = row
+    source_node = get_node(conn, source_id)
+
+    conn.execute("SAVEPOINT delete_edge_check")
     conn.execute("DELETE FROM edges WHERE id = ?", (edge_id,))
-    if row[0] == "contradicts":
+    if edge_kind == "contradicts":
         conn.execute(
             "DELETE FROM edges WHERE kind = 'contradicts' AND source_id = ? AND target_id = ?",
-            (row[2], row[1]),
+            (target_id, source_id),
         )
+    if source_node:
+        violations = validate_node(conn, source_id, source_node["kind"])
+        if violations:
+            conn.execute("ROLLBACK TO SAVEPOINT delete_edge_check")
+            conn.execute("RELEASE SAVEPOINT delete_edge_check")
+            raise AdmissibilityError(violations)
+    conn.execute("RELEASE SAVEPOINT delete_edge_check")
 
 
 def get_edge(conn: sqlite3.Connection, edge_id: int) -> dict[str, Any] | None:
