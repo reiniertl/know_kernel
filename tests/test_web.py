@@ -358,6 +358,32 @@ def test_web_viz_contains_d3_reference(client):
     assert "d3" in response.text.lower()
 
 
+def test_web_viz_edge_color_covers_all_edge_kinds(client):
+    """INV-KK-WEB-VIZ-EDGE-DISTINCT: edgeColor map has entries for all 18 edge kinds."""
+    from graph.schema import EDGE_KINDS
+    response = client.get("/viz")
+    text = response.text
+    for kind in EDGE_KINDS:
+        assert f"'{kind}'" in text, f"edgeColor missing entry for '{kind}'"
+
+
+def test_web_viz_legend_code_present(client):
+    """INV-KK-WEB-GRAPH-LEGEND: legend generation code exists in graph viz."""
+    response = client.get("/viz")
+    text = response.text
+    assert "graph-legend" in text
+    assert "presentNodeKinds" in text
+    assert "presentEdgeKinds" in text
+
+
+def test_web_viz_legend_filters_to_present_kinds(client):
+    """INV-KK-WEB-GRAPH-LEGEND: legend is built from actually-present data, not hardcoded."""
+    response = client.get("/viz")
+    text = response.text
+    assert "new Set(data.nodes.map" in text
+    assert "new Set(links.map" in text
+
+
 # --- ALG-KK-WEB-DISPLAY-NAME unit tests ---
 
 from web.routes import display_name_for_node

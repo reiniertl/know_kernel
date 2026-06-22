@@ -16,12 +16,28 @@
     Source: 'gray', Evidence: 'gray', Advisory: 'gray'
   };
   const edgeColor = {
-    'governed-by': '#c0392b', 'triggered-by': '#e67e22',
-    'constrains-composition': '#8e44ad', 'belongs-to': '#27ae60',
-    'extracted-from': '#bdc3c7'
+    'belongs-to': '#27ae60',
+    'extracted-from': '#95a5a6',
+    'sourced-from': '#7f8c8d',
+    'alternative-to': '#3498db',
+    'refines': '#2980b9',
+    'contradicts': '#e74c3c',
+    'prerequisite': '#f39c12',
+    'supersedes': '#d35400',
+    'assessed-by': '#8e44ad',
+    'governed-by': '#c0392b',
+    'triggered-by': '#e67e22',
+    'constrains-composition': '#9b59b6',
+    'profiled-by': '#1abc9c',
+    'assesses-compatibility': '#16a085',
+    'contributes-to': '#2c3e50',
+    'suited-for': '#e91e63',
+    'compares': '#34495e',
+    'implemented-in': '#795548'
   };
   const edgeDash = {
-    'governed-by': '6,3', 'triggered-by': '3,3'
+    'governed-by': '6,3', 'triggered-by': '3,3',
+    'contradicts': '4,4', 'alternative-to': '8,4'
   };
 
   const container = document.getElementById('graph-container');
@@ -94,6 +110,34 @@
       link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
           .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
       node.attr('cx', d => d.x).attr('cy', d => d.y);
+    });
+
+    const presentNodeKinds = [...new Set(data.nodes.map(n => n.kind))].sort();
+    const presentEdgeKinds = [...new Set(links.map(l => l.kind))].sort();
+
+    const legend = d3.select('#graph-container').append('div')
+      .attr('id', 'graph-legend')
+      .style('position', 'absolute').style('top', '10px').style('right', '10px')
+      .style('background', 'rgba(255,255,255,0.93)').style('padding', '10px 12px')
+      .style('border', '1px solid #ccc').style('border-radius', '4px')
+      .style('font-size', '12px').style('max-height', '560px').style('overflow-y', 'auto');
+
+    legend.append('div').text('Node Kinds').style('font-weight', 'bold').style('margin-bottom', '4px');
+    presentNodeKinds.forEach(k => {
+      const row = legend.append('div').style('display', 'flex').style('align-items', 'center').style('margin', '2px 0');
+      row.append('span').style('display', 'inline-block').style('width', '10px').style('height', '10px')
+        .style('border-radius', '50%').style('background', kindColor[k] || 'gray').style('margin-right', '6px').style('flex-shrink', '0');
+      row.append('span').text(k);
+    });
+
+    legend.append('div').text('Edge Kinds').style('font-weight', 'bold').style('margin-top', '10px').style('margin-bottom', '4px');
+    presentEdgeKinds.forEach(k => {
+      const row = legend.append('div').style('display', 'flex').style('align-items', 'center').style('margin', '2px 0');
+      const line = row.append('svg').attr('width', 20).attr('height', 10).style('margin-right', '6px').style('flex-shrink', '0');
+      line.append('line').attr('x1', 0).attr('y1', 5).attr('x2', 20).attr('y2', 5)
+        .attr('stroke', edgeColor[k] || '#ddd').attr('stroke-width', 2)
+        .attr('stroke-dasharray', edgeDash[k] || null);
+      row.append('span').text(k);
     });
   });
 })();
