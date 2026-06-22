@@ -6,7 +6,12 @@ import sqlite3
 
 from graph.engine import add_edge, add_node
 from graph.rules import (
+    RULES_BY_KIND,
     Violation,
+    check_advisory_has_assessor,
+    check_compat_concept_pairs,
+    check_compat_provenance,
+    check_comparative_concept_pairs,
     check_concept_has_belongs_to,
     check_concept_has_provenance,
     check_evidence_has_source,
@@ -14,12 +19,16 @@ from graph.rules import (
     check_failure_mode_trigger,
     check_kinv_belongs_to_subsystem,
     check_kinv_governed_by_concept,
+    check_profile_concept,
+    check_profile_provenance,
     check_proposal_grounding,
     check_protocol_concept_pairs,
     check_protocol_provenance,
     check_source_has_advisory,
+    check_subsystem_has_children,
     validate_node,
 )
+from graph.schema import NODE_KINDS
 
 
 # --- INV-KK-CONCEPT-SUBSYSTEM ---
@@ -119,8 +128,9 @@ def test_validate_node_concept_violations(conn: sqlite3.Connection):
     assert "concept-provenance" in rules
 
 
-def test_validate_node_unknown_kind(conn: sqlite3.Connection):
-    violations = validate_node(conn, "x", "Subsystem")
+def test_validate_node_no_rules_kind(conn: sqlite3.Connection):
+    add_node(conn, "og1", "OptimizationGoal", {"name": "perf", "description": "d", "metric": "latency", "direction": "minimize"})
+    violations = validate_node(conn, "og1", "OptimizationGoal")
     assert violations == []
 
 
@@ -250,3 +260,137 @@ def test_validate_node_kernel_invariant_violations(conn: sqlite3.Connection):
     rules = {v.rule for v in violations}
     assert "kinv-belongs-to-subsystem" in rules
     assert "kinv-governed-by" in rules
+
+
+# --- INV-KK-PP-PROFILED-BY ---
+
+
+def test_profile_concept_pass(conn: sqlite3.Connection):
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_node(conn, "pp1", "PerformanceProfile", {"metric": "latency", "complexity": "O(1)", "best_case": "1ms", "worst_case": "10ms", "typical_case": "5ms", "conditions": "normal", "artifact_class": "B"})
+    add_edge(conn, "profiled-by", "pp1", "c1")
+    assert check_profile_concept(conn, "pp1") is None
+
+
+def test_profile_concept_fail_zero(conn: sqlite3.Connection):
+    add_node(conn, "pp1", "PerformanceProfile", {"metric": "latency", "complexity": "O(1)", "best_case": "1ms", "worst_case": "10ms", "typical_case": "5ms", "conditions": "normal", "artifact_class": "B"})
+    v = check_profile_concept(conn, "pp1")
+    assert isinstance(v, Violation)
+    assert "found 0" in v.message
+
+
+# --- INV-KK-PP-PROVENANCE ---
+
+
+def test_profile_provenance_pass(conn: sqlite3.Connection):
+    add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+    add_node(conn, "pp1", "PerformanceProfile", {"metric": "latency", "complexity": "O(1)", "best_case": "1ms", "worst_case": "10ms", "typical_case": "5ms", "conditions": "normal", "artifact_class": "B"})
+    add_edge(conn, "extracted-from", "pp1", "ev1")
+    assert check_profile_provenance(conn, "pp1") is None
+
+
+def test_profile_provenance_fail(conn: sqlite3.Connection):
+    add_node(conn, "pp1", "PerformanceProfile", {"metric": "latency", "complexity": "O(1)", "best_case": "1ms", "worst_case": "10ms", "typical_case": "5ms", "conditions": "normal", "artifact_class": "B"})
+    v = check_profile_provenance(conn, "pp1")
+    assert isinstance(v, Violation)
+    assert "extracted-from" in v.message.lower()
+
+
+# --- INV-KK-CA-ASSESSES-PAIR ---
+
+
+def test_compat_concept_pairs_pass(conn: sqlite3.Connection):
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_node(conn, "c2", "Concept", {"name": "y", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_node(conn, "ca1", "CompatibilityAssessment", {"synergy": "high", "rationale": "good", "conditions": "normal", "artifact_class": "B"})
+    add_edge(conn, "assesses-compatibility", "ca1", "c1")
+    add_edge(conn, "assesses-compatibility", "ca1", "c2")
+    assert check_compat_concept_pairs(conn, "ca1") is None
+
+
+def test_compat_concept_pairs_fail_one(conn: sqlite3.Connection):
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_node(conn, "ca1", "CompatibilityAssessment", {"synergy": "high", "rationale": "good", "conditions": "normal", "artifact_class": "B"})
+    add_edge(conn, "assesses-compatibility", "ca1", "c1")
+    v = check_compat_concept_pairs(conn, "ca1")
+    assert isinstance(v, Violation)
+    assert "found 1" in v.message
+
+
+# --- INV-KK-CA-PROVENANCE ---
+
+
+def test_compat_provenance_pass(conn: sqlite3.Connection):
+    add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+    add_node(conn, "ca1", "CompatibilityAssessment", {"synergy": "high", "rationale": "good", "conditions": "normal", "artifact_class": "B"})
+    add_edge(conn, "extracted-from", "ca1", "ev1")
+    assert check_compat_provenance(conn, "ca1") is None
+
+
+def test_compat_provenance_fail(conn: sqlite3.Connection):
+    add_node(conn, "ca1", "CompatibilityAssessment", {"synergy": "high", "rationale": "good", "conditions": "normal", "artifact_class": "B"})
+    v = check_compat_provenance(conn, "ca1")
+    assert isinstance(v, Violation)
+    assert "extracted-from" in v.message.lower()
+
+
+# --- INV-KK-COMPARATIVE-EXACTLY-TWO ---
+
+
+def test_comparative_concept_pairs_pass(conn: sqlite3.Connection):
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_node(conn, "c2", "Concept", {"name": "y", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_node(conn, "cmp1", "ComparativeAnalysis", {"dimension": "speed", "winner": "c1", "conditions": "normal", "quantitative_delta": "2x", "artifact_class": "B"})
+    add_edge(conn, "compares", "cmp1", "c1")
+    add_edge(conn, "compares", "cmp1", "c2")
+    assert check_comparative_concept_pairs(conn, "cmp1") is None
+
+
+def test_comparative_concept_pairs_fail_one(conn: sqlite3.Connection):
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_node(conn, "cmp1", "ComparativeAnalysis", {"dimension": "speed", "winner": "c1", "conditions": "normal", "quantitative_delta": "2x", "artifact_class": "B"})
+    add_edge(conn, "compares", "cmp1", "c1")
+    v = check_comparative_concept_pairs(conn, "cmp1")
+    assert isinstance(v, Violation)
+    assert "found 1" in v.message
+
+
+# --- INV-KK-SUBSYSTEM-HAS-CHILDREN ---
+
+
+def test_subsystem_has_children_pass(conn: sqlite3.Connection):
+    add_node(conn, "sub1", "Subsystem", {"name": "sched"})
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_edge(conn, "belongs-to", "c1", "sub1")
+    assert check_subsystem_has_children(conn, "sub1") is None
+
+
+def test_subsystem_has_children_fail(conn: sqlite3.Connection):
+    add_node(conn, "sub1", "Subsystem", {"name": "sched"})
+    v = check_subsystem_has_children(conn, "sub1")
+    assert isinstance(v, Violation)
+    assert "belongs-to" in v.message.lower()
+
+
+# --- INV-KK-ADVISORY-HAS-ASSESSOR ---
+
+
+def test_advisory_has_assessor_pass(conn: sqlite3.Connection):
+    add_node(conn, "src1", "Source", {"url": "http://x", "source_type": "paper", "license": "PD"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_edge(conn, "assessed-by", "src1", "adv1")
+    assert check_advisory_has_assessor(conn, "adv1") is None
+
+
+def test_advisory_has_assessor_fail(conn: sqlite3.Connection):
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    v = check_advisory_has_assessor(conn, "adv1")
+    assert isinstance(v, Violation)
+    assert "assessed-by" in v.message.lower()
+
+
+# --- INV-KK-RULES-FULL-COVERAGE ---
+
+
+def test_rules_by_kind_covers_all_node_kinds():
+    assert set(RULES_BY_KIND.keys()) == set(NODE_KINDS)

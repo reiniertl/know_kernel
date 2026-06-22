@@ -194,6 +194,7 @@ class TestKernelInvariantInSnapshot:
         })
         add_edge(master_conn, "governed-by", "ki1", "c1")
         add_edge(master_conn, "extracted-from", "ki1", "ev1")
+        add_edge(master_conn, "belongs-to", "ki1", "sub1")
         master_conn.commit()
         master_conn.close()
 

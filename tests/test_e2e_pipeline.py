@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from graph.engine import add_node, compare_neighborhoods, ranked_recommendations, subgraph_around, transitive_impact
+from graph.engine import add_edge, add_node, compare_neighborhoods, ranked_recommendations, subgraph_around, transitive_impact
 from graph.optimization import (
     create_comparative_analysis,
     create_kernel,
@@ -122,6 +122,18 @@ def snapshot_db(tmp_path):
     return tmp_path / "snapshot.db"
 
 
+def _link_kinvs_to_subsystems(conn):
+    """Link orphaned KernelInvariants to their governing Concept's Subsystem."""
+    rows = conn.execute(
+        "SELECT e.source_id, e2.target_id FROM edges e "
+        "JOIN edges e2 ON e2.source_id = e.target_id AND e2.kind = 'belongs-to' "
+        "WHERE e.kind = 'governed-by' "
+        "AND NOT EXISTS (SELECT 1 FROM edges e3 WHERE e3.kind = 'belongs-to' AND e3.source_id = e.source_id)"
+    ).fetchall()
+    for kinv_id, sub_id in rows:
+        add_edge(conn, "belongs-to", kinv_id, sub_id)
+
+
 def _run_full_pipeline(master_db, snapshot_db):
     """Run the full pipeline and return (master_conn, snap_path, concept_ids)."""
     conn = init_db(master_db)
@@ -131,6 +143,7 @@ def _run_full_pipeline(master_db, snapshot_db):
     ingest_result = ingest_document(conn, str(doc), "https://example.com/vm.txt", "paper", gate=gate)
     review_source(conn, ingest_result.source_id, "License confirmed as MIT.", "weak-copyleft")
     extract_result = extract_concepts(conn, ingest_result.evidence_id, gate, model="test-model", client=MockLLMClient())
+    _link_kinvs_to_subsystems(conn)
     conn.commit()
     export_class_b_snapshot(master_db, snapshot_db)
     return conn, extract_result
@@ -163,6 +176,7 @@ class TestE2EPipeline:
         )
         assert extract_result.concepts_created == 2
         assert all(cid.startswith("concept-") for cid in extract_result.concept_ids)
+        _link_kinvs_to_subsystems(conn)
 
         # Auto-classification creates belongs-to edges
         for cid in extract_result.concept_ids:
@@ -298,6 +312,7 @@ class TestE2EPipeline:
             conn, ingest_result.evidence_id, gate,
             client=MockLLMClient(),
         )
+        _link_kinvs_to_subsystems(conn)
         conn.commit()
 
         export_class_b_snapshot(master_db, snapshot_db)
@@ -376,6 +391,7 @@ class TestE2EPipeline:
         result = ingest_document(conn, str(doc), "https://example.com/rt.txt", "paper", gate=gate)
         review_source(conn, result.source_id, "MIT confirmed.", "weak-copyleft")
         extract = extract_concepts(conn, result.evidence_id, gate, client=MockLLMClient())
+        _link_kinvs_to_subsystems(conn)
         conn.commit()
 
         export_class_b_snapshot(master_db, snapshot_db)
@@ -402,6 +418,7 @@ class TestE2EPipeline:
         assert extract.profiles_created == 1
         assert extract.compatibilities_created == 1
         assert extract.comparatives_created == 1
+        _link_kinvs_to_subsystems(conn)
         conn.commit()
 
         kinv_nodes = conn.execute("SELECT id, attrs FROM nodes WHERE kind = 'KernelInvariant'").fetchall()
@@ -453,6 +470,7 @@ class TestE2EAllKinds:
         ingest_result = ingest_document(conn, str(doc), "https://example.com/vm.txt", "paper", gate=gate)
         review_source(conn, ingest_result.source_id, "MIT confirmed.", "weak-copyleft")
         extract_result = extract_concepts(conn, ingest_result.evidence_id, gate, model="test", client=MockLLMClient())
+        _link_kinvs_to_subsystems(conn)
         concept_ids = extract_result.concept_ids
 
         goal_id = create_optimization_goal(conn, "Min Latency", "Reduce latency", "latency", "minimize")

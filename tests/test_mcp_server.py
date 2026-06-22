@@ -189,6 +189,7 @@ def rich_snapshot_path(tmp_path):
         "artifact_class": "abstracted-mechanism",
     })
     add_edge(conn, "governed-by", "ki1", "c1")
+    add_edge(conn, "belongs-to", "ki1", "sub-sched")
     add_node(conn, "pp1", "PerformanceProfile", {
         "metric": "read latency",
         "complexity": "O(1)",
@@ -199,6 +200,7 @@ def rich_snapshot_path(tmp_path):
         "artifact_class": "abstracted-mechanism",
     })
     add_edge(conn, "profiled-by", "pp1", "c1")
+    add_edge(conn, "extracted-from", "pp1", "ev-1")
     goal_id = create_optimization_goal(conn, "Min Latency", "Reduce latency", "latency", "minimize")
     link_concept_to_goal(conn, "c1", goal_id, "improves", "strong")
     link_concept_to_goal(conn, "c2", goal_id, "improves", "weak")
