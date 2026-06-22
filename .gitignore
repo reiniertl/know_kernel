@@ -1,9 +1,13 @@
-# Combobul / Claude Code
+# Combobul
 combobul/
-!combobul/spec/
-!combobul/spec/spec.db
-.claude/
 .combobul/
+
+# Claude Code — runtime state (gitignored)
+.claude/settings.local.json
+
+# Node
+node_modules/
+package-lock.json
 
 # Python
 __pycache__/

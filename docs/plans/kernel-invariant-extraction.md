@@ -149,7 +149,7 @@ VALID_SCOPES = {"per-operation", "per-object", "system-wide"}
 | **per-object** | Holds for each instance over its lifetime | "vruntime is monotonically increasing per task" |
 | **system-wide** | Holds globally across the entire subsystem | "Total allocated slabs never exceed zone high watermark" |
 
-## New Invariants (combobul spec DAG)
+## New Invariants (spec DAG)
 
 | ID | Predicate |
 |----|-----------|
@@ -522,7 +522,7 @@ modes inline if no FailureMode nodes exist yet.
 
 | File | Phase 1 | Phase 2 | Phase 3 |
 |------|---------|---------|---------|
-| `combobul/spec/spec.db` | MODIFY | MODIFY | MODIFY |
+| `spec.db` | MODIFY | MODIFY | MODIFY |
 | `src/graph/schema.py` | MODIFY | MODIFY | MODIFY |
 | `src/graph/rules.py` | MODIFY | MODIFY | MODIFY |
 | `src/ingest/extractor.py` | MODIFY | MODIFY | MODIFY |

@@ -74,8 +74,7 @@ well (FastAPI, Jinja2/HTMX).
 
 ### Storage: SQLite
 
-The runtime graph uses SQLite with an adjacency-list schema — the same
-pattern combobul uses for its spec graph. Rationale:
+The runtime graph uses SQLite with an adjacency-list schema. Rationale:
 
 - The knowledge base will be thousands of concepts, not millions
 - Single-file deployment, ACID transactions
