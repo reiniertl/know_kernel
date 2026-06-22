@@ -25,7 +25,7 @@ from graph.optimization import (
 from graph.schema import init_db
 from export.exporter import export_class_b_snapshot
 from ingest.extractor import extract_concepts
-from ingest.gate import SessionGate, SessionViolationError
+from ingest.gate import SessionGate
 from ingest.pipeline import ingest_document
 from ingest.reviewer import review_source
 from mcp_server.server import init_snapshot
@@ -270,34 +270,6 @@ class TestE2EPipeline:
 
         # Step 6: MCP init validates Class B-only
         init_snapshot(str(snapshot_db))
-
-    def test_session_gate_blocks_cross_mode(self, master_db):
-        """SessionGate prevents proposal-mode sessions from accessing Class A."""
-        conn = init_db(master_db)
-        doc = master_db.parent / "test_doc2.txt"
-        doc.write_text("MIT License. Some content about process scheduling.")
-
-        gate = SessionGate()
-        gate.record_proposal()
-
-        with pytest.raises(SessionViolationError):
-            ingest_document(conn, str(doc), "https://example.com/sched.txt", "paper", gate=gate)
-
-    def test_extraction_gate_blocks_proposal_mode(self, master_db):
-        """SessionGate prevents proposal-mode from extracting."""
-        conn = init_db(master_db)
-        doc = master_db.parent / "test_doc3.txt"
-        doc.write_text("MIT License. Content about IPC mechanisms.")
-
-        ingest_gate = SessionGate()
-        result = ingest_document(conn, str(doc), "https://example.com/ipc.txt", "paper", gate=ingest_gate)
-        conn.commit()
-
-        proposal_gate = SessionGate()
-        proposal_gate.record_proposal()
-
-        with pytest.raises(SessionViolationError):
-            extract_concepts(conn, result.evidence_id, proposal_gate, client=MockLLMClient())
 
     def test_export_excludes_all_class_a_kinds(self, master_db, snapshot_db):
         """Snapshot contains zero Evidence, Source, or Advisory nodes."""

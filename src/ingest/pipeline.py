@@ -53,9 +53,11 @@ def ingest_document(
         "source_type": source_type,
         "license": license_label,
     })
+    description = parsed.text[:120].strip() if parsed.text else ""
     add_node(conn, evidence_id, "Evidence", {
         "artifact_class": scan.artifact_class.value,
         "contamination_level": scan.contamination_level.value,
+        "description": description,
     })
     add_edge(conn, "sourced-from", evidence_id, source_id)
 

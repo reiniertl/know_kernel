@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "Proposal", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -17,7 +17,6 @@ EDGE_KINDS = (
     "prerequisite",
     "supersedes",
     "assessed-by",
-    "grounded-in",
     "governed-by",
     "triggered-by",
     "constrains-composition",
@@ -39,7 +38,6 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "prerequisite": ("Concept", "Concept"),
     "supersedes": ("Concept", "Concept"),
     "assessed-by": ("Source", "Advisory"),
-    "grounded-in": ("Proposal", "Concept"),
     "governed-by": ("KernelInvariant", "Concept"),
     "triggered-by": ("FailureMode", "KernelInvariant"),
     "constrains-composition": ("InteractionProtocol", "Concept"),
@@ -57,7 +55,6 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "Evidence": ("artifact_class", "contamination_level"),
     "Advisory": ("assessment", "contamination_confirmed"),
     "Subsystem": ("name",),
-    "Proposal": ("name", "description"),
     "KernelInvariant": ("predicate", "strength", "scope", "artifact_class"),
     "FailureMode": ("symptom", "blast_radius", "recoverability", "artifact_class"),
     "InteractionProtocol": ("rule", "ordering", "violation_mode", "artifact_class"),

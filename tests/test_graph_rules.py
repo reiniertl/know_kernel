@@ -21,7 +21,6 @@ from graph.rules import (
     check_kinv_governed_by_concept,
     check_profile_concept,
     check_profile_provenance,
-    check_proposal_grounding,
     check_protocol_concept_pairs,
     check_protocol_provenance,
     check_source_has_advisory,
@@ -80,22 +79,6 @@ def test_evidence_source_fail_two(populated: sqlite3.Connection):
     v = check_evidence_has_source(populated, "ev1")
     assert isinstance(v, Violation)
     assert "found 2" in v.message
-
-
-# --- INV-KK-PROPOSAL-NO-EVIDENCE ---
-
-
-def test_proposal_grounding_pass(populated: sqlite3.Connection):
-    assert check_proposal_grounding(populated, "prop1") is None
-
-
-def test_proposal_grounding_fail(populated: sqlite3.Connection):
-    populated.execute(
-        "INSERT INTO edges (kind, source_id, target_id, attrs) VALUES ('grounded-in', 'prop1', 'ev1', '{}')"
-    )
-    v = check_proposal_grounding(populated, "prop1")
-    assert isinstance(v, Violation)
-    assert "Evidence" in v.message
 
 
 # --- INV-KK-SOURCE-ADVISORY ---
@@ -377,13 +360,13 @@ def test_subsystem_has_children_fail(conn: sqlite3.Connection):
 
 def test_advisory_has_assessor_pass(conn: sqlite3.Connection):
     add_node(conn, "src1", "Source", {"url": "http://x", "source_type": "paper", "license": "PD"})
-    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
     add_edge(conn, "assessed-by", "src1", "adv1")
     assert check_advisory_has_assessor(conn, "adv1") is None
 
 
 def test_advisory_has_assessor_fail(conn: sqlite3.Connection):
-    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
     v = check_advisory_has_assessor(conn, "adv1")
     assert isinstance(v, Violation)
     assert "assessed-by" in v.message.lower()

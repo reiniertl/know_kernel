@@ -40,7 +40,6 @@ _DISPLAY_FIELDS: dict[str, tuple[str, int | None]] = {
     "Evidence": ("description", 60),
     "Advisory": ("assessment", 60),
     "Subsystem": ("name", None),
-    "Proposal": ("name", None),
     "KernelInvariant": ("predicate", 60),
     "FailureMode": ("symptom", 60),
     "InteractionProtocol": ("rule", 60),

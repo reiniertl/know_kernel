@@ -76,11 +76,6 @@ def test_add_node_subsystem_requires_name(conn: sqlite3.Connection):
         add_node(conn, "s1", "Subsystem", {})
 
 
-def test_add_node_proposal_requires_name_description(conn: sqlite3.Connection):
-    with pytest.raises(ValueError, match="missing required"):
-        add_node(conn, "p1", "Proposal", {"name": "x"})
-
-
 def test_add_node_accepts_extra_attrs(conn: sqlite3.Connection):
     add_node(conn, "s1", "Subsystem", {"name": "mm", "extra": "val"})
     node = get_node(conn, "s1")
@@ -118,18 +113,6 @@ def test_add_edge_rejects_missing_target(populated: sqlite3.Connection):
 def test_add_edge_valid_belongs_to(populated: sqlite3.Connection):
     count_before = populated.execute("SELECT COUNT(*) FROM edges WHERE kind='belongs-to'").fetchone()[0]
     assert count_before >= 1
-
-
-def test_add_edge_valid_grounded_in(populated: sqlite3.Connection):
-    row = populated.execute(
-        "SELECT 1 FROM edges WHERE kind='grounded-in' AND source_id='prop1' AND target_id='c1'"
-    ).fetchone()
-    assert row is not None
-
-
-def test_add_edge_grounded_in_rejects_evidence_target(populated: sqlite3.Connection):
-    with pytest.raises(ValueError, match="requires.*Proposal.*Concept"):
-        add_edge(populated, "grounded-in", "prop1", "ev1")
 
 
 # --- update_node_attrs ---
@@ -177,7 +160,7 @@ def test_delete_evidence_rejects_if_concept_loses_provenance(conn: sqlite3.Conne
     add_node(conn, "sub1", "Subsystem", {"name": "mm"})
     add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
-    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
     add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
     add_edge(conn, "belongs-to", "c1", "sub1")
     add_edge(conn, "extracted-from", "c1", "ev1")
@@ -192,7 +175,7 @@ def test_delete_source_rejects_if_evidence_loses_traceability(conn: sqlite3.Conn
     add_node(conn, "sub1", "Subsystem", {"name": "mm"})
     add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
-    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
     add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
     add_edge(conn, "belongs-to", "c1", "sub1")
     add_edge(conn, "extracted-from", "c1", "ev1")
@@ -207,7 +190,7 @@ def test_delete_subsystem_rejects_if_concept_loses_belongs_to(conn: sqlite3.Conn
     add_node(conn, "sub1", "Subsystem", {"name": "mm"})
     add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
-    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
     add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
     add_edge(conn, "belongs-to", "c1", "sub1")
     add_edge(conn, "extracted-from", "c1", "ev1")
@@ -222,7 +205,7 @@ def test_delete_advisory_rejects_if_source_loses_assessment(conn: sqlite3.Connec
     add_node(conn, "sub1", "Subsystem", {"name": "mm"})
     add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
-    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
     add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
     add_edge(conn, "belongs-to", "c1", "sub1")
     add_edge(conn, "extracted-from", "c1", "ev1")
@@ -235,7 +218,7 @@ def test_delete_advisory_rejects_if_source_loses_assessment(conn: sqlite3.Connec
 def test_delete_node_succeeds_when_no_dependents_violated(conn: sqlite3.Connection):
     """Deleting a node that no other node depends on must succeed."""
     add_node(conn, "sub1", "Subsystem", {"name": "mm"})
-    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
     delete_node(conn, "adv1")
     assert get_node(conn, "adv1") is None
 
@@ -246,8 +229,8 @@ def test_delete_node_succeeds_when_alternate_path_exists(conn: sqlite3.Connectio
     add_node(conn, "c1", "Concept", {"name": "C", "description": "d", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})
     add_node(conn, "src1", "Source", {"url": "http://x.com", "source_type": "paper", "license": "PD"})
     add_node(conn, "src2", "Source", {"url": "http://y.com", "source_type": "paper", "license": "PD"})
-    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
-    add_node(conn, "adv2", "Advisory", {"assessment": "safe"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
+    add_node(conn, "adv2", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
     add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
     add_node(conn, "ev2", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
     add_edge(conn, "belongs-to", "c1", "sub1")
@@ -301,7 +284,7 @@ def test_get_edge_missing(conn: sqlite3.Connection):
 
 def test_list_nodes_all(populated: sqlite3.Connection):
     nodes = list_nodes(populated)
-    assert len(nodes) == 7
+    assert len(nodes) == 6
 
 
 def test_list_nodes_by_kind(populated: sqlite3.Connection):

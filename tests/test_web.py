@@ -172,8 +172,7 @@ def rich_client(tmp_path):
     add_node(conn, "src-1", "Source", {
         "url": "https://example.com", "source_type": "paper", "license": "MIT",
     })
-    add_node(conn, "adv-1", "Advisory", {"assessment": "approved"})
-    add_node(conn, "prop-1", "Proposal", {"name": "Add RCU v2", "description": "Next-gen RCU"})
+    add_node(conn, "adv-1", "Advisory", {"assessment": "approved", "contamination_confirmed": "none"})
     add_edge(conn, "governed-by", "kinv-1", "c-1")
     add_edge(conn, "triggered-by", "fm-1", "kinv-1")
     add_edge(conn, "constrains-composition", "ip-1", "c-1")
@@ -283,7 +282,7 @@ def test_web_all_allowed_kinds_have_detail(rich_client):
         "CompatibilityAssessment": "ca-1", "ComparativeAnalysis": "cmp-1",
         "OptimizationGoal": "og-1", "UseCaseScenario": "ucs-1",
         "Kernel": "k-1", "Subsystem": "sub-1", "Evidence": "ev-1",
-        "Source": "src-1", "Advisory": "adv-1", "Proposal": "prop-1",
+        "Source": "src-1", "Advisory": "adv-1",
     }
     for kind, nid in kind_to_id.items():
         response = rich_client.get(f"/concepts/{nid}")
@@ -403,9 +402,6 @@ class TestDisplayNameForNode:
 
     def test_subsystem_uses_name(self):
         assert display_name_for_node("Subsystem", {"name": "Scheduler"}, "sub-1") == "Scheduler"
-
-    def test_proposal_uses_name(self):
-        assert display_name_for_node("Proposal", {"name": "Add RCU v2"}, "prop-1") == "Add RCU v2"
 
     def test_kernel_invariant_uses_predicate(self):
         assert display_name_for_node("KernelInvariant", {"predicate": "No stale reads"}, "kinv-1") == "No stale reads"

@@ -30,7 +30,7 @@ from ingest.extractor import (
     validate_protocol_item,
     wire_relationships,
 )
-from ingest.gate import SessionGate, SessionViolationError
+from ingest.gate import SessionGate
 
 
 _DEFAULT_CONCEPTS = [
@@ -159,13 +159,6 @@ class TestExtractConcepts:
                 (cid, evidence_node),
             ).fetchone()
             assert edge is not None
-
-    def test_session_gate_enforced(self, conn, evidence_node):
-        gate = SessionGate()
-        gate.record_proposal()
-        client = MockLLMClient()
-        with pytest.raises(SessionViolationError):
-            extract_concepts(conn, evidence_node, gate, client=client)
 
     def test_idempotent_second_call_skips(self, conn, evidence_node):
         gate = SessionGate()

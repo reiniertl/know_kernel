@@ -26,7 +26,7 @@ class TestExportClassBSnapshot:
         assert report["issues"] == []
 
     def test_allowed_kinds_only(self, admissible_master_db: Path, tmp_path: Path) -> None:
-        """INV-KK-SNAPSHOT-ALLOWED-KINDS: only Concept, Subsystem, Proposal in output."""
+        """INV-KK-SNAPSHOT-ALLOWED-KINDS: only Class B kinds in output."""
         output = tmp_path / "snapshot.db"
         export_class_b_snapshot(admissible_master_db, output)
         conn = sqlite3.connect(str(output))
@@ -76,8 +76,8 @@ class TestExportClassBSnapshot:
     def test_node_counts(self, admissible_master_db: Path, tmp_path: Path) -> None:
         output = tmp_path / "snapshot.db"
         report = export_class_b_snapshot(admissible_master_db, output)
-        assert report["node_count"] == 4  # sub1, c1, c2, prop1
-        assert report["edge_count"] == 4  # belongs-to x2, grounded-in, alternative-to
+        assert report["node_count"] == 3  # sub1, c1, c2
+        assert report["edge_count"] == 3  # belongs-to x2, alternative-to
 
     def test_edge_filtering(self, admissible_master_db: Path, tmp_path: Path) -> None:
         """Edges referencing filtered-out nodes must not appear."""
@@ -90,7 +90,7 @@ class TestExportClassBSnapshot:
         assert "sourced-from" not in edge_kinds
         assert "assessed-by" not in edge_kinds
         assert "belongs-to" in edge_kinds
-        assert "grounded-in" in edge_kinds
+        assert "alternative-to" in edge_kinds
 
     def test_contamination_gate_zero_class_a(self, admissible_master_db: Path, tmp_path: Path) -> None:
         """INV-KK-CONTAMINATION-GATE + INV-KK-SNAPSHOT-ZERO-CLASS-A."""
@@ -114,7 +114,7 @@ class TestExportClassBSnapshot:
         conn = init_db(master)
         add_node(conn, "src1", "Source", {"url": "http://ex.com", "source_type": "paper", "license": "PD"})
         add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
-        add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+        add_node(conn, "adv1", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
         add_edge(conn, "sourced-from", "ev1", "src1")
         add_edge(conn, "assessed-by", "src1", "adv1")
         conn.commit()
@@ -136,8 +136,8 @@ class TestExportClassBSnapshot:
         add_node(conn, "src2", "Source", {"url": "http://ex2.com", "source_type": "paper", "license": "PD"})
         add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
         add_node(conn, "ev2", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
-        add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
-        add_node(conn, "adv2", "Advisory", {"assessment": "safe"})
+        add_node(conn, "adv1", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
+        add_node(conn, "adv2", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
         add_edge(conn, "belongs-to", "c1", "sub1")
         add_edge(conn, "belongs-to", "c2", "sub1")
         add_edge(conn, "extracted-from", "c1", "ev1")

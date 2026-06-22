@@ -22,7 +22,7 @@ def cli_master_db(tmp_path: Path) -> Path:
     add_node(conn, "c1", "Concept", {"name": "RCU", "description": "read-copy-update", "artifact_class": "B", "key_properties": ["lock-free reads"], "tradeoffs": [], "design_rationale": "Optimizes read-heavy workloads."})
     add_node(conn, "src1", "Source", {"url": "http://ex.com", "source_type": "paper", "license": "PD"})
     add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
-    add_node(conn, "adv1", "Advisory", {"assessment": "safe"})
+    add_node(conn, "adv1", "Advisory", {"assessment": "safe", "contamination_confirmed": "none"})
     add_edge(conn, "belongs-to", "c1", "sub1")
     add_edge(conn, "extracted-from", "c1", "ev1")
     add_edge(conn, "sourced-from", "ev1", "src1")

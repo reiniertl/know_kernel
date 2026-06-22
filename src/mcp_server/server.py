@@ -133,12 +133,12 @@ def list_subsystems() -> list[dict[str, Any]]:
 
 @mcp.tool()
 def get_subsystem_concepts(subsystem_id: str) -> list[dict[str, Any]]:
-    """Get all Concept/Proposal nodes belonging to a given Subsystem via belongs-to edges."""
+    """Get all Concept nodes belonging to a given Subsystem via belongs-to edges."""
     conn = _get_conn()
     rows = conn.execute(
         """SELECT n.id, n.kind, n.attrs FROM nodes n
            JOIN edges e ON e.source_id = n.id AND e.kind = 'belongs-to' AND e.target_id = ?
-           WHERE n.kind IN ('Concept', 'Proposal')
+           WHERE n.kind = 'Concept'
            ORDER BY n.id""",
         (subsystem_id,),
     ).fetchall()

@@ -41,7 +41,7 @@ def snapshot_path(tmp_path):
     add_node(conn, "ev-2", "Evidence", {"artifact_class": "A", "contamination_level": "weak-copyleft"})
     add_edge(conn, "sourced-from", "ev-1", "src-1")
     add_edge(conn, "sourced-from", "ev-2", "src-1")
-    add_node(conn, "adv-1", "Advisory", {"assessment": "Cleared for use."})
+    add_node(conn, "adv-1", "Advisory", {"assessment": "Cleared for use.", "contamination_confirmed": "none"})
     add_edge(conn, "assessed-by", "src-1", "adv-1")
     # Class B nodes
     add_node(conn, "sub-sched", "Subsystem", {"name": "Scheduler"})
@@ -82,7 +82,7 @@ def test_search_concepts_returns_matches(snapshot_path):
     assert len(results) >= 1
     ids = [r["id"] for r in results]
     assert "concept-1" in ids
-    assert all(r["kind"] in ("Concept", "Subsystem", "Proposal") for r in results)
+    assert all(r["kind"] in ("Concept", "Subsystem") for r in results)
 
 
 def test_get_concept_by_id(snapshot_path):
@@ -159,7 +159,7 @@ def rich_snapshot_path(tmp_path):
     add_node(conn, "ev-2", "Evidence", {"artifact_class": "A", "contamination_level": "weak-copyleft"})
     add_edge(conn, "sourced-from", "ev-1", "src-1")
     add_edge(conn, "sourced-from", "ev-2", "src-1")
-    add_node(conn, "adv-1", "Advisory", {"assessment": "Cleared."})
+    add_node(conn, "adv-1", "Advisory", {"assessment": "Cleared.", "contamination_confirmed": "none"})
     add_edge(conn, "assessed-by", "src-1", "adv-1")
     add_node(conn, "sub-sched", "Subsystem", {"name": "Scheduler"})
     add_node(conn, "c1", "Concept", {

@@ -4,7 +4,7 @@ import pytest
 
 from graph.engine import validate_graph
 from graph.schema import init_db
-from ingest.gate import SessionGate, SessionViolationError
+from ingest.gate import SessionGate
 from ingest.scanner import ArtifactClass
 from ingest.pipeline import IngestResult, ingest_document
 
@@ -59,12 +59,6 @@ class TestIngestDocument:
                 "https://example.com/missing.txt",
                 "paper",
             )
-
-    def test_ingest_proposal_mode_rejects_class_a(self, conn, doc_file):
-        gate = SessionGate()
-        gate.record_proposal()
-        with pytest.raises(SessionViolationError):
-            ingest_document(conn, doc_file, "https://example.com/doc.txt", "paper", gate=gate)
 
     def test_ingest_clean_gate_enters_extraction_mode(self, conn, doc_file):
         gate = SessionGate()

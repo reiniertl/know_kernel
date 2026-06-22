@@ -46,16 +46,6 @@ def check_evidence_has_source(conn: sqlite3.Connection, node_id: str) -> Violati
     return None
 
 
-def check_proposal_grounding(conn: sqlite3.Connection, node_id: str) -> Violation | None:
-    row = conn.execute(
-        "SELECT 1 FROM edges WHERE source_id = ? AND kind = 'grounded-in' AND target_id IN (SELECT id FROM nodes WHERE kind = 'Evidence') LIMIT 1",
-        (node_id,),
-    ).fetchone()
-    if row is not None:
-        return Violation(node_id, "proposal-no-evidence", "Proposal may only be grounded-in Concept nodes, never Evidence")
-    return None
-
-
 def check_source_has_advisory(conn: sqlite3.Connection, node_id: str) -> Violation | None:
     row = conn.execute(
         "SELECT 1 FROM edges WHERE kind = 'assessed-by' AND source_id = ? LIMIT 1",
@@ -211,7 +201,6 @@ def check_advisory_has_assessor(conn: sqlite3.Connection, node_id: str) -> Viola
 RULES_BY_KIND = {
     "Concept": [check_concept_has_belongs_to, check_concept_has_provenance],
     "Evidence": [check_evidence_has_source],
-    "Proposal": [check_proposal_grounding],
     "Source": [check_source_has_advisory],
     "KernelInvariant": [check_kinv_belongs_to_subsystem, check_kinv_governed_by_concept],
     "FailureMode": [check_failure_mode_trigger, check_failure_mode_provenance],
