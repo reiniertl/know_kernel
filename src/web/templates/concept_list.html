@@ -1,7 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>{{ title | default("Nodes") }}</h1>
+{% if active_kind %}
+<p>Showing {{ nodes | length }} {{ active_kind }} node(s) · <a href="/concepts">View all</a></p>
+{% else %}
 <p>{{ nodes | length }} item(s)</p>
+{% endif %}
 <table>
   <thead><tr><th>Name</th><th>Kind</th><th>ID</th></tr></thead>
   <tbody>

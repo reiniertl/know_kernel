@@ -458,3 +458,48 @@ class TestDisplayNameForNode:
         a = display_name_for_node("Concept", {"name": "RCU"}, "c-1")
         b = display_name_for_node("Concept", {"name": "RCU"}, "c-1")
         assert a == b
+
+
+# --- INV-KK-WEB-KIND-FILTER tests ---
+
+
+def test_concepts_kind_filter_returns_only_matching(client):
+    """INV-KK-WEB-KIND-FILTER: ?kind=Concept returns only Concepts."""
+    response = client.get("/concepts?kind=Concept")
+    assert response.status_code == 200
+    text = response.text
+    assert "Lock-free Queue" in text
+    assert "Evidence" not in text.split("</thead>")[1]
+
+
+def test_concepts_no_kind_returns_all(client):
+    """INV-KK-WEB-FULL-ACCESS preserved: no kind param returns all nodes."""
+    response = client.get("/concepts")
+    assert response.status_code == 200
+    text = response.text
+    assert "Concept" in text
+    assert "Evidence" in text
+    assert "Subsystem" in text
+
+
+def test_concepts_invalid_kind_returns_empty(client):
+    """Invalid kind returns empty list, not error."""
+    response = client.get("/concepts?kind=NonexistentKind")
+    assert response.status_code == 200
+    assert "0 NonexistentKind node(s)" in response.text
+
+
+def test_concepts_kind_filter_shows_view_all_link(client):
+    """Filtered view includes link back to all nodes."""
+    response = client.get("/concepts?kind=Concept")
+    assert response.status_code == 200
+    assert 'href="/concepts"' in response.text
+    assert "View all" in response.text
+
+
+def test_dashboard_kind_links(client):
+    """Dashboard kind rows are clickable links to /concepts?kind={kind}."""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'href="/concepts?kind=Concept"' in response.text
+    assert 'href="/concepts?kind=Subsystem"' in response.text

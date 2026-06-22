@@ -83,19 +83,27 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         )
 
     @app.get("/concepts", response_class=HTMLResponse)
-    async def concepts_list(request: Request):
-        """List all nodes in the knowledge base (all kinds — INV-KK-WEB-FULL-ACCESS)."""
+    async def concepts_list(request: Request, kind: str | None = None):
+        """List nodes, optionally filtered by kind (INV-KK-WEB-KIND-FILTER, INV-KK-WEB-FULL-ACCESS)."""
         conn = request.app.state.conn
-        rows = conn.execute(
-            "SELECT id, kind, attrs FROM nodes ORDER BY kind, id"
-        ).fetchall()
+        if kind:
+            rows = conn.execute(
+                "SELECT id, kind, attrs FROM nodes WHERE kind = ? ORDER BY kind, id",
+                (kind,),
+            ).fetchall()
+            title = kind
+        else:
+            rows = conn.execute(
+                "SELECT id, kind, attrs FROM nodes ORDER BY kind, id"
+            ).fetchall()
+            title = "Knowledge Base"
         nodes = _rows_to_dicts(rows)
         for n in nodes:
             n["display_name"] = display_name_for_node(n["kind"], n.get("attrs") or {}, n["id"])
         return templates.TemplateResponse(
             request,
             "concept_list.html",
-            {"nodes": nodes, "title": "Knowledge Base"},
+            {"nodes": nodes, "title": title, "active_kind": kind},
         )
 
     @app.get("/concepts/{node_id}", response_class=HTMLResponse)

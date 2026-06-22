@@ -6,7 +6,7 @@
   <thead><tr><th>Kind</th><th>Count</th></tr></thead>
   <tbody>
   {% for kind, count in counts.items() %}
-    <tr><td>{{ kind }}</td><td>{{ count }}</td></tr>
+    <tr><td><a href="/concepts?kind={{ kind }}">{{ kind }}</a></td><td>{{ count }}</td></tr>
   {% else %}
     <tr><td colspan="2">No nodes yet.</td></tr>
   {% endfor %}
