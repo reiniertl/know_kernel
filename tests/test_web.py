@@ -236,6 +236,45 @@ def test_web_edge_links_show_names(rich_client):
     assert "(Subsystem)" in text
 
 
+def test_web_detail_heading_shows_display_name(rich_client):
+    """INV-KK-WEB-DISPLAY-NAME: detail page <h1> shows display_name, not raw ID."""
+    response = rich_client.get("/concepts/c-1")
+    assert response.status_code == 200
+    text = response.text
+    assert "<h1>RCU</h1>" in text
+    assert "<code>c-1</code>" in text
+
+
+def test_web_detail_heading_invariant(rich_client):
+    """INV-KK-WEB-DISPLAY-NAME: KernelInvariant heading shows truncated predicate."""
+    response = rich_client.get("/concepts/kinv-1")
+    assert response.status_code == 200
+    text = response.text
+    assert "<h1>No partial updates visible to readers</h1>" in text
+    assert "<code>kinv-1</code>" in text
+
+
+def test_web_detail_no_duplicate_h2_name(rich_client):
+    """Redundant <h2> name headings removed from Concept, OptGoal, UseCase, Kernel."""
+    for nid in ("c-1", "og-1", "ucs-1", "k-1"):
+        response = rich_client.get(f"/concepts/{nid}")
+        assert response.status_code == 200
+        assert response.text.count("<h2>") == 0 or "<h2>Attributes</h2>" in response.text or \
+            "<h2>Edges</h2>" in response.text, \
+            f"{nid} still has a redundant <h2> name heading"
+
+
+def test_web_graph_viz_has_display_fields(client):
+    """INV-KK-WEB-VIZ-TOOLTIP: graph viz JS contains per-kind field resolution."""
+    response = client.get("/viz")
+    assert response.status_code == 200
+    text = response.text
+    assert "displayFields" in text
+    assert "KernelInvariant" in text
+    assert "'predicate'" in text
+    assert "'symptom'" in text
+
+
 def test_web_all_allowed_kinds_have_detail(rich_client):
     """INV-KK-WEB-KIND-AWARE-DETAIL: no kind renders as raw JSON dump."""
     kind_to_id = {

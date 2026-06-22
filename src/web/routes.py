@@ -108,6 +108,9 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         if row is None:
             raise HTTPException(status_code=404, detail="Node not found")
         node = _rows_to_dicts([row])[0]
+        node["display_name"] = display_name_for_node(
+            node["kind"], node.get("attrs") or {}, node["id"]
+        )
         edge_rows = conn.execute(
             "SELECT kind, source_id, target_id FROM edges "
             "WHERE source_id = ? OR target_id = ? ORDER BY kind",
@@ -134,13 +137,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 lr_dict = _rows_to_dicts([lr])[0]
                 attrs = lr_dict.get("attrs") or {}
                 kind = lr_dict["kind"]
-                label = (
-                    attrs.get("name")
-                    or (attrs.get("predicate", "") or "")[:60]
-                    or (attrs.get("rule", "") or "")[:60]
-                    or (attrs.get("metric", "") or "")[:40]
-                    or lr_dict["id"]
-                )
+                label = display_name_for_node(kind, attrs, lr_dict["id"])
                 node_labels[lr_dict["id"]] = f"{label} ({kind})"
         return templates.TemplateResponse(
             request,

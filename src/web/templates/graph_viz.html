@@ -67,8 +67,26 @@
         .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
         .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
 
+    const displayFields = {
+      Concept: ['name', null], Source: ['url', 80], Evidence: ['description', 60],
+      Advisory: ['assessment', 60], Subsystem: ['name', null], Proposal: ['name', null],
+      KernelInvariant: ['predicate', 60], FailureMode: ['symptom', 60],
+      InteractionProtocol: ['rule', 60], PerformanceProfile: ['metric', 40],
+      CompatibilityAssessment: ['synergy', 60], OptimizationGoal: ['name', null],
+      UseCaseScenario: ['name', null], ComparativeAnalysis: ['dimension', 60],
+      Kernel: ['name', null]
+    };
     node.append('title').text(d => {
-      const name = d.attrs && d.attrs.name ? d.attrs.name : d.id;
+      const spec = displayFields[d.kind];
+      let name = d.id;
+      if (spec) {
+        const val = d.attrs && d.attrs[spec[0]] ? d.attrs[spec[0]].toString().trim() : '';
+        if (val) {
+          name = spec[1] && val.length > spec[1] ? val.substring(0, spec[1]) + '...' : val;
+        } else if (d.kind === 'Evidence') {
+          name = 'Evidence ' + d.id.slice(-8);
+        }
+      }
       return name + ' (' + d.kind + ')';
     });
 

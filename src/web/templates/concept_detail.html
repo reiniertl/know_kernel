@@ -1,13 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>{{ node.id }}</h1>
-<p><span class="badge badge-kind">{{ node.kind }}</span></p>
+<h1>{{ node.display_name }}</h1>
+<p><span class="badge badge-kind">{{ node.kind }}</span> <code>{{ node.id }}</code></p>
 
 {% set attrs = node.attrs or {} %}
 
 {% if node.kind == 'Concept' %}
 <div class="attrs-section">
-  <h2>{{ attrs.get('name', node.id) }}</h2>
   {% if attrs.get('description') %}<p>{{ attrs.description }}</p>{% endif %}
   {% if attrs.get('key_properties') %}
   <h3>Key Properties</h3>
@@ -106,7 +105,6 @@
 
 {% elif node.kind == 'OptimizationGoal' %}
 <div class="attrs-section">
-  {% if attrs.get('name') %}<h2>{{ attrs.name }}</h2>{% endif %}
   {% if attrs.get('description') %}<p>{{ attrs.description }}</p>{% endif %}
   {% if attrs.get('metric') %}<p><strong>Metric:</strong> {{ attrs.metric }}</p>{% endif %}
   {% if attrs.get('direction') %}
@@ -116,7 +114,6 @@
 
 {% elif node.kind == 'UseCaseScenario' %}
 <div class="attrs-section">
-  {% if attrs.get('name') %}<h2>{{ attrs.name }}</h2>{% endif %}
   {% if attrs.get('description') %}<p>{{ attrs.description }}</p>{% endif %}
   {% if attrs.get('workload_type') %}<p><strong>Workload Type:</strong> {{ attrs.workload_type }}</p>{% endif %}
   {% if attrs.get('constraints') %}<p><strong>Constraints:</strong> {{ attrs.constraints }}</p>{% endif %}
@@ -124,7 +121,6 @@
 
 {% elif node.kind == 'Kernel' %}
 <div class="attrs-section">
-  {% if attrs.get('name') %}<h2>{{ attrs.name }}</h2>{% endif %}
   {% if attrs.get('description') %}<p>{{ attrs.description }}</p>{% endif %}
   {% if attrs.get('kernel_type') %}<p><strong>Kernel Type:</strong> {{ attrs.kernel_type }}</p>{% endif %}
 </div>
