@@ -628,3 +628,86 @@ def test_base_html_has_htmx_and_search(client):
     assert "htmx.org" in response.text
     assert 'id="search-input"' in response.text
     assert 'hx-get="/api/search"' in response.text
+
+
+# --- ALG-KK-WEB-DIAGNOSTICS-PAGE tests (INV-KK-WEB-HEALTH-LINKED) ---
+
+
+def test_health_page_returns_200(rich_client):
+    """ALG-KK-WEB-DIAGNOSTICS-PAGE: /health renders diagnostic sections."""
+    response = rich_client.get("/health")
+    assert response.status_code == 200
+    text = response.text
+    assert "Graph Health Diagnostics" in text
+    assert "Orphan Concepts" in text
+    assert "Unlinked Invariants" in text
+    assert "Dangling Failure Modes" in text
+    assert "Lone Protocols" in text
+    assert "Subsystem Coverage" in text
+    assert "Duplicate Names" in text
+    assert "Invariant density" in text
+
+
+def test_health_page_links_to_node_details(rich_client):
+    response = rich_client.get("/health")
+    assert response.status_code == 200
+    assert 'href="/concepts/' in response.text
+
+
+def test_dashboard_links_to_health(client):
+    """INV-KK-WEB-HEALTH-LINKED: dashboard contains link to /health."""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'href="/health"' in response.text
+    assert "health diagnostics" in response.text.lower()
+
+
+def test_nav_links_to_health(client):
+    """INV-KK-WEB-HEALTH-LINKED: navigation bar contains link to /health."""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert '<a href="/health">Health</a>' in response.text
+
+
+# --- ALG-KK-WEB-IMPACT-PAGE tests (INV-KK-WEB-IMPACT-LINKED) ---
+
+
+def test_impact_page_returns_200(rich_client):
+    """ALG-KK-WEB-IMPACT-PAGE: /impact/{id} renders impact categories."""
+    response = rich_client.get("/impact/c-1")
+    assert response.status_code == 200
+    text = response.text
+    assert "Impact Surface" in text
+    assert "RCU" in text
+    assert "Invariants" in text
+    assert "Failure Modes" in text
+    assert "Protocols" in text
+    assert "Performance Profiles" in text
+
+
+def test_impact_page_shows_linked_nodes(rich_client):
+    response = rich_client.get("/impact/c-1")
+    assert response.status_code == 200
+    text = response.text
+    assert "No partial updates visible to readers" in text
+    assert 'href="/concepts/kinv-1"' in text
+
+
+def test_impact_page_404_on_missing_node(rich_client):
+    response = rich_client.get("/impact/nonexistent")
+    assert response.status_code == 404
+
+
+def test_concept_detail_links_to_impact(rich_client):
+    """INV-KK-WEB-IMPACT-LINKED: Concept detail page links to /impact/{id}."""
+    response = rich_client.get("/concepts/c-1")
+    assert response.status_code == 200
+    assert 'href="/impact/c-1"' in response.text
+    assert "View Impact Surface" in response.text
+
+
+def test_non_concept_detail_no_impact_link(rich_client):
+    """Impact link only appears for Concept nodes."""
+    response = rich_client.get("/concepts/kinv-1")
+    assert response.status_code == 200
+    assert "/impact/" not in response.text

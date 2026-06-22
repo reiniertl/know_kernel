@@ -6,6 +6,7 @@
 {% set attrs = node.attrs or {} %}
 
 {% if node.kind == 'Concept' %}
+<p><a href="/impact/{{ node.id }}">View Impact Surface →</a></p>
 <div class="attrs-section">
   {% if attrs.get('description') %}<p>{{ attrs.description }}</p>{% endif %}
   {% if attrs.get('key_properties') %}

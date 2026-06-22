@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Graph Health Diagnostics</h1>
+<p>{{ report.total_nodes }} nodes &nbsp;|&nbsp; {{ report.total_edges }} edges &nbsp;|&nbsp; Invariant density: {{ "%.2f"|format(report.invariant_density) }}</p>
+
+<h2>Orphan Concepts <span class="count">{{ report.orphan_concepts|length }}</span></h2>
+<p>Concepts without a <code>belongs-to</code> edge to any Subsystem.</p>
+{% if report.orphan_concepts %}
+<ul>{% for nid in report.orphan_concepts %}<li><a href="/concepts/{{ nid }}">{{ nid }}</a></li>{% endfor %}</ul>
+{% else %}<p>None found.</p>{% endif %}
+
+<h2>Unlinked Invariants <span class="count">{{ report.unlinked_invariants|length }}</span></h2>
+<p>KernelInvariants without a <code>governed-by</code> edge.</p>
+{% if report.unlinked_invariants %}
+<ul>{% for nid in report.unlinked_invariants %}<li><a href="/concepts/{{ nid }}">{{ nid }}</a></li>{% endfor %}</ul>
+{% else %}<p>None found.</p>{% endif %}
+
+<h2>Dangling Failure Modes <span class="count">{{ report.dangling_failure_modes|length }}</span></h2>
+<p>FailureModes without a <code>triggered-by</code> edge.</p>
+{% if report.dangling_failure_modes %}
+<ul>{% for nid in report.dangling_failure_modes %}<li><a href="/concepts/{{ nid }}">{{ nid }}</a></li>{% endfor %}</ul>
+{% else %}<p>None found.</p>{% endif %}
+
+<h2>Lone Protocols <span class="count">{{ report.lone_protocols|length }}</span></h2>
+<p>InteractionProtocols with fewer than 2 <code>constrains-composition</code> edges.</p>
+{% if report.lone_protocols %}
+<ul>{% for nid in report.lone_protocols %}<li><a href="/concepts/{{ nid }}">{{ nid }}</a></li>{% endfor %}</ul>
+{% else %}<p>None found.</p>{% endif %}
+
+<h2>Subsystem Coverage</h2>
+{% if report.subsystem_coverage %}
+<table>
+  <thead><tr><th>Subsystem</th><th>Members</th></tr></thead>
+  <tbody>
+  {% for name, count in report.subsystem_coverage.items() %}
+    <tr><td>{{ name }}</td><td>{{ count }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p>No subsystems found.</p>{% endif %}
+
+<h2>Duplicate Names <span class="count">{{ report.duplicate_names|length }}</span></h2>
+{% if report.duplicate_names %}
+<ul>
+{% for name, ids in report.duplicate_names %}
+  <li><strong>{{ name }}</strong>: {% for nid in ids %}<a href="/concepts/{{ nid }}">{{ nid }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</li>
+{% endfor %}
+</ul>
+{% else %}<p>No duplicates found.</p>{% endif %}
+{% endblock %}

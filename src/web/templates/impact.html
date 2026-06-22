@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Impact Surface — {{ node.display_name }}</h1>
+<p><span class="badge badge-kind">{{ node.kind }}</span> <code>{{ node.id }}</code></p>
+
+{% set categories = [
+  ("Invariants", impact.invariants),
+  ("Failure Modes", impact.failure_modes),
+  ("Protocols", impact.protocols),
+  ("Performance Profiles", impact.profiles),
+  ("Optimization Goals", impact.goals),
+  ("Compatibility Assessments", impact.compatibilities),
+  ("Comparative Analyses", impact.comparatives),
+  ("Use Case Scenarios", impact.scenarios)
+] %}
+
+{% for label, items in categories %}
+<h2>{{ label }} <span class="count">{{ items|length }}</span></h2>
+{% if items %}
+<ul>
+{% for item in items %}
+  <li><a href="/concepts/{{ item.id }}">{{ item.display_name }}</a> <span class="badge badge-kind">{{ item.kind }}</span></li>
+{% endfor %}
+</ul>
+{% else %}
+<p>None.</p>
+{% endif %}
+{% endfor %}
+
+<p><a href="/concepts/{{ node.id }}">← Back to detail</a></p>
+{% endblock %}

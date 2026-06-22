@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from graph.diagnostics import diagnose_graph
 from graph.engine import (
     compare_neighborhoods,
+    get_node,
     match_scenarios,
     ranked_recommendations,
     transitive_impact,
@@ -283,6 +284,40 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         conn = request.app.state.conn
         report = diagnose_graph(conn)
         return dataclasses.asdict(report)
+
+    @app.get("/health", response_class=HTMLResponse)
+    async def health_page(request: Request):
+        """Render graph health diagnostics as HTML (ALG-KK-WEB-DIAGNOSTICS-PAGE)."""
+        import dataclasses
+
+        conn = request.app.state.conn
+        report = diagnose_graph(conn)
+        return templates.TemplateResponse(
+            request, "health.html", {"report": dataclasses.asdict(report)},
+        )
+
+    @app.get("/impact/{node_id}", response_class=HTMLResponse)
+    async def impact_page(request: Request, node_id: str):
+        """Render transitive impact surface as HTML (ALG-KK-WEB-IMPACT-PAGE)."""
+        conn = request.app.state.conn
+        row = conn.execute(
+            "SELECT id, kind, attrs FROM nodes WHERE id = ?", (node_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Node not found")
+        node = _rows_to_dicts([row])[0]
+        node["display_name"] = display_name_for_node(
+            node["kind"], node.get("attrs") or {}, node["id"]
+        )
+        impact = transitive_impact(conn, node_id)
+        for category in impact.values():
+            for item in category:
+                item["display_name"] = display_name_for_node(
+                    item["kind"], item.get("attrs") or {}, item["id"]
+                )
+        return templates.TemplateResponse(
+            request, "impact.html", {"node": node, "impact": impact},
+        )
 
     @app.get("/viz", response_class=HTMLResponse)
     async def viz(request: Request):
