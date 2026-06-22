@@ -61,6 +61,19 @@ def assign_subsystems(
         add_edge(conn, "belongs-to", concept_id, subsystem_id)
         concept_subsystem_map[concept_id] = subsystem_id
 
+    for concept_id, subsystem_id in concept_subsystem_map.items():
+        kinv_rows = conn.execute(
+            "SELECT source_id FROM edges WHERE kind='governed-by' AND target_id=?",
+            (concept_id,),
+        ).fetchall()
+        for (kinv_id,) in kinv_rows:
+            existing = conn.execute(
+                "SELECT 1 FROM edges WHERE kind='belongs-to' AND source_id=? AND target_id=?",
+                (kinv_id, subsystem_id),
+            ).fetchone()
+            if not existing:
+                add_edge(conn, "belongs-to", kinv_id, subsystem_id)
+
     created = sum(1 for v in seen_subsystems.values() if v)
     reused = sum(1 for v in seen_subsystems.values() if not v)
 

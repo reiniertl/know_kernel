@@ -208,6 +208,77 @@ def test_parse_labels_length_mismatch_fewer_data():
     assert result == {"c-1": "VM", "c-2": "Unclassified", "c-3": "Unclassified"}
 
 
+# --- KernelInvariant → Subsystem linkage tests (INV-KK-KINV-SUBSYSTEM-LINKAGE) ---
+
+
+def _make_kernel_invariant(conn, kinv_id, concept_id, evidence_id):
+    """Helper: create a KernelInvariant governed-by a Concept, extracted-from Evidence."""
+    add_node(conn, kinv_id, "KernelInvariant", {
+        "predicate": "test predicate", "strength": "strong",
+        "scope": "global", "artifact_class": "abstracted-mechanism",
+    })
+    add_edge(conn, "governed-by", kinv_id, concept_id)
+    add_edge(conn, "extracted-from", kinv_id, evidence_id)
+
+
+def test_assign_links_kernel_invariants_to_subsystem(conn):
+    """INV-KK-KINV-SUBSYSTEM-LINKAGE: KernelInvariants get belongs-to edges."""
+    _make_concept(conn, "c-1")
+    _make_kernel_invariant(conn, "kinv-1", "c-1", "ev-c-1")
+    classifications = {"c-1": "Virtual Memory"}
+    assign_subsystems(conn, ["c-1"], classifications)
+
+    kinv_edges = conn.execute(
+        "SELECT target_id FROM edges WHERE kind='belongs-to' AND source_id='kinv-1'"
+    ).fetchall()
+    assert len(kinv_edges) == 1
+
+    concept_edges = conn.execute(
+        "SELECT target_id FROM edges WHERE kind='belongs-to' AND source_id='c-1'"
+    ).fetchall()
+    assert kinv_edges[0][0] == concept_edges[0][0]
+
+
+def test_assign_kinv_linkage_skips_existing(conn):
+    """KernelInvariant already linked to Subsystem doesn't get duplicate edge."""
+    _make_concept(conn, "c-1")
+    _make_kernel_invariant(conn, "kinv-1", "c-1", "ev-c-1")
+    sub_id = resolve_subsystem(conn, "Virtual Memory")
+    add_edge(conn, "belongs-to", "kinv-1", sub_id)
+
+    classifications = {"c-1": "Virtual Memory"}
+    assign_subsystems(conn, ["c-1"], classifications)
+
+    kinv_edges = conn.execute(
+        "SELECT target_id FROM edges WHERE kind='belongs-to' AND source_id='kinv-1'"
+    ).fetchall()
+    assert len(kinv_edges) == 1
+
+
+def test_assign_multiple_kinvs_linked_to_subsystem(conn):
+    """Multiple KernelInvariants governed-by same Concept all get linked."""
+    _make_concept(conn, "c-1")
+    _make_kernel_invariant(conn, "kinv-1", "c-1", "ev-c-1")
+    _make_kernel_invariant(conn, "kinv-2", "c-1", "ev-c-1")
+    classifications = {"c-1": "Scheduler"}
+    assign_subsystems(conn, ["c-1"], classifications)
+
+    for kinv_id in ["kinv-1", "kinv-2"]:
+        edges = conn.execute(
+            "SELECT target_id FROM edges WHERE kind='belongs-to' AND source_id=?",
+            (kinv_id,),
+        ).fetchall()
+        assert len(edges) == 1
+
+
+def test_assign_no_kinvs_still_works(conn):
+    """Concepts without KernelInvariants don't cause errors."""
+    _make_concept(conn, "c-1")
+    classifications = {"c-1": "Virtual Memory"}
+    result = assign_subsystems(conn, ["c-1"], classifications)
+    assert result.subsystems_created == 1
+
+
 # --- ClassificationResult dataclass ---
 
 

@@ -55,7 +55,7 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "Concept": ("name", "description", "artifact_class", "key_properties", "tradeoffs", "design_rationale"),
     "Source": ("url", "source_type", "license"),
     "Evidence": ("artifact_class", "contamination_level"),
-    "Advisory": ("assessment",),
+    "Advisory": ("assessment", "contamination_confirmed"),
     "Subsystem": ("name",),
     "Proposal": ("name", "description"),
     "KernelInvariant": ("predicate", "strength", "scope", "artifact_class"),

@@ -68,6 +68,25 @@ class TestReviewSource:
         assert "assessment" in attrs
         assert attrs["assessment"] == "Good license."
 
+    def test_advisory_stores_contamination_confirmed(self, conn, source_with_evidence):
+        """INV-KK-ADVISORY-STORES-CONTAMINATION"""
+        result = review_source(conn, source_with_evidence, "License OK.", "weak-copyleft")
+        row = conn.execute(
+            "SELECT attrs FROM nodes WHERE id = ?", (result.advisory_id,)
+        ).fetchone()
+        import json
+        attrs = json.loads(row[0])
+        assert "contamination_confirmed" in attrs
+        assert attrs["contamination_confirmed"] == "weak-copyleft"
+
+    def test_advisory_without_contamination_confirmed_fails_schema(self, conn, source_with_evidence):
+        """INV-KK-ADVISORY-REQUIRES-ASSESSMENT — contamination_confirmed is required."""
+        from graph.engine import add_node
+        with pytest.raises(ValueError, match="contamination_confirmed"):
+            add_node(conn, "adv-missing", "Advisory", {
+                "assessment": "Some assessment",
+            })
+
     def test_evidence_unchanged_after_review(self, conn, source_with_evidence):
         ev_before = conn.execute(
             "SELECT id, kind, attrs FROM nodes WHERE id = 'ev-test1'"

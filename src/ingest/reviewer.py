@@ -64,6 +64,7 @@ def review_source(
 
     add_node(conn, advisory_id, "Advisory", {
         "assessment": assessment_text.strip(),
+        "contamination_confirmed": confirmed_level,
     })
     add_edge(conn, "assessed-by", source_id, advisory_id)
 
