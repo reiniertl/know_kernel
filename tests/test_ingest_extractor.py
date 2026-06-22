@@ -9,6 +9,7 @@ import pytest
 from graph.engine import add_edge, add_node
 from graph.schema import init_db
 from ingest.extractor import (
+    ALLOWED_RELATIONSHIP_KINDS,
     CONCEPT_SCHEMA,
     EXTRACTION_SYSTEM_PROMPT,
     ExtractionResult,
@@ -489,6 +490,46 @@ class TestWireRelationships:
         result = wire_relationships(conn, concepts_data, name_map)
         assert result.edges_created == 0
         assert result.edges_skipped == 0
+
+    def test_wire_relationships_creates_alternative_to_edge(self, conn, evidence_node):
+        cid_a, cid_b, name_map = _setup_two_concepts(conn, evidence_node)
+        concepts_data = [
+            {"name": "Page Table Walking", "relationships": [
+                {"target": "Demand Paging", "kind": "alternative-to", "reason": "different approach"}
+            ]},
+        ]
+        result = wire_relationships(conn, concepts_data, name_map)
+        assert result.edges_created == 1
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind='alternative-to' AND source_id=? AND target_id=?",
+            (cid_a, cid_b),
+        ).fetchone()
+        assert edge is not None
+
+    def test_wire_relationships_creates_supersedes_edge(self, conn, evidence_node):
+        cid_a, cid_b, name_map = _setup_two_concepts(conn, evidence_node)
+        concepts_data = [
+            {"name": "Page Table Walking", "relationships": [
+                {"target": "Demand Paging", "kind": "supersedes", "reason": "replaces entirely"}
+            ]},
+        ]
+        result = wire_relationships(conn, concepts_data, name_map)
+        assert result.edges_created == 1
+        edge = conn.execute(
+            "SELECT 1 FROM edges WHERE kind='supersedes' AND source_id=? AND target_id=?",
+            (cid_a, cid_b),
+        ).fetchone()
+        assert edge is not None
+
+
+class TestAllowedRelationshipKindsCoverage:
+    def test_allowed_kinds_contains_all_five(self):
+        expected = {"refines", "contradicts", "prerequisite", "alternative-to", "supersedes"}
+        assert ALLOWED_RELATIONSHIP_KINDS == expected
+
+    def test_system_prompt_lists_all_five_kinds(self):
+        for kind in ("refines", "contradicts", "prerequisite", "alternative-to", "supersedes"):
+            assert kind in EXTRACTION_SYSTEM_PROMPT, f"Missing '{kind}' in system prompt"
 
 
 # --- validate_invariant_item ---

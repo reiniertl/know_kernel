@@ -43,7 +43,12 @@ over alternatives
 - relationships: A list of connections to OTHER concepts you are \
 extracting in this same batch. Each entry has:
   - target: The exact name of the other concept
-  - kind: One of "refines", "contradicts", "prerequisite"
+  - kind: One of:
+    - "refines" — this concept is a more specific version of the target
+    - "contradicts" — this concept and the target cannot coexist
+    - "prerequisite" — this concept requires the target to exist first
+    - "alternative-to" — this concept and the target solve the same problem differently
+    - "supersedes" — this concept replaces the target entirely
   - reason: One sentence explaining the relationship
   If a concept has no relationships, use an empty list.
 - invariants: A list of rules or properties that MUST HOLD for this \
@@ -216,7 +221,7 @@ def build_extraction_prompt(evidence_text: str) -> str:
     return "Extract abstract concepts from metadata only — no source text available."
 
 
-ALLOWED_RELATIONSHIP_KINDS = {"refines", "contradicts", "prerequisite"}
+ALLOWED_RELATIONSHIP_KINDS = {"refines", "contradicts", "prerequisite", "alternative-to", "supersedes"}
 
 
 @dataclass
