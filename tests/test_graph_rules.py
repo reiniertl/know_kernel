@@ -10,7 +10,13 @@ from graph.rules import (
     check_concept_has_belongs_to,
     check_concept_has_provenance,
     check_evidence_has_source,
+    check_failure_mode_provenance,
+    check_failure_mode_trigger,
+    check_kinv_belongs_to_subsystem,
+    check_kinv_governed_by_concept,
     check_proposal_grounding,
+    check_protocol_concept_pairs,
+    check_protocol_provenance,
     check_source_has_advisory,
     validate_node,
 )
@@ -116,3 +122,131 @@ def test_validate_node_concept_violations(conn: sqlite3.Connection):
 def test_validate_node_unknown_kind(conn: sqlite3.Connection):
     violations = validate_node(conn, "x", "Subsystem")
     assert violations == []
+
+
+# --- INV-KK-KINV-SUBSYSTEM ---
+
+
+def test_kinv_belongs_to_subsystem_pass(conn: sqlite3.Connection):
+    add_node(conn, "sub1", "Subsystem", {"name": "sched"})
+    add_node(conn, "kinv1", "KernelInvariant", {"predicate": "P", "strength": "safety", "scope": "global", "artifact_class": "B"})
+    add_edge(conn, "belongs-to", "kinv1", "sub1")
+    assert check_kinv_belongs_to_subsystem(conn, "kinv1") is None
+
+
+def test_kinv_belongs_to_subsystem_fail(conn: sqlite3.Connection):
+    add_node(conn, "kinv1", "KernelInvariant", {"predicate": "P", "strength": "safety", "scope": "global", "artifact_class": "B"})
+    v = check_kinv_belongs_to_subsystem(conn, "kinv1")
+    assert isinstance(v, Violation)
+    assert "belongs-to" in v.message.lower() or "Subsystem" in v.message
+
+
+# --- INV-KK-KINV-GOVERNED-BY ---
+
+
+def test_kinv_governed_by_concept_pass(conn: sqlite3.Connection):
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_node(conn, "kinv1", "KernelInvariant", {"predicate": "P", "strength": "safety", "scope": "global", "artifact_class": "B"})
+    add_edge(conn, "governed-by", "kinv1", "c1")
+    assert check_kinv_governed_by_concept(conn, "kinv1") is None
+
+
+def test_kinv_governed_by_concept_fail(conn: sqlite3.Connection):
+    add_node(conn, "kinv1", "KernelInvariant", {"predicate": "P", "strength": "safety", "scope": "global", "artifact_class": "B"})
+    v = check_kinv_governed_by_concept(conn, "kinv1")
+    assert isinstance(v, Violation)
+    assert "governed-by" in v.message.lower()
+
+
+# --- INV-KK-FM-TRIGGERED-BY ---
+
+
+def test_failure_mode_trigger_pass(conn: sqlite3.Connection):
+    add_node(conn, "kinv1", "KernelInvariant", {"predicate": "P", "strength": "safety", "scope": "global", "artifact_class": "B"})
+    add_node(conn, "fm1", "FailureMode", {"symptom": "crash", "blast_radius": "local", "recoverability": "self-healing", "artifact_class": "B"})
+    add_edge(conn, "triggered-by", "fm1", "kinv1")
+    assert check_failure_mode_trigger(conn, "fm1") is None
+
+
+def test_failure_mode_trigger_fail(conn: sqlite3.Connection):
+    add_node(conn, "fm1", "FailureMode", {"symptom": "crash", "blast_radius": "local", "recoverability": "self-healing", "artifact_class": "B"})
+    v = check_failure_mode_trigger(conn, "fm1")
+    assert isinstance(v, Violation)
+    assert "triggered-by" in v.message.lower()
+
+
+# --- INV-KK-FM-PROVENANCE ---
+
+
+def test_failure_mode_provenance_pass(conn: sqlite3.Connection):
+    add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+    add_node(conn, "fm1", "FailureMode", {"symptom": "crash", "blast_radius": "local", "recoverability": "self-healing", "artifact_class": "B"})
+    add_edge(conn, "extracted-from", "fm1", "ev1")
+    assert check_failure_mode_provenance(conn, "fm1") is None
+
+
+def test_failure_mode_provenance_fail(conn: sqlite3.Connection):
+    add_node(conn, "fm1", "FailureMode", {"symptom": "crash", "blast_radius": "local", "recoverability": "self-healing", "artifact_class": "B"})
+    v = check_failure_mode_provenance(conn, "fm1")
+    assert isinstance(v, Violation)
+    assert "extracted-from" in v.message.lower()
+
+
+# --- INV-KK-IP-CONSTRAINS-PAIR ---
+
+
+def test_protocol_concept_pairs_pass(conn: sqlite3.Connection):
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_node(conn, "c2", "Concept", {"name": "y", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_node(conn, "ip1", "InteractionProtocol", {"rule": "no sleep", "ordering": "never-during", "violation_mode": "deadlock", "artifact_class": "B"})
+    add_edge(conn, "constrains-composition", "ip1", "c1")
+    add_edge(conn, "constrains-composition", "ip1", "c2")
+    assert check_protocol_concept_pairs(conn, "ip1") is None
+
+
+def test_protocol_concept_pairs_fail_one(conn: sqlite3.Connection):
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_node(conn, "ip1", "InteractionProtocol", {"rule": "no sleep", "ordering": "never-during", "violation_mode": "deadlock", "artifact_class": "B"})
+    add_edge(conn, "constrains-composition", "ip1", "c1")
+    v = check_protocol_concept_pairs(conn, "ip1")
+    assert isinstance(v, Violation)
+    assert "found 1" in v.message
+
+
+# --- INV-KK-IP-PROVENANCE ---
+
+
+def test_protocol_provenance_pass(conn: sqlite3.Connection):
+    add_node(conn, "ev1", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+    add_node(conn, "ip1", "InteractionProtocol", {"rule": "no sleep", "ordering": "never-during", "violation_mode": "deadlock", "artifact_class": "B"})
+    add_edge(conn, "extracted-from", "ip1", "ev1")
+    assert check_protocol_provenance(conn, "ip1") is None
+
+
+def test_protocol_provenance_fail(conn: sqlite3.Connection):
+    add_node(conn, "ip1", "InteractionProtocol", {"rule": "no sleep", "ordering": "never-during", "violation_mode": "deadlock", "artifact_class": "B"})
+    v = check_protocol_provenance(conn, "ip1")
+    assert isinstance(v, Violation)
+    assert "extracted-from" in v.message.lower()
+
+
+# --- validate_node for new kinds ---
+
+
+def test_validate_node_kernel_invariant_clean(conn: sqlite3.Connection):
+    add_node(conn, "sub1", "Subsystem", {"name": "sched"})
+    add_node(conn, "c1", "Concept", {"name": "x", "description": "d", "artifact_class": "B", "key_properties": [], "tradeoffs": [], "design_rationale": "r"})
+    add_node(conn, "kinv1", "KernelInvariant", {"predicate": "P", "strength": "safety", "scope": "global", "artifact_class": "B"})
+    add_edge(conn, "belongs-to", "kinv1", "sub1")
+    add_edge(conn, "governed-by", "kinv1", "c1")
+    violations = validate_node(conn, "kinv1", "KernelInvariant")
+    assert violations == []
+
+
+def test_validate_node_kernel_invariant_violations(conn: sqlite3.Connection):
+    add_node(conn, "kinv1", "KernelInvariant", {"predicate": "P", "strength": "safety", "scope": "global", "artifact_class": "B"})
+    violations = validate_node(conn, "kinv1", "KernelInvariant")
+    assert len(violations) == 2
+    rules = {v.rule for v in violations}
+    assert "kinv-belongs-to-subsystem" in rules
+    assert "kinv-governed-by" in rules

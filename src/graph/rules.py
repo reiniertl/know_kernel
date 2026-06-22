@@ -66,11 +66,77 @@ def check_source_has_advisory(conn: sqlite3.Connection, node_id: str) -> Violati
     return None
 
 
+def check_kinv_belongs_to_subsystem(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    row = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'belongs-to' AND source_id = ? LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return Violation(node_id, "kinv-belongs-to-subsystem", "KernelInvariant must belong-to at least one Subsystem")
+    return None
+
+
+def check_kinv_governed_by_concept(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    row = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'governed-by' AND source_id = ? LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return Violation(node_id, "kinv-governed-by", "KernelInvariant must be governed-by at least one Concept")
+    return None
+
+
+def check_failure_mode_trigger(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    row = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'triggered-by' AND source_id = ? LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return Violation(node_id, "fm-triggered-by", "FailureMode must be triggered-by at least one KernelInvariant")
+    return None
+
+
+def check_failure_mode_provenance(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    row = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'extracted-from' AND source_id = ? LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return Violation(node_id, "fm-provenance", "FailureMode must be extracted-from at least one Evidence")
+    return None
+
+
+def check_protocol_concept_pairs(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    count = conn.execute(
+        "SELECT COUNT(DISTINCT target_id) FROM edges WHERE kind = 'constrains-composition' AND source_id = ?",
+        (node_id,),
+    ).fetchone()[0]
+    if count < 2:
+        return Violation(
+            node_id, "ip-constrains-pair",
+            f"InteractionProtocol must constrains-composition at least 2 distinct Concepts, found {count}",
+        )
+    return None
+
+
+def check_protocol_provenance(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    row = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'extracted-from' AND source_id = ? LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return Violation(node_id, "ip-provenance", "InteractionProtocol must be extracted-from at least one Evidence")
+    return None
+
+
 RULES_BY_KIND = {
     "Concept": [check_concept_has_belongs_to, check_concept_has_provenance],
     "Evidence": [check_evidence_has_source],
     "Proposal": [check_proposal_grounding],
     "Source": [check_source_has_advisory],
+    "KernelInvariant": [check_kinv_belongs_to_subsystem, check_kinv_governed_by_concept],
+    "FailureMode": [check_failure_mode_trigger, check_failure_mode_provenance],
+    "InteractionProtocol": [check_protocol_concept_pairs, check_protocol_provenance],
 }
 
 
