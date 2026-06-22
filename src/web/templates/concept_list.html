@@ -3,15 +3,16 @@
 <h1>{{ title | default("Nodes") }}</h1>
 <p>{{ nodes | length }} item(s)</p>
 <table>
-  <thead><tr><th>ID</th><th>Kind</th></tr></thead>
+  <thead><tr><th>Name</th><th>Kind</th><th>ID</th></tr></thead>
   <tbody>
   {% for node in nodes %}
     <tr>
-      <td><a href="/concepts/{{ node.id }}">{{ node.id }}</a></td>
+      <td><a href="/concepts/{{ node.id }}">{{ node.display_name }}</a></td>
       <td>{{ node.kind }}</td>
+      <td><code>{{ node.id }}</code></td>
     </tr>
   {% else %}
-    <tr><td colspan="2">No nodes.</td></tr>
+    <tr><td colspan="3">No nodes.</td></tr>
   {% endfor %}
   </tbody>
 </table>

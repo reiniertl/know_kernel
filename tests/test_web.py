@@ -62,6 +62,16 @@ def test_concepts_list_returns_all_kinds(client):
     assert "Subsystem" in text
 
 
+def test_concepts_list_shows_display_names(client):
+    """INV-KK-WEB-DISPLAY-NAME: list shows human-readable names, not raw IDs as primary text."""
+    response = client.get("/concepts")
+    assert response.status_code == 200
+    text = response.text
+    assert "Lock-free Queue" in text
+    assert "Scheduler" in text
+    assert "https://example.com/paper.pdf" in text
+
+
 def test_concept_detail_returns_node(client):
     response = client.get("/concepts/concept-1")
     assert response.status_code == 200
@@ -308,3 +318,108 @@ def test_web_viz_contains_graph_fetch(client):
 def test_web_viz_contains_d3_reference(client):
     response = client.get("/viz")
     assert "d3" in response.text.lower()
+
+
+# --- ALG-KK-WEB-DISPLAY-NAME unit tests ---
+
+from web.routes import display_name_for_node
+
+
+class TestDisplayNameForNode:
+    """Unit tests for display_name_for_node (ALG-KK-WEB-DISPLAY-NAME)."""
+
+    def test_concept_uses_name(self):
+        assert display_name_for_node("Concept", {"name": "RCU"}, "c-1") == "RCU"
+
+    def test_source_uses_url(self):
+        assert display_name_for_node("Source", {"url": "https://example.com"}, "s-1") == "https://example.com"
+
+    def test_source_truncates_at_80(self):
+        long_url = "https://example.com/" + "a" * 80
+        result = display_name_for_node("Source", {"url": long_url}, "s-1")
+        assert len(result) == 83  # 80 + "..."
+        assert result.endswith("...")
+
+    def test_source_no_truncation_at_boundary(self):
+        url_80 = "x" * 80
+        assert display_name_for_node("Source", {"url": url_80}, "s-1") == url_80
+
+    def test_evidence_uses_description(self):
+        assert display_name_for_node("Evidence", {"description": "Sample evidence"}, "ev-abc12345") == "Sample evidence"
+
+    def test_evidence_fallback_without_description(self):
+        assert display_name_for_node("Evidence", {}, "ev-abc12345") == "Evidence abc12345"
+
+    def test_evidence_fallback_empty_description(self):
+        assert display_name_for_node("Evidence", {"description": ""}, "ev-abc12345") == "Evidence abc12345"
+
+    def test_advisory_uses_assessment(self):
+        assert display_name_for_node("Advisory", {"assessment": "approved"}, "adv-1") == "approved"
+
+    def test_advisory_truncates_at_60(self):
+        long_text = "a" * 70
+        result = display_name_for_node("Advisory", {"assessment": long_text}, "adv-1")
+        assert len(result) == 63  # 60 + "..."
+        assert result.endswith("...")
+
+    def test_subsystem_uses_name(self):
+        assert display_name_for_node("Subsystem", {"name": "Scheduler"}, "sub-1") == "Scheduler"
+
+    def test_proposal_uses_name(self):
+        assert display_name_for_node("Proposal", {"name": "Add RCU v2"}, "prop-1") == "Add RCU v2"
+
+    def test_kernel_invariant_uses_predicate(self):
+        assert display_name_for_node("KernelInvariant", {"predicate": "No stale reads"}, "kinv-1") == "No stale reads"
+
+    def test_kernel_invariant_truncates_at_60(self):
+        long_pred = "p" * 65
+        result = display_name_for_node("KernelInvariant", {"predicate": long_pred}, "kinv-1")
+        assert len(result) == 63
+        assert result.endswith("...")
+
+    def test_failure_mode_uses_symptom(self):
+        assert display_name_for_node("FailureMode", {"symptom": "Deadlock"}, "fm-1") == "Deadlock"
+
+    def test_interaction_protocol_uses_rule(self):
+        assert display_name_for_node("InteractionProtocol", {"rule": "No sleep under spinlock"}, "ip-1") == "No sleep under spinlock"
+
+    def test_performance_profile_uses_metric(self):
+        assert display_name_for_node("PerformanceProfile", {"metric": "latency"}, "pp-1") == "latency"
+
+    def test_performance_profile_truncates_at_40(self):
+        long_metric = "m" * 50
+        result = display_name_for_node("PerformanceProfile", {"metric": long_metric}, "pp-1")
+        assert len(result) == 43  # 40 + "..."
+        assert result.endswith("...")
+
+    def test_compatibility_assessment_uses_synergy(self):
+        assert display_name_for_node("CompatibilityAssessment", {"synergy": "high"}, "ca-1") == "high"
+
+    def test_optimization_goal_uses_name(self):
+        assert display_name_for_node("OptimizationGoal", {"name": "Min Latency"}, "og-1") == "Min Latency"
+
+    def test_use_case_scenario_uses_name(self):
+        assert display_name_for_node("UseCaseScenario", {"name": "HPC Server"}, "ucs-1") == "HPC Server"
+
+    def test_comparative_analysis_uses_dimension(self):
+        assert display_name_for_node("ComparativeAnalysis", {"dimension": "throughput"}, "cmp-1") == "throughput"
+
+    def test_kernel_uses_name(self):
+        assert display_name_for_node("Kernel", {"name": "Linux"}, "k-1") == "Linux"
+
+    def test_missing_attrs_falls_back_to_id(self):
+        assert display_name_for_node("Concept", {}, "c-1") == "c-1"
+
+    def test_none_field_falls_back_to_id(self):
+        assert display_name_for_node("Concept", {"name": None}, "c-1") == "c-1"
+
+    def test_whitespace_only_falls_back_to_id(self):
+        assert display_name_for_node("Concept", {"name": "   "}, "c-1") == "c-1"
+
+    def test_unknown_kind_falls_back_to_id(self):
+        assert display_name_for_node("UnknownKind", {"name": "foo"}, "unk-1") == "unk-1"
+
+    def test_deterministic(self):
+        a = display_name_for_node("Concept", {"name": "RCU"}, "c-1")
+        b = display_name_for_node("Concept", {"name": "RCU"}, "c-1")
+        assert a == b

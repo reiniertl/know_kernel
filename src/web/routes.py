@@ -34,6 +34,39 @@ def _rows_to_dicts(rows) -> list[dict]:
     return result
 
 
+_DISPLAY_FIELDS: dict[str, tuple[str, int | None]] = {
+    "Concept": ("name", None),
+    "Source": ("url", 80),
+    "Evidence": ("description", 60),
+    "Advisory": ("assessment", 60),
+    "Subsystem": ("name", None),
+    "Proposal": ("name", None),
+    "KernelInvariant": ("predicate", 60),
+    "FailureMode": ("symptom", 60),
+    "InteractionProtocol": ("rule", 60),
+    "PerformanceProfile": ("metric", 40),
+    "CompatibilityAssessment": ("synergy", 60),
+    "OptimizationGoal": ("name", None),
+    "UseCaseScenario": ("name", None),
+    "ComparativeAnalysis": ("dimension", 60),
+    "Kernel": ("name", None),
+}
+
+
+def display_name_for_node(kind: str, attrs: dict, node_id: str) -> str:
+    """Resolve a human-readable display name (ALG-KK-WEB-DISPLAY-NAME)."""
+    field, max_len = _DISPLAY_FIELDS.get(kind, (None, None))
+    if field:
+        value = (attrs.get(field) or "").strip()
+        if value:
+            if max_len and len(value) > max_len:
+                return value[:max_len] + "..."
+            return value
+    if kind == "Evidence":
+        return f"Evidence {node_id[-8:]}"
+    return node_id
+
+
 def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
@@ -58,6 +91,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "SELECT id, kind, attrs FROM nodes ORDER BY kind, id"
         ).fetchall()
         nodes = _rows_to_dicts(rows)
+        for n in nodes:
+            n["display_name"] = display_name_for_node(n["kind"], n.get("attrs") or {}, n["id"])
         return templates.TemplateResponse(
             request,
             "concept_list.html",
@@ -125,6 +160,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "SELECT id, kind, attrs FROM nodes WHERE kind = 'Subsystem' ORDER BY id"
         ).fetchall()
         nodes = _rows_to_dicts(rows)
+        for n in nodes:
+            n["display_name"] = display_name_for_node(n["kind"], n.get("attrs") or {}, n["id"])
         return templates.TemplateResponse(
             request,
             "concept_list.html",
@@ -138,6 +175,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "SELECT id, kind, attrs FROM nodes WHERE kind = 'Source' ORDER BY id"
         ).fetchall()
         nodes = _rows_to_dicts(rows)
+        for n in nodes:
+            n["display_name"] = display_name_for_node(n["kind"], n.get("attrs") or {}, n["id"])
         return templates.TemplateResponse(
             request,
             "concept_list.html",
