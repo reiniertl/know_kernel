@@ -1,11 +1,20 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>{{ title | default("Nodes") }}</h1>
-{% if active_kind %}
-<p>Showing {{ nodes | length }} {{ active_kind }} node(s) · <a href="/concepts">View all</a></p>
-{% else %}
-<p>{{ nodes | length }} item(s){% if page and page > 1 %} (page {{ page }}){% endif %}</p>
-{% endif %}
+<div style="margin-bottom:1rem;">
+  <label for="kind-filter">Filter by kind:</label>
+  <select id="kind-filter" onchange="window.location.href=this.value ? '?kind='+this.value : window.location.pathname" style="font-family:monospace;padding:0.2rem 0.4rem;">
+    <option value="">All kinds</option>
+    {% for k in all_kinds|default([]) %}
+      <option value="{{ k }}"{% if k == active_kind %} selected{% endif %}>{{ k }}</option>
+    {% endfor %}
+  </select>
+  {% if active_kind %}
+    <span style="margin-left:0.5rem;">Showing {{ nodes | length }} {{ active_kind }} node(s)</span>
+  {% else %}
+    <span style="margin-left:0.5rem;">{{ nodes | length }} item(s){% if page and page > 1 %} (page {{ page }}){% endif %}</span>
+  {% endif %}
+</div>
 <table>
   <thead><tr><th>Name</th><th>Kind</th><th>ID</th></tr></thead>
   <tbody>

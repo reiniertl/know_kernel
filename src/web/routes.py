@@ -67,6 +67,12 @@ def display_name_for_node(kind: str, attrs: dict, node_id: str) -> str:
     return node_id
 
 
+def _all_kinds(conn) -> list[str]:
+    """Return sorted list of distinct node kinds (ALG-KK-WEB-KIND-DROPDOWN)."""
+    rows = conn.execute("SELECT DISTINCT kind FROM nodes ORDER BY kind").fetchall()
+    return [r["kind"] for r in rows]
+
+
 def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
@@ -117,6 +123,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "nodes": nodes,
                 "title": title,
                 "active_kind": kind,
+                "all_kinds": _all_kinds(conn),
                 "page": page,
                 "per_page": per_page,
                 "has_next": has_next,
@@ -194,7 +201,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         return templates.TemplateResponse(
             request,
             "concept_list.html",
-            {"nodes": nodes, "title": "Subsystems", "page": page, "per_page": per_page, "has_next": has_next},
+            {"nodes": nodes, "title": "Subsystems", "active_kind": "Subsystem", "all_kinds": _all_kinds(conn), "page": page, "per_page": per_page, "has_next": has_next},
         )
 
     @app.get("/sources", response_class=HTMLResponse)
@@ -217,7 +224,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         return templates.TemplateResponse(
             request,
             "concept_list.html",
-            {"nodes": nodes, "title": "Sources", "page": page, "per_page": per_page, "has_next": has_next},
+            {"nodes": nodes, "title": "Sources", "active_kind": "Source", "all_kinds": _all_kinds(conn), "page": page, "per_page": per_page, "has_next": has_next},
         )
 
     @app.get("/graph")
