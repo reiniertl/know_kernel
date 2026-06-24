@@ -5,18 +5,23 @@
 
 set -e
 
-DB="${1:-data/master.db}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+DB="${1:-$SCRIPT_DIR/data/master.db}"
+
+# Resolve to absolute path
+DB="$(cd "$(dirname "$DB")" && pwd)/$(basename "$DB")"
 
 if [ ! -f "$DB" ]; then
     echo "ERROR: database not found: $DB"
     echo ""
     echo "Available databases:"
-    ls data/*.db 2>/dev/null || echo "  (none)"
+    ls "$SCRIPT_DIR"/data/*.db 2>/dev/null || echo "  (none)"
     exit 1
 fi
 
 export KNOW_KERNEL_DB="$DB"
-export PYTHONPATH="src"
+export PYTHONPATH="$SCRIPT_DIR/src"
 
 echo "Starting know_kernel web server..."
 echo "  Database: $DB"

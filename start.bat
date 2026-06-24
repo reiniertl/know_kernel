@@ -5,19 +5,24 @@ REM   DB_PATH defaults to data\master.db
 
 setlocal
 
+set "SCRIPT_DIR=%~dp0"
+
 set "DB=%~1"
-if "%DB%"=="" set "DB=data\master.db"
+if "%DB%"=="" set "DB=%SCRIPT_DIR%data\master.db"
+
+REM Resolve to absolute path
+for %%F in ("%DB%") do set "DB=%%~fF"
 
 if not exist "%DB%" (
     echo ERROR: database not found: %DB%
     echo.
     echo Available databases:
-    dir /b data\*.db 2>nul
+    dir /b "%SCRIPT_DIR%data\*.db" 2>nul
     exit /b 1
 )
 
 set "KNOW_KERNEL_DB=%DB%"
-set "PYTHONPATH=src"
+set "PYTHONPATH=%SCRIPT_DIR%src"
 
 echo Starting know_kernel web server...
 echo   Database: %DB%
