@@ -926,3 +926,52 @@ def test_sources_pagination(paginated_client):
     response = paginated_client.get("/sources?per_page=10")
     assert response.status_code == 200
     assert "Page 1" in response.text
+
+
+# --- INV-KK-WEB-CODE-BADGE / INV-KK-WEB-CODE-BADGE-ABSENT tests ---
+
+
+def test_concept_list_shows_code_badge(tmp_path):
+    """INV-KK-WEB-CODE-BADGE: Concept with code_examples shows code badge in list."""
+    db_path = tmp_path / "badge_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-with-code", "Concept", {
+        "name": "With Code", "description": "test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+        "code_examples": [{"label": "example", "language": "c", "code": "int x;"}],
+    })
+    add_node(conn, "c-no-code", "Concept", {
+        "name": "No Code", "description": "test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+    })
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/concepts")
+    assert response.status_code == 200
+    text = response.text
+    with_code_idx = text.index("With Code")
+    with_code_row = text[with_code_idx:text.index("</tr>", with_code_idx)]
+    assert "badge-code" in with_code_row
+    assert ">code<" in with_code_row
+
+
+def test_concept_list_no_badge_without_code_examples(tmp_path):
+    """INV-KK-WEB-CODE-BADGE-ABSENT: Concept without code_examples has no code badge."""
+    db_path = tmp_path / "no_badge_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-no-code", "Concept", {
+        "name": "No Code", "description": "test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+    })
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/concepts")
+    assert response.status_code == 200
+    text = response.text
+    no_code_idx = text.index("No Code")
+    no_code_row = text[no_code_idx:text.index("</tr>", no_code_idx)]
+    assert "badge-code" not in no_code_row

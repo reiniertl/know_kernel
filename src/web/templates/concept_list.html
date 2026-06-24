@@ -20,7 +20,10 @@
   <tbody>
   {% for node in nodes %}
     <tr>
-      <td><a href="/concepts/{{ node.id }}">{{ node.display_name }}</a></td>
+      <td>
+        <a href="/concepts/{{ node.id }}">{{ node.display_name }}</a>
+        {% if node.attrs and node.attrs.code_examples %}<span class="badge badge-code">code</span>{% endif %}
+      </td>
       <td>{{ node.kind }}</td>
       <td><code>{{ node.id }}</code></td>
     </tr>
