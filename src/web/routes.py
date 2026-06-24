@@ -184,6 +184,25 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                             "concept_id": nd["id"],
                             "examples": nd_attrs["code_examples"],
                         })
+        elif node["kind"] == "FailureMode" and not related_code:
+            kinv_ids = [nd["id"] for nd in neighbor_dicts if nd["kind"] == "KernelInvariant"]
+            if kinv_ids:
+                kinv_ph = ",".join("?" for _ in kinv_ids)
+                concept_rows = conn.execute(
+                    f"SELECT DISTINCT n.id, n.kind, n.attrs FROM nodes n "
+                    f"JOIN edges e ON e.source_id IN ({kinv_ph}) AND e.kind = 'governed-by' AND e.target_id = n.id "
+                    f"WHERE n.kind = 'Concept'",
+                    tuple(kinv_ids),
+                ).fetchall()
+                for cr in concept_rows:
+                    cr_dict = _rows_to_dicts([cr])[0]
+                    cr_attrs = cr_dict.get("attrs") or {}
+                    if cr_attrs.get("code_examples"):
+                        related_code.append({
+                            "concept_name": cr_attrs.get("name", cr_dict["id"]),
+                            "concept_id": cr_dict["id"],
+                            "examples": cr_attrs["code_examples"],
+                        })
 
         return templates.TemplateResponse(
             request,

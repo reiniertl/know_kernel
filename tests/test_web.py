@@ -1118,3 +1118,65 @@ def test_protocol_shows_related_code(tmp_path):
     text = response.text
     assert "Related Code" in text
     assert "spin_lock" in text
+
+
+# --- INV-KK-WEB-RELATED-CODE-TWOHOP tests ---
+
+
+def test_failure_mode_shows_related_code_via_invariant(tmp_path):
+    """INV-KK-WEB-RELATED-CODE-TWOHOP: FailureMode shows code from Concept via KernelInvariant hop."""
+    db_path = tmp_path / "fm_rel_code.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-1", "Concept", {
+        "name": "RCU", "description": "test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+        "code_examples": [{"label": "rcu_lock", "language": "c", "code": "rcu_read_lock();"}],
+    })
+    add_node(conn, "kinv-1", "KernelInvariant", {
+        "predicate": "test", "strength": "safety",
+        "scope": "global", "artifact_class": "B",
+    })
+    add_node(conn, "fm-1", "FailureMode", {
+        "symptom": "Stale read", "blast_radius": "local",
+        "recoverability": "self-healing", "artifact_class": "B",
+    })
+    add_edge(conn, "governed-by", "kinv-1", "c-1")
+    add_edge(conn, "triggered-by", "fm-1", "kinv-1")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/concepts/fm-1")
+    assert response.status_code == 200
+    text = response.text
+    assert "Related Code" in text
+    assert "rcu_read_lock" in text
+    assert 'href="/concepts/c-1"' in text
+    assert "RCU" in text
+
+
+def test_failure_mode_no_related_code_when_no_concept_code(tmp_path):
+    """INV-KK-WEB-RELATED-CODE-TWOHOP: No Related Code when two-hop Concept has no examples."""
+    db_path = tmp_path / "fm_no_code.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-1", "Concept", {
+        "name": "Test", "description": "test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+    })
+    add_node(conn, "kinv-1", "KernelInvariant", {
+        "predicate": "test", "strength": "safety",
+        "scope": "global", "artifact_class": "B",
+    })
+    add_node(conn, "fm-1", "FailureMode", {
+        "symptom": "Stale read", "blast_radius": "local",
+        "recoverability": "self-healing", "artifact_class": "B",
+    })
+    add_edge(conn, "governed-by", "kinv-1", "c-1")
+    add_edge(conn, "triggered-by", "fm-1", "kinv-1")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/concepts/fm-1")
+    assert response.status_code == 200
+    assert "Related Code" not in response.text
