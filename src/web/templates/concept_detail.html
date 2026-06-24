@@ -136,6 +136,17 @@
   {% if attrs.get('license') %}<p><strong>License:</strong> {{ attrs.license }}</p>{% endif %}
 </div>
 
+{% elif node.kind == 'Evidence' %}
+<div class="attrs-section">
+  {% if attrs.get('excerpt') %}
+  <h3>Source Excerpt</h3>
+  <blockquote style="white-space:pre-wrap;">{{ attrs.excerpt }}</blockquote>
+  {% endif %}
+  {% if attrs.get('description') %}<p>{{ attrs.description }}</p>{% endif %}
+  <p><strong>Artifact Class:</strong> {{ attrs.artifact_class }}</p>
+  <p><strong>Contamination Level:</strong> {{ attrs.contamination_level }}</p>
+</div>
+
 {% else %}
 <div class="attrs-section">
   <h2>Attributes</h2>

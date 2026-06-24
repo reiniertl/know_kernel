@@ -287,6 +287,38 @@ def test_source_detail_renders_clickable_url(rich_client):
     assert "MIT" in text
 
 
+def test_evidence_detail_renders_excerpt_blockquote(tmp_path):
+    """INV-KK-WEB-EVIDENCE-EXCERPT: Evidence detail renders excerpt as blockquote."""
+    db_path = tmp_path / "ev_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "ev-ex", "Evidence", {
+        "artifact_class": "A",
+        "contamination_level": "weak-copyleft",
+        "excerpt": "The Linux kernel uses RCU for read-heavy data structures.",
+    })
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/concepts/ev-ex")
+    assert response.status_code == 200
+    text = response.text
+    assert "<blockquote" in text
+    assert "The Linux kernel uses RCU" in text
+    assert "Source Excerpt" in text
+    assert "Artifact Class" in text
+    assert "Contamination Level" in text
+
+
+def test_evidence_detail_no_excerpt(rich_client):
+    """INV-KK-WEB-EVIDENCE-EXCERPT: Evidence without excerpt renders without empty blockquote."""
+    response = rich_client.get("/concepts/ev-1")
+    assert response.status_code == 200
+    text = response.text
+    assert "Artifact Class" in text
+    assert "Source Excerpt" not in text
+
+
 def test_web_all_allowed_kinds_have_detail(rich_client):
     """INV-KK-WEB-KIND-AWARE-DETAIL: no kind renders as raw JSON dump."""
     kind_to_id = {
