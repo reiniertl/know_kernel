@@ -158,6 +158,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             if nid != node_id
         }
         node_labels: dict[str, str] = {}
+        neighbor_dicts: list[dict] = []
         if neighbor_ids:
             placeholders = ",".join("?" for _ in neighbor_ids)
             label_rows = conn.execute(
@@ -170,6 +171,20 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 kind = lr_dict["kind"]
                 label = display_name_for_node(kind, attrs, lr_dict["id"])
                 node_labels[lr_dict["id"]] = f"{label} ({kind})"
+                neighbor_dicts.append(lr_dict)
+
+        related_code = []
+        if node["kind"] in ("KernelInvariant", "InteractionProtocol"):
+            for nd in neighbor_dicts:
+                if nd["kind"] == "Concept":
+                    nd_attrs = nd.get("attrs") or {}
+                    if nd_attrs.get("code_examples"):
+                        related_code.append({
+                            "concept_name": nd_attrs.get("name", nd["id"]),
+                            "concept_id": nd["id"],
+                            "examples": nd_attrs["code_examples"],
+                        })
+
         return templates.TemplateResponse(
             request,
             "concept_detail.html",
@@ -178,6 +193,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "edges": edges,
                 "grouped_edges": grouped_edges,
                 "node_labels": node_labels,
+                "related_code": related_code,
             },
         )
 

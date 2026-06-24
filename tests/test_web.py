@@ -1041,3 +1041,80 @@ def test_nav_has_code_link(client):
     response = client.get("/")
     assert response.status_code == 200
     assert 'href="/code-examples"' in response.text
+
+
+# --- INV-KK-WEB-RELATED-CODE / INV-KK-WEB-RELATED-CODE-ABSENT tests ---
+
+
+def test_invariant_detail_shows_related_code(tmp_path):
+    """INV-KK-WEB-RELATED-CODE: KernelInvariant shows code from connected Concept."""
+    db_path = tmp_path / "rel_code.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-1", "Concept", {
+        "name": "Spinlock", "description": "test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+        "code_examples": [{"label": "spin_lock", "language": "c", "code": "spin_lock(&lock);"}],
+    })
+    add_node(conn, "kinv-1", "KernelInvariant", {
+        "predicate": "No sleeping under spinlock", "strength": "safety",
+        "scope": "global", "artifact_class": "B",
+    })
+    add_edge(conn, "governed-by", "kinv-1", "c-1")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/concepts/kinv-1")
+    assert response.status_code == 200
+    text = response.text
+    assert "Related Code" in text
+    assert "spin_lock" in text
+    assert "Spinlock" in text
+    assert 'href="/concepts/c-1"' in text
+
+
+def test_invariant_no_related_code_when_concept_has_none(tmp_path):
+    """INV-KK-WEB-RELATED-CODE-ABSENT: No Related Code when connected concept has no examples."""
+    db_path = tmp_path / "rel_no_code.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-1", "Concept", {
+        "name": "Test", "description": "test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+    })
+    add_node(conn, "kinv-1", "KernelInvariant", {
+        "predicate": "test", "strength": "safety",
+        "scope": "global", "artifact_class": "B",
+    })
+    add_edge(conn, "governed-by", "kinv-1", "c-1")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/concepts/kinv-1")
+    assert response.status_code == 200
+    assert "Related Code" not in response.text
+
+
+def test_protocol_shows_related_code(tmp_path):
+    """INV-KK-WEB-RELATED-CODE: InteractionProtocol shows code from connected Concept."""
+    db_path = tmp_path / "ip_rel_code.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-1", "Concept", {
+        "name": "Spinlock", "description": "test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+        "code_examples": [{"label": "lock", "language": "c", "code": "spin_lock(&l);"}],
+    })
+    add_node(conn, "ip-1", "InteractionProtocol", {
+        "rule": "No sleep under spinlock", "ordering": "never-during",
+        "violation_mode": "deadlock", "artifact_class": "B",
+    })
+    add_edge(conn, "constrains-composition", "ip-1", "c-1")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/concepts/ip-1")
+    assert response.status_code == 200
+    text = response.text
+    assert "Related Code" in text
+    assert "spin_lock" in text

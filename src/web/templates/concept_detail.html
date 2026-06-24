@@ -175,6 +175,22 @@
 </div>
 {% endif %}
 
+{% if related_code %}
+<div class="attrs-section">
+  <h3>Related Code</h3>
+  {% for rc in related_code %}
+  <p style="margin-bottom:0.2rem;"><a href="/concepts/{{ rc.concept_id }}">{{ rc.concept_name }}</a></p>
+  {% for ex in rc.examples %}
+  <div class="card" style="margin-bottom:0.6rem;">
+    <strong>{{ ex.label }}</strong>
+    {% if ex.source_url %}<span style="float:right;font-size:0.85em;"><a href="{{ ex.source_url }}" target="_blank" rel="noopener">source &rarr;</a></span>{% endif %}
+    <pre style="margin-top:0.3rem;"><code class="language-{{ ex.language }}">{{ ex.code }}</code></pre>
+  </div>
+  {% endfor %}
+  {% endfor %}
+</div>
+{% endif %}
+
 <h2>Edges</h2>
 {% if grouped_edges %}
   {% for edge_kind, edge_list in grouped_edges.items() %}
