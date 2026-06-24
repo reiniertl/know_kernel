@@ -1,0 +1,143 @@
+Page Tables — Linux Kernel Virtual Memory Management
+
+Overview
+
+Page tables are the data structure used by the Linux kernel to map virtual addresses (processed by the CPU) into physical addresses on the external memory bus. Every memory access by a program goes through this translation layer.
+
+Linux implements page tables as a five-level hierarchical structure. Architecture-specific code adapts this to hardware constraints — architectures with fewer levels "fold" unused levels at compile time.
+
+Page Frame Numbers (PFN)
+
+The physical address corresponding to a virtual location references an underlying physical page frame. The page frame number (pfn) is computed as:
+
+  pfn = physical_address / PAGE_SIZE
+
+Physical memory address 0 is pfn 0. The highest pfn marks the last page reachable by the CPU's external address bus.
+
+With 4KB page granularity (PAGE_SHIFT = 12):
+  pfn 0 → 0x00000000
+  pfn 1 → 0x00001000
+  pfn 2 → 0x00002000
+  ...
+  pfn 0xfffff → 0xfffff000
+
+With 16KB pages (PAGE_SHIFT = 14):
+  pfn 0 → 0x00000000
+  pfn 1 → 0x00004000
+  ...
+
+The page base address occupies the upper bits of the physical address. The lower bits (offset within the page) are preserved from the virtual address without translation.
+
+The Five-Level Page Table Hierarchy
+
+  PGD → P4D → PUD → PMD → PTE → Physical Page
+
+Each level is an array of pointers to the next level:
+
+  PGD (Page Global Directory): Top-level table. The kernel's PGD is swapper_pg_dir. Each userspace process has its own PGD, stored in struct mm_struct (accessed via task_struct.mm->pgd). Contains PTRS_PER_PGD entries.
+
+  P4D (Page Level 4 Directory): Added for 5-level page table support. Used only on systems with true 5-level tables; otherwise "folded" (bypassed at compile time). Contains PTRS_PER_P4D entries.
+
+  PUD (Page Upper Directory): Introduced for 4-level page tables. On 2-level or 3-level systems, this level is folded. Contains PTRS_PER_PUD entries.
+
+  PMD (Page Middle Directory): The level above the PTE. Contains PTRS_PER_PMD entries, each pointing to a PTE array.
+
+  PTE (Page Table Entry): The lowest level. An array of PTRS_PER_PTE entries, each mapping one virtual page to one physical page frame. Each entry (pteval_t) is typically 32 or 64 bits: upper bits contain the PFN, lower bits encode permission and status flags.
+
+Safety Invariant — Hierarchical Consistency: All five levels must be traversed correctly during a page table walk. Architecture-neutral code must always traverse all five levels, even on architectures that fold some levels. The folding functions handle this transparently. Skipping a level or misinterpreting the fold causes incorrect translations that typically result in kernel panics or data corruption.
+
+Structural Invariant — Unique Mapping: A given virtual address in a given address space maps to at most one physical page frame at any point in time (excluding intentional aliasing like shared memory). The page table walk is deterministic — the same virtual address always resolves to the same physical page for a given page table state.
+
+Page Table Folding
+
+Architectures that use fewer than 5 levels employ "folding" — compile-time or runtime bypassing of unused levels. For example, a 3-level architecture (PGD → PMD → PTE) folds PUD and P4D.
+
+The folding is transparent to architecture-neutral code, which always calls the five-level traversal functions. The folded level's offset/alloc functions become no-ops that pass through to the next real level.
+
+Safety Invariant — Traversal Robustness: Architecture-specific implementations should always use the five-level traversal pattern rather than hard-coding their actual number of levels. This ensures correctness if a future architecture change adds or removes a level.
+
+The MMU, TLB, and Page Faults
+
+The Memory Management Unit (MMU) is hardware that performs virtual-to-physical address translation. To avoid the expensive five-level page table walk on every memory access, the MMU uses caches:
+
+  TLB (Translation Lookaside Buffer): A small, fast cache of recent virtual-to-physical translations. A TLB hit bypasses the page table walk entirely.
+
+  Page Walk Cache: Caches intermediate page table entries to speed up walks when a TLB miss occurs.
+
+Safety Invariant — TLB Coherence: When page table entries change (unmapping, permission change, migration), the corresponding TLB entries must be invalidated. Stale TLB entries can cause reads/writes to wrong physical pages (data corruption) or allow access to freed memory (security vulnerability). TLB invalidation (flush) is performed per-CPU and must include all CPUs that may have cached the translation (TLB shootdown via IPI on SMP systems).
+
+Performance Invariant — TLB Coverage: The TLB has limited capacity (typically 64-1024 entries for L1 dTLB). Each entry covers one page (4KB with standard pages). TLB misses trigger page table walks (~10-100 cycle penalty). Workloads with large working sets or scattered access patterns suffer from TLB pressure. Huge pages (2MB, 1GB) reduce TLB pressure by covering more memory per entry.
+
+Page Faults
+
+When the MMU cannot find a translation (TLB miss followed by page walk failure), a page fault exception occurs. The CPU suspends the faulting instruction and invokes the kernel's page fault handler.
+
+Page fault types:
+
+  Minor fault (soft fault): The page exists in memory but has no page table mapping. Caused by lazy allocation or copy-on-write. Resolution: create the PTE entry pointing to the existing frame. No I/O required.
+
+  Major fault (hard fault): The page is not in memory. It may be on swap or not yet allocated. Resolution: allocate a physical frame, read data from disk if needed, create the PTE entry. I/O required, high latency.
+
+  Invalid fault: The virtual address is not mapped in the process's address space, or the access violates permissions (e.g., writing to read-only). Resolution: send SIGSEGV to the process.
+
+Lazy Allocation
+
+When a process calls mmap() or brk(), the kernel does not immediately allocate physical memory. It merely creates a virtual memory area (VMA) descriptor. Physical frames are allocated only when the process first accesses each page, triggering a minor page fault. This optimization avoids wasting memory on pages that may never be used.
+
+Copy-on-Write (COW)
+
+When fork() creates a child process, both parent and child initially share the same physical pages. The PTEs are marked read-only in both. When either process writes to a shared page, a page fault occurs. The handler allocates a new physical frame, copies the data, and updates the writing process's PTE. This is far more efficient than eagerly copying the entire address space.
+
+Failure Mode — OOM Kill: If the kernel cannot allocate a physical frame (all memory exhausted, swap full), it invokes the Out-Of-Memory (OOM) killer. The OOM killer selects a process to terminate based on a scoring heuristic that considers memory usage, process age, and other factors. The killed process frees its memory, relieving pressure. This is a last-resort mechanism — it indicates the system is severely overcommitted.
+
+Failure Mode — TLB Shootdown Overhead: On SMP systems, invalidating TLB entries requires sending Inter-Processor Interrupts (IPIs) to all CPUs that may have cached the translation. Under heavy munmap/mprotect workloads, TLB shootdowns can cause significant performance degradation due to IPI latency and serialization.
+
+Huge Pages
+
+Linux supports pages larger than the standard 4KB:
+
+  2MB huge pages: Mapped at the PMD level. One PMD entry directly maps a 2MB physical region, bypassing the PTE level entirely.
+
+  1GB huge pages: Mapped at the PUD level. One PUD entry directly maps a 1GB physical region, bypassing both PMD and PTE levels.
+
+Benefits:
+  - Reduced TLB pressure (one TLB entry covers 2MB or 1GB instead of 4KB)
+  - Less page table memory overhead (fewer PTE entries needed)
+  - Faster allocation for large memory regions
+  - Improved performance for memory-intensive workloads (databases, HPC)
+
+Trade-offs:
+  - Internal fragmentation: If only part of a huge page is used, memory is wasted
+  - Allocation difficulty: Finding contiguous 2MB or 1GB physical regions becomes harder as the system runs longer (fragmentation)
+  - Less granular permission control: Permissions are per-page, so a huge page's permissions apply to the entire 2MB/1GB region
+
+Transparent Huge Pages (THP): The kernel can automatically promote regular 4KB pages to 2MB huge pages when beneficial, without application changes. A background kernel thread (khugepaged) scans for contiguous 4KB pages that can be collapsed into huge pages.
+
+Interaction Protocol — Page Table and Locking: Page table modifications require holding the appropriate locks:
+  - mmap_lock (formerly mmap_sem): Protects the VMA tree. Read-locked for most page faults, write-locked for mmap/munmap.
+  - page table lock (pte_lock): Per-PTE-page spinlock. Protects individual PTE entries during modification.
+  - Sequence: The fault handler acquires mmap_lock (read), walks the VMAs, then acquires the pte_lock to install/modify PTE entries.
+
+Violating this locking order or modifying PTEs without holding the lock can cause:
+  - Lost updates (concurrent modifications overwrite each other)
+  - Use-after-free (page freed while another CPU still maps it)
+  - TLB coherence violations (PTE changes not properly propagated)
+
+Page Fault Handler Architecture
+
+Most architectures enter the fault handler via do_page_fault(). x86 uses DEFINE_IDTENTRY_RAW_ERRORCODE() calling handle_page_fault().
+
+All paths eventually reach handle_mm_fault() → __handle_mm_fault(), which:
+1. Walks the page table hierarchy using *_offset() functions (pgd_offset, p4d_offset, pud_offset, pmd_offset, pte_offset)
+2. Allocates missing page table levels using *_alloc() functions
+3. Calls handle_pte_fault() → do_fault() → do_read_fault()/do_cow_fault()/do_shared_fault()
+
+If __handle_mm_fault() cannot be called (invalid address), the kernel sends SIGSEGV.
+
+Interaction Protocol — pagefault_disable/enable: Kernel code paths that must not trigger page faults (e.g., when holding certain locks, in interrupt context, or during atomic operations) use pagefault_disable() to prevent the fault handler from running. pagefault_enable() re-enables it. Faulting while disabled causes the access to fail gracefully (return -EFAULT) rather than invoking the full handler.
+
+Kernel Logical Addresses
+
+A subset of virtual space directly maps contiguous physical ranges via simple offset arithmetic. These are called kernel logical addresses (or "lowmem"). Their physical addresses are deterministic (virt_to_phys = addr - PAGE_OFFSET). Pages in this region cannot be swapped — they are permanently mapped.
+
+This design provides fast, guaranteed access for kernel data structures but limits the amount of physical memory directly addressable (on 32-bit systems, typically 896MB).

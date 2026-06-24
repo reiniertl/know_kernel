@@ -1,0 +1,88 @@
+What is RCU? -- "Read, Copy, Update"
+
+RCU is a Linux kernel synchronization mechanism optimized for read-mostly scenarios. It works by splitting updates into removal and reclamation phases, allowing readers to access data concurrently with updates while ensuring safe memory management.
+
+Core API (5 Primary Functions)
+
+1. rcu_read_lock() - Marks entry into RCU read-side critical section. Readers call this before accessing RCU-protected data structures. It is extremely lightweight — on non-preemptible kernels, it compiles to nothing.
+
+2. rcu_read_unlock() - Marks exit from RCU read-side critical section. Pairs with rcu_read_lock(). Between the lock/unlock pair, the thread is guaranteed that RCU-protected data structures will not be reclaimed.
+
+3. synchronize_rcu() / call_rcu() - synchronize_rcu() blocks until all pre-existing RCU read-side critical sections have completed. call_rcu() is the asynchronous callback variant — it registers a callback to be invoked after the grace period ends. These functions define the "grace period" — the time during which all pre-existing readers must finish.
+
+4. rcu_assign_pointer() - Safely publishes pointer updates to RCU-protected data structures. It includes necessary memory barriers to ensure that the data the pointer references is fully initialized before the pointer itself becomes visible to readers.
+
+5. rcu_dereference() - Safely loads RCU-protected pointers for traversal. It includes memory barriers needed to ensure that subsequent dereferences of the pointer see properly initialized data.
+
+Key Concepts
+
+The RCU mechanism works through three sequential steps:
+- Remove references to data structures (e.g., delete a linked list node by updating the predecessor's next pointer)
+- Wait for all pre-existing readers to finish (grace period via synchronize_rcu or call_rcu)
+- Safely reclaim/free the data (kfree or equivalent)
+
+The critical insight is that readers need not communicate at all with updaters. There is no reader-side locking, no atomic operations in the read path, and no cache-line bouncing. This makes RCU reads extremely fast — orders of magnitude faster than reader-writer locks on multiprocessor systems.
+
+Grace Period Invariant: A grace period is a time interval during which every CPU (or every task, for preemptible RCU) executes at least one quiescent state. A quiescent state is a state in which no RCU read-side critical section is executing. For classic RCU, a context switch is a quiescent state. Once all CPUs have passed through a quiescent state, all pre-existing RCU readers have completed, and the grace period ends.
+
+Important Constraints and Invariants
+
+Safety Invariant — No Sleeping in Critical Section: Blocking (sleeping) is illegal within RCU read-side critical sections for classic (non-preemptible) RCU. Sleeping would prevent the CPU from reporting a quiescent state, blocking the grace period indefinitely. With CONFIG_PREEMPT_RCU, preemption is allowed but sleeping is still not recommended.
+
+Safety Invariant — Pointer Validity Window: References obtained via rcu_dereference() are valid only within the enclosing rcu_read_lock()/rcu_read_unlock() pair. After rcu_read_unlock(), the referenced data may be freed at any time by a concurrent updater that completes its grace period.
+
+Safety Invariant — Update-Side Locking: Concurrent updates still require separate locking mechanisms. RCU only protects readers from seeing inconsistent data during updates — it does not serialize concurrent updaters. Typically a spinlock or mutex protects the update path.
+
+Liveness Invariant — Bounded Grace Period: synchronize_rcu() must eventually return. The grace period is bounded because every CPU must eventually execute a context switch (or other quiescent state). In pathological cases with long-running non-preemptible code, the grace period may be delayed but will always complete.
+
+Ordering Invariant — Publish-Subscribe Guarantee: rcu_assign_pointer() and rcu_dereference() form a publish-subscribe pair. The publisher (updater) uses rcu_assign_pointer() to make a new data version visible. The subscriber (reader) uses rcu_dereference() to safely access the published pointer. Memory barriers in both functions ensure that the reader sees fully initialized data.
+
+RCU Variants
+
+The kernel provides several RCU flavors for different contexts:
+
+- Standard RCU: For normal kernel data structure protection. Quiescent state = context switch. Readers use rcu_read_lock()/rcu_read_unlock().
+
+- RCU-bh (bottom-half): For networking subsystem under DoS scenarios where softirq processing may monopolize CPUs. Quiescent state = completion of softirq handler. Uses rcu_read_lock_bh()/rcu_read_unlock_bh().
+
+- RCU-sched: For scheduler and interrupt code where preemption-disabling is the natural protection. Quiescent state = enabling preemption or interrupts. Uses preempt_disable()/preempt_enable() or local_irq_save()/local_irq_restore() as read-side markers.
+
+- SRCU (Sleepable RCU): Allows blocking within read-side critical sections. Uses separate srcu_struct for domain isolation. Higher overhead than standard RCU.
+
+- RCU-Tasks: For tracing and BPF trampolines. Voluntary context switch = quiescent state.
+
+- RCU-Tasks-Rude: Stronger form where userspace execution or idle = quiescent state.
+
+- RCU-Tasks-Trace: For BPF programs that may execute in NMI context.
+
+Implementation Approaches
+
+Two "toy" implementations illustrate the concept:
+
+1. Lock-based (using reader-writer locks): Simple but poor performance. Every rcu_read_lock() acquires a global rwlock, defeating the purpose of zero-overhead reads. Useful only for understanding the semantics.
+
+2. Classic RCU (context-switch based): Zero read-side overhead in non-preemptible kernels. rcu_read_lock() compiles away to nothing. synchronize_rcu() waits for each CPU to execute a context switch. This exploits the invariant that a context switch implies no RCU read-side critical section is in progress on that CPU.
+
+Performance Characteristics
+
+- Read-side overhead: Zero atomic operations, zero cache-line bouncing. On non-preemptible kernels, rcu_read_lock() is a no-op.
+- Write-side overhead: synchronize_rcu() must wait for a grace period (milliseconds to seconds). call_rcu() defers work to a grace period callback but memory is not freed immediately.
+- Scalability: RCU reads scale linearly with the number of CPUs. Reader-writer locks do not because of cache-line contention on the lock word.
+- Memory trade-off: During a grace period, both old and new versions of data coexist in memory. This trades memory for read-side performance.
+
+Practical Usage Patterns
+
+- Linked list traversal: Use list_for_each_entry_rcu() for read-side iteration. Use list_add_rcu()/list_del_rcu() for modifications (under update-side lock). Readers see a consistent snapshot — either the old or new version, never a partial update.
+
+- Pointer replacement: Use rcu_assign_pointer() to atomically update a pointer. Use rcu_dereference() in readers. After synchronize_rcu(), the old pointed-to object can be freed.
+
+- Converting from rwlock: Replace read_lock/read_unlock with rcu_read_lock/rcu_read_unlock. Replace synchronize after writes with synchronize_rcu(). Add call_rcu() for deferred freeing. Keep update-side mutex for serializing writers.
+
+Decision Framework for Choosing RCU Variant
+
+- Can readers block/sleep? → Use SRCU
+- Need protection in NMI context? → Use RCU-Tasks-Trace
+- Protecting against softirq monopolization? → Use RCU-bh
+- Scheduler or interrupt code? → Use RCU-sched
+- Normal kernel data structures? → Use standard RCU
+- BPF trampolines? → Use RCU-Tasks

@@ -1,0 +1,100 @@
+Locking Lessons: Spinlocks in the Linux Kernel
+
+Lesson 1: Basic Spin Locks
+
+The foundational locking mechanism in the Linux kernel uses spinlocks. A spinlock provides mutual exclusion — only one CPU can hold the lock at any given time. Other CPUs attempting to acquire a held lock will "spin" (busy-wait) until the lock becomes available.
+
+Static initialization uses DEFINE_SPINLOCK():
+
+  static DEFINE_SPINLOCK(xxx_lock);
+  unsigned long flags;
+  spin_lock_irqsave(&xxx_lock, flags);
+  ... critical section here ...
+  spin_unlock_irqrestore(&xxx_lock, flags);
+
+This approach disables interrupts locally while the spinlock itself guarantees the global lock. Only one thread of execution can be in the critical section at any time. The mechanism functions reliably on both uniprocessor and multiprocessor systems without requiring special handling.
+
+Safety Invariant — No Recursive Acquisition: A CPU must never attempt to acquire a spinlock it already holds. This would cause a deadlock on that CPU — spinning forever waiting for itself to release the lock. Unlike mutexes in some systems, spinlocks have no owner tracking and no recursion support.
+
+Safety Invariant — Consistent Lock Ordering: When multiple spinlocks must be held simultaneously, all code paths must acquire them in the same order. Inconsistent ordering between two code paths creates a deadlock risk (ABBA deadlock). The kernel defines lock ordering rules and lockdep detects violations.
+
+Safety Invariant — Minimal Critical Sections: Code inside spinlock-protected regions must not sleep, yield, or call any function that might sleep. Sleeping while holding a spinlock would prevent that CPU from releasing the lock, causing all other CPUs to spin indefinitely. Functions like kmalloc(GFP_KERNEL), copy_from_user(), mutex_lock(), and schedule() are forbidden under spinlocks.
+
+Performance Invariant — Hold Time Minimization: Spinlocks should be held for the minimum possible duration. While a spinlock is held, other CPUs attempting to acquire it waste cycles spinning. Long hold times degrade throughput proportionally to the number of contending CPUs.
+
+Memory Ordering: Spinlock implementations include implicit memory barriers. spin_lock() functions as an ACQUIRE barrier and spin_unlock() as a RELEASE barrier. This means:
+- All memory operations after spin_lock() are guaranteed to be observed after the lock acquisition.
+- All memory operations before spin_unlock() are guaranteed to be observed before the lock release.
+These semantics are documented in memory-barriers.txt and are critical for correct concurrent programming.
+
+Design Guidance: Most implementations require only a single spinlock. Multiple locks introduce unnecessary complexity and deadlock risk. The critical challenge involves ensuring spinlocks consistently protect shared data structures across all usage points, particularly in independent code sections like internal driver structures.
+
+Lesson 2: Reader-Writer Spinlocks
+
+Read-heavy workloads benefit from rwlock_t variants, permitting concurrent readers while demanding exclusive access for writers:
+
+  rwlock_t xxx_lock = __RW_LOCK_UNLOCKED(xxx_lock);
+  unsigned long flags;
+  read_lock_irqsave(&xxx_lock, flags);
+  ... critical section that only reads the info ...
+  read_unlock_irqrestore(&xxx_lock, flags);
+  write_lock_irqsave(&xxx_lock, flags);
+  ... read and write exclusive access ...
+  write_unlock_irqrestore(&xxx_lock, flags);
+
+Properties and Constraints:
+
+- Multiple readers can hold the lock simultaneously.
+- A writer requires exclusive access — no readers or other writers may hold the lock.
+- Reader-writer locks require more atomic memory operations than simple spinlocks.
+- RCU offers superior performance for list traversal when applicable.
+- Read locks CANNOT be upgraded to write locks. This is a fundamental constraint. If code might need to modify data, it must acquire the write lock from the outset. Attempting to acquire a write lock while holding a read lock causes deadlock.
+
+Interaction Protocol — Spinlock to RCU Migration: For read-heavy data structures (especially linked lists), converting from rwlock to RCU can dramatically improve read-side performance. The migration pattern: replace read_lock with rcu_read_lock, replace read_unlock with rcu_read_unlock, keep a spinlock for the write side, and use synchronize_rcu() before freeing old data.
+
+Lesson 3: Spinlocks Revisited — IRQ Context
+
+Standard spinlock implementations prioritize safety at performance cost through interrupt disabling. Non-irq variants offer optimization when interrupt handlers never access protected data:
+
+  spin_lock(&lock);
+  ...
+  spin_unlock(&lock);
+
+This variant is faster since it avoids expensive interrupt-disabling instructions. However, combining interrupt handlers with these variants creates deadlock risks.
+
+Failure Mode — IRQ Deadlock: If an interrupt handler attempts to acquire a spinlock that the interrupted code already holds on the same CPU, an unresolvable deadlock occurs. The interrupt handler spins waiting for the lock, but the lock holder (the interrupted code on the same CPU) cannot run to release it. This is not a theoretical risk — it is a common bug in kernel code.
+
+Resolution: IRQ-aware variants (spin_lock_irqsave/spin_lock_irq) solve this by disabling local interrupts before acquiring the lock. Interrupts on other CPUs continue normally and will spin (safely) if they contend for the lock. The saved flags pattern preserves the prior interrupt state for correct restoration.
+
+When to use each variant:
+- spin_lock_irqsave(&lock, flags): When interrupt state is unknown (safest, most common)
+- spin_lock_irq(&lock): When interrupts are known to be enabled (slightly faster)
+- spin_lock_bh(&lock): When protection from softirqs is needed
+- spin_lock(&lock): Only when the lock is never accessed from interrupt context
+
+Dynamic Initialization:
+
+  spinlock_t xxx_lock;
+  rwlock_t xxx_rw_lock;
+
+  static int __init xxx_init(void)
+  {
+       spin_lock_init(&xxx_lock);
+       rwlock_init(&xxx_rw_lock);
+       ...
+  }
+  module_init(xxx_init);
+
+Static initialization uses DEFINE_SPINLOCK(), DEFINE_RWLOCK(), __SPIN_LOCK_UNLOCKED(), or __RW_LOCK_UNLOCKED() as appropriate.
+
+Interaction Protocol — Lock Ordering with Interrupts: When acquiring multiple locks where one may be taken in interrupt context:
+1. Always acquire the interrupt-context lock first (with spin_lock_irqsave)
+2. Then acquire the process-context lock (with spin_lock)
+3. Release in reverse order
+Violating this order risks the IRQ deadlock scenario described above.
+
+Performance Comparison:
+- Uncontended spinlock acquisition: ~10-50 cycles (architecture-dependent)
+- Contended spinlock: Linear degradation with number of CPUs waiting
+- Cache-line bouncing under contention: The lock word bounces between CPU caches, causing significant performance degradation on NUMA systems
+- MCS/qspinlock (modern Linux): Spins on local memory to reduce cache-line bouncing

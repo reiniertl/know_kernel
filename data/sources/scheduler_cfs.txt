@@ -1,0 +1,94 @@
+CFS Scheduler — Completely Fair Scheduler Design
+
+1. OVERVIEW
+
+The Completely Fair Scheduler (CFS) is the desktop process scheduler for Linux, developed by Ingo Molnar and integrated into Linux 2.6.23. It replaced the prior O(1) scheduler's SCHED_OTHER interactivity mechanism. CFS is currently transitioning to EEVDF (Earliest Eligible Virtual Deadline First).
+
+The fundamental design principle: CFS models an "ideal, precise multi-tasking CPU" on real hardware.
+
+An ideal multi-tasking CPU would have 100% physical power and could run each task simultaneously, with each task running at a speed of 1/nr_running of the processor's power. For example, with two tasks, each would receive 50% processing power in true parallelism.
+
+Since real processors can only execute one task at a time, CFS introduces the concept of "virtual runtime" (vruntime). Virtual runtime represents the normalized actual runtime relative to the total number of running tasks. On an ideal CPU, all tasks would have identical vruntime values at all times.
+
+Structural Invariant — Vruntime Monotonicity: A task's vruntime value (p->se.vruntime) only increases while the task is running. It is stored in nanosecond precision. The CFS always picks the task with the smallest vruntime to run next, which is the task that has received the least CPU time relative to its weight. This is the core fairness guarantee.
+
+Structural Invariant — Min-Vruntime Monotonicity: rq->cfs.min_vruntime is a monotonically increasing value that tracks the smallest vruntime among all queued tasks. It is used to position newly waking tasks in the timeline so they don't get unfair advantage or disadvantage.
+
+2. IMPLEMENTATION DETAILS
+
+CFS uses a per-task p->se.vruntime value tracked in nanosecond precision. This enables precise measurement of expected CPU time allocation on the ideal processor.
+
+Task Selection: CFS's task selection mechanism is elegantly simple — it always picks the task with the smallest p->se.vruntime value. This is the task that has been "least fairly served" so far. Additional refinements handle nice level differences (task weights), multiprocessing, and sleeper fairness.
+
+Performance Invariant — O(log n) Selection: CFS uses a red-black tree (rbtree) indexed by vruntime to maintain the set of runnable tasks. The leftmost node (smallest vruntime) is the next task to schedule. The rbtree guarantees O(log n) insertion, deletion, and lookup, where n is the number of runnable tasks.
+
+3. THE RBTREE
+
+CFS employs a time-ordered red-black tree to construct a "timeline" of future task execution. This eliminates the "array switch" artifacts that plagued prior O(1) schedulers.
+
+The tree is keyed by vruntime. The leftmost node is always the next task to run. As tasks execute, their vruntime increases and they move rightward in the tree. Eventually, every task gets its turn as the leftmost node.
+
+Operational mechanism: A task executes for a brief interval. Upon scheduling or timer tick, the physical CPU time consumed is added to p->se.vruntime (weighted by the task's priority/nice level). When another task becomes the new leftmost node (its vruntime is now smallest), a preemption occurs and the new leftmost task runs.
+
+A granularity distance prevents over-scheduling — tasks must differ by at least a small vruntime delta before preemption occurs. This prevents cache thrashing from excessively frequent context switches.
+
+Load Tracking: rq->cfs.load records the weight summation of all enqueued tasks, used for load balancing across CPUs.
+
+4. CFS FEATURES
+
+- Nanosecond-precision accounting: No dependency on jiffies or HZ configuration.
+- No timeslices: CFS does not assign fixed time quanta to tasks. Instead, the scheduling granularity is dynamic.
+- No heuristic logic: Unlike prior schedulers, CFS does not attempt to classify tasks as "interactive" or "batch" using heuristics. The vruntime mechanism inherently handles interactivity — tasks that sleep frequently accumulate less vruntime and get prioritized when they wake up.
+
+Performance Invariant — Attack Resistance: CFS's design resists exploitation attacks that targeted traditional scheduler heuristics. Test programs (fiftyp.c, thud.c, chew.c, ring-test.c, massive_intr.c) that could starve other tasks under the old scheduler function normally under CFS without interactivity degradation.
+
+Single primary tunable: /sys/kernel/debug/sched/base_slice_ns
+This parameter adjusts scheduling behavior from "desktop" (low latency, frequent preemption) to "server" (batch-oriented, less preemption) workload profiles.
+
+5. SCHEDULING POLICIES
+
+Three scheduling policies are implemented by CFS:
+
+- SCHED_NORMAL (historically SCHED_OTHER): The default scheduling policy for regular tasks. Nice levels (-20 to +19) adjust the task's weight, affecting its proportion of CPU time.
+
+- SCHED_BATCH: Designed for batch processing workloads. Reduces preemption frequency to enable longer uninterrupted execution periods and better cache utilization. Sacrifices interactivity for throughput.
+
+- SCHED_IDLE: Extremely low-priority scheduling. Weaker than nice level 19. Not true "idle" scheduling — SCHED_IDLE tasks will still run if the CPU has no other runnable tasks. Designed to prevent priority inversion deadlocks that true idle scheduling would cause.
+
+Real-time policies (SCHED_FIFO, SCHED_RR) are implemented separately in sched/rt.c.
+
+6. SCHEDULING CLASSES
+
+CFS introduces "Scheduling Classes" — an extensible module hierarchy where each class encapsulates a specific scheduling policy. The core scheduler code dispatches to class methods without knowing implementation details.
+
+The sched_class structure implements scheduling classes through function hooks:
+
+- enqueue_task(): Called when a task becomes runnable. Inserts the task's scheduling entity into the rbtree and increments nr_running.
+- dequeue_task(): Called when a task is no longer runnable. Removes it from the rbtree and decrements nr_running.
+- yield_task(): Repositions the currently running task to the rightmost position in the tree, allowing other runnable tasks to proceed.
+- wakeup_preempt(): Called when a task wakes up. Checks if the newly runnable task should preempt the currently running task (i.e., has smaller vruntime by more than the granularity threshold).
+- pick_next_task(): Selects the next task to run — returns the leftmost node in the rbtree.
+- set_next_task(): Called when a task starts running after being selected by pick_next_task.
+- task_tick(): Invoked on each timer tick. Updates the running task's vruntime and checks if preemption should occur.
+
+Interaction Protocol — Scheduler Class Priority: Scheduling classes are ordered by priority. The RT class runs before the CFS class. The idle class runs last. The core scheduler iterates through classes in priority order, calling pick_next_task() on each until one returns a task. This means RT tasks always preempt CFS tasks.
+
+7. GROUP SCHEDULER EXTENSIONS
+
+CONFIG_CGROUP_SCHED enables task grouping for proportional CPU distribution. Instead of fair CPU time per task, the scheduler can allocate fair CPU time per group, then distribute within each group.
+
+Use case: In a multi-user system, each user gets a fair share of CPU regardless of how many tasks they run. User A with 100 tasks and User B with 1 task each get 50% of CPU.
+
+CONFIG_FAIR_GROUP_SCHED: Groups CFS tasks (SCHED_NORMAL and SCHED_BATCH). Each cgroup gets a cpu.shares file controlling its weight relative to sibling groups.
+
+CONFIG_RT_GROUP_SCHED: Groups real-time tasks (SCHED_FIFO and SCHED_RR).
+
+Example configuration:
+  mkdir /sys/fs/cgroup/cpu/multimedia
+  mkdir /sys/fs/cgroup/cpu/browser
+  echo 2048 > multimedia/cpu.shares    # 2x weight
+  echo 1024 > browser/cpu.shares       # 1x weight
+
+Failure Mode — Starvation: Without group scheduling, a user running many tasks can consume a disproportionate share of CPU time, starving other users' tasks. Group scheduling prevents this but introduces its own complexity — misconfigured group weights can still cause starvation within groups.
+
+Failure Mode — Priority Inversion: SCHED_IDLE was specifically designed to prevent priority inversion deadlocks. If a low-priority task holds a resource (lock, mutex) needed by a higher-priority task, true idle scheduling could cause the high-priority task to block indefinitely because the idle task would never run to release the resource.
