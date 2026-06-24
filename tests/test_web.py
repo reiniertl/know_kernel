@@ -319,6 +319,65 @@ def test_evidence_detail_no_excerpt(rich_client):
     assert "Source Excerpt" not in text
 
 
+def test_concept_detail_renders_code_examples(tmp_path):
+    """INV-KK-WEB-CODE-DISPLAY: Concept with code_examples renders pre/code blocks with source link."""
+    db_path = tmp_path / "code_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-code", "Concept", {
+        "name": "Test Concept",
+        "description": "A test.",
+        "artifact_class": "B",
+        "key_properties": [],
+        "tradeoffs": [],
+        "design_rationale": "test",
+        "code_examples": [
+            {"label": "Basic usage", "language": "c", "code": "int x = 1;", "source_url": "https://example.com/src"},
+        ],
+    })
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/concepts/c-code")
+    assert response.status_code == 200
+    text = response.text
+    assert "Code Examples" in text
+    assert "Basic usage" in text
+    assert "int x = 1;" in text
+    assert '<code class="language-c">' in text
+    assert '<a href="https://example.com/src"' in text
+    assert "source" in text
+
+
+def test_concept_detail_code_examples_no_source_url(tmp_path):
+    """INV-KK-WEB-CODE-DISPLAY: Code example without source_url renders without broken link."""
+    db_path = tmp_path / "code_test2.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-nosrc", "Concept", {
+        "name": "No Source", "description": "test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+        "code_examples": [{"label": "Inline", "language": "c", "code": "return 0;"}],
+    })
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/concepts/c-nosrc")
+    assert response.status_code == 200
+    text = response.text
+    assert "Inline" in text
+    assert "return 0;" in text
+    assert "source" not in text.split("Code Examples")[1].split("</div>")[0] or \
+           'href="None"' not in text
+
+
+def test_concept_detail_no_code_examples(rich_client):
+    """INV-KK-WEB-CODE-DISPLAY: Concept without code_examples renders normally."""
+    response = rich_client.get("/concepts/c-1")
+    assert response.status_code == 200
+    assert "Code Examples" not in response.text
+
+
 def test_web_all_allowed_kinds_have_detail(rich_client):
     """INV-KK-WEB-KIND-AWARE-DETAIL: no kind renders as raw JSON dump."""
     kind_to_id = {

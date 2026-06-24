@@ -21,6 +21,16 @@
   <h3>Design Rationale</h3>
   <p>{{ attrs.design_rationale }}</p>
   {% endif %}
+  {% if attrs.get('code_examples') %}
+  <h3>Code Examples</h3>
+  {% for ex in attrs.code_examples %}
+  <div class="card" style="margin-bottom:0.8rem;">
+    <strong>{{ ex.label }}</strong>
+    {% if ex.source_url %}<span style="float:right;font-size:0.85em;"><a href="{{ ex.source_url }}" target="_blank" rel="noopener">source &rarr;</a></span>{% endif %}
+    <pre style="margin-top:0.3rem;"><code class="language-{{ ex.language }}">{{ ex.code }}</code></pre>
+  </div>
+  {% endfor %}
+  {% endif %}
 </div>
 
 {% elif node.kind == 'KernelInvariant' %}
