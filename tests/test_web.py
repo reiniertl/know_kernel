@@ -274,6 +274,19 @@ def test_web_graph_viz_has_display_fields(client):
     assert "'symptom'" in text
 
 
+def test_source_detail_renders_clickable_url(rich_client):
+    """INV-KK-WEB-SOURCE-LINKED: Source detail page renders url as clickable <a> with target=_blank."""
+    response = rich_client.get("/concepts/src-1")
+    assert response.status_code == 200
+    text = response.text
+    assert '<a href="https://example.com" target="_blank" rel="noopener">' in text
+    assert "Documentation URL" in text
+    assert "Source Type" in text
+    assert "paper" in text
+    assert "License" in text
+    assert "MIT" in text
+
+
 def test_web_all_allowed_kinds_have_detail(rich_client):
     """INV-KK-WEB-KIND-AWARE-DETAIL: no kind renders as raw JSON dump."""
     kind_to_id = {

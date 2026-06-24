@@ -126,6 +126,16 @@
   {% if attrs.get('kernel_type') %}<p><strong>Kernel Type:</strong> {{ attrs.kernel_type }}</p>{% endif %}
 </div>
 
+{% elif node.kind == 'Source' %}
+<div class="attrs-section">
+  {% if attrs.get('url') %}
+  <h3>Documentation URL</h3>
+  <p><a href="{{ attrs.url }}" target="_blank" rel="noopener">{{ attrs.url }}</a></p>
+  {% endif %}
+  {% if attrs.get('source_type') %}<p><strong>Source Type:</strong> {{ attrs.source_type }}</p>{% endif %}
+  {% if attrs.get('license') %}<p><strong>License:</strong> {{ attrs.license }}</p>{% endif %}
+</div>
+
 {% else %}
 <div class="attrs-section">
   <h2>Attributes</h2>
