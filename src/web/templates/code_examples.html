@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Code Examples</h1>
+<p>{{ total_concepts }} concepts with code examples across {{ grouped_concepts | length }} subsystems</p>
+
+{% for subsystem, concepts in grouped_concepts.items() %}
+<details class="edge-group" open>
+  <summary>{{ subsystem }} <span class="count">{{ concepts | length }}</span></summary>
+  {% for concept in concepts %}
+  <div style="margin:0.8rem 0 1.2rem 0;">
+    <h3 style="margin-bottom:0.3rem;">
+      <a href="/concepts/{{ concept.id }}">{{ concept.display_name }}</a>
+    </h3>
+    {% for ex in concept.attrs.code_examples %}
+    <div class="card" style="margin-bottom:0.6rem;">
+      <strong>{{ ex.label }}</strong>
+      {% if ex.source_url %}<span style="float:right;font-size:0.85em;"><a href="{{ ex.source_url }}" target="_blank" rel="noopener">source &rarr;</a></span>{% endif %}
+      <pre style="margin-top:0.3rem;"><code class="language-{{ ex.language }}">{{ ex.code }}</code></pre>
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</details>
+{% endfor %}
+{% endblock %}

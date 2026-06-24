@@ -975,3 +975,69 @@ def test_concept_list_no_badge_without_code_examples(tmp_path):
     no_code_idx = text.index("No Code")
     no_code_row = text[no_code_idx:text.index("</tr>", no_code_idx)]
     assert "badge-code" not in no_code_row
+
+
+# --- ALG-KK-WEB-CODE-BROWSE / INV-KK-WEB-CODE-BROWSE-* tests ---
+
+
+def test_code_examples_page_returns_200(tmp_path):
+    """INV-KK-WEB-CODE-BROWSE-COMPLETE: /code-examples returns 200 with grouped code."""
+    db_path = tmp_path / "code_browse.db"
+    conn = init_db(db_path)
+    add_node(conn, "sub-sync", "Subsystem", {"name": "Synchronization"})
+    add_node(conn, "c-rcu", "Concept", {
+        "name": "RCU", "description": "Read-Copy-Update", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+        "code_examples": [{"label": "RCU lock", "language": "c", "code": "rcu_read_lock();"}],
+    })
+    add_edge(conn, "belongs-to", "c-rcu", "sub-sync")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/code-examples")
+    assert response.status_code == 200
+    text = response.text
+    assert "Synchronization" in text
+    assert "RCU" in text
+    assert "rcu_read_lock" in text
+    assert 'href="/concepts/c-rcu"' in text
+
+
+def test_code_examples_page_empty_db(tmp_path):
+    """ALG-KK-WEB-CODE-BROWSE: empty db returns 200 with 0 concepts."""
+    db_path = tmp_path / "code_empty.db"
+    conn = init_db(db_path)
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/code-examples")
+    assert response.status_code == 200
+    assert "0 concepts" in response.text
+
+
+def test_code_examples_page_uncategorized(tmp_path):
+    """INV-KK-WEB-CODE-BROWSE-GROUPED: concept without belongs-to appears under Uncategorized."""
+    db_path = tmp_path / "code_uncat.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-lone", "Concept", {
+        "name": "Lone Concept", "description": "test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+        "code_examples": [{"label": "ex", "language": "c", "code": "return 0;"}],
+    })
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/code-examples")
+    assert response.status_code == 200
+    assert "Uncategorized" in response.text
+    assert "Lone Concept" in response.text
+
+
+def test_nav_has_code_link(client):
+    """INV-KK-WEB-CODE-BROWSE-NAV: Navigation bar contains link to /code-examples."""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'href="/code-examples"' in response.text

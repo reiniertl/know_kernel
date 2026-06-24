@@ -227,6 +227,45 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             {"nodes": nodes, "title": "Sources", "active_kind": "Source", "all_kinds": _all_kinds(conn), "page": page, "per_page": per_page, "has_next": has_next},
         )
 
+    @app.get("/code-examples", response_class=HTMLResponse)
+    async def code_examples_page(request: Request):
+        """Browsable page of all code examples grouped by subsystem (ALG-KK-WEB-CODE-BROWSE)."""
+        conn = request.app.state.conn
+        rows = conn.execute(
+            "SELECT id, kind, attrs FROM nodes "
+            "WHERE kind = 'Concept' AND json_extract(attrs, '$.code_examples') IS NOT NULL "
+            "ORDER BY json_extract(attrs, '$.name')"
+        ).fetchall()
+        concepts = _rows_to_dicts(rows)
+
+        concept_ids = [c["id"] for c in concepts]
+        subsystem_map: dict[str, str] = {}
+        if concept_ids:
+            placeholders = ",".join("?" for _ in concept_ids)
+            sub_rows = conn.execute(
+                f"SELECT e.source_id, json_extract(s.attrs, '$.name') as sub_name "
+                f"FROM edges e "
+                f"JOIN nodes s ON e.target_id = s.id AND s.kind = 'Subsystem' "
+                f"WHERE e.kind = 'belongs-to' AND e.source_id IN ({placeholders})",
+                tuple(concept_ids),
+            ).fetchall()
+            for sr in sub_rows:
+                subsystem_map[sr["source_id"]] = sr["sub_name"]
+
+        grouped: dict[str, list[dict]] = {}
+        for c in concepts:
+            sub_name = subsystem_map.get(c["id"], "Uncategorized")
+            c["display_name"] = display_name_for_node(c["kind"], c.get("attrs") or {}, c["id"])
+            grouped.setdefault(sub_name, []).append(c)
+
+        sorted_groups = dict(sorted(grouped.items()))
+
+        return templates.TemplateResponse(
+            request,
+            "code_examples.html",
+            {"grouped_concepts": sorted_groups, "total_concepts": len(concepts)},
+        )
+
     @app.get("/graph")
     async def graph_json(request: Request):
         """Return the full node/edge set as JSON (INV-KK-WEB-FULL-ACCESS)."""
