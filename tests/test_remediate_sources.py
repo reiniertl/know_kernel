@@ -18,7 +18,9 @@ from remediate_sources import (
     RemediationResult,
     backup_database,
     generate_remediation_report,
+    remediate_directory_sources,
     remediate_stub_sources,
+    update_code_example_urls,
 )
 from ingest.validate_sources import SourceValidationResult
 
@@ -227,7 +229,7 @@ class TestRemediationReport:
         report = generate_remediation_report(results)
         assert "# Source Remediation Report" in report
         assert "Stub sources replaced:** 1" in report
-        assert "Skipped (no refs):** 1" in report
+        assert "Skipped:** 1" in report
         assert "src-1" in report
         assert "mm/slub.c" in report
         assert "src-2" in report
@@ -235,3 +237,218 @@ class TestRemediationReport:
     def test_report_empty(self):
         report = generate_remediation_report([])
         assert "Stub sources replaced:** 0" in report
+
+    def test_report_with_directory_and_code_examples(self):
+        results = [
+            RemediationResult(
+                source_id="src-dir", old_url="https://example.com/dir",
+                new_url="https://example.com/dir/index.rst",
+                action="directory_replaced",
+            ),
+            RemediationResult(
+                source_id="src-flag", old_url="https://example.com/ambig",
+                new_url="https://example.com/ambig",
+                action="flagged_ambiguous",
+            ),
+        ]
+        report = generate_remediation_report(results, code_example_count=3)
+        assert "Directory sources replaced:** 1" in report
+        assert "Directory sources flagged (ambiguous):** 1" in report
+        assert "Code examples updated:** 3" in report
+        assert "src-dir" in report
+        assert "Flagged for Manual Review" in report
+
+
+# ---------------------------------------------------------------------------
+# remediate_directory_sources (ALG-KK-REMEDIATE-DIRECTORY-SOURCE)
+# ---------------------------------------------------------------------------
+
+class TestRemediateDirectorySources:
+    def test_directory_resolved_to_index_rst(self):
+        conn = _make_test_db()
+        _add_source(conn, "src-dir", "https://example.com/tree/dir")
+
+        vr = [SourceValidationResult(
+            source_id="src-dir",
+            url="https://example.com/tree/dir",
+            classification="directory",
+            suggested_replacement_urls=[
+                "https://example.com/tree/dir/index.rst",
+                "https://example.com/tree/dir/notes.rst",
+                "https://example.com/tree/dir/main.c",
+            ],
+        )]
+
+        results = remediate_directory_sources(conn, vr)
+        assert len(results) == 1
+        assert results[0].action == "directory_replaced"
+        assert results[0].new_url.endswith("index.rst")
+        assert _get_url(conn, "src-dir").endswith("index.rst")
+
+    def test_directory_single_candidate(self):
+        conn = _make_test_db()
+        _add_source(conn, "src-dir", "https://example.com/tree/dir")
+
+        vr = [SourceValidationResult(
+            source_id="src-dir",
+            url="https://example.com/tree/dir",
+            classification="directory",
+            suggested_replacement_urls=["https://example.com/tree/dir/only.rst"],
+        )]
+
+        results = remediate_directory_sources(conn, vr)
+        assert results[0].action == "directory_replaced"
+        assert results[0].new_url.endswith("only.rst")
+
+    def test_directory_flagged_ambiguous(self):
+        conn = _make_test_db()
+        _add_source(conn, "src-dir", "https://example.com/tree/dir")
+
+        vr = [SourceValidationResult(
+            source_id="src-dir",
+            url="https://example.com/tree/dir",
+            classification="directory",
+            suggested_replacement_urls=[
+                "https://example.com/tree/dir/a.rst",
+                "https://example.com/tree/dir/b.rst",
+            ],
+        )]
+
+        results = remediate_directory_sources(conn, vr)
+        assert results[0].action == "flagged_ambiguous"
+        assert _get_url(conn, "src-dir") == "https://example.com/tree/dir"
+
+    def test_directory_no_candidates_skipped(self):
+        conn = _make_test_db()
+        _add_source(conn, "src-dir", "https://example.com/tree/empty")
+
+        vr = [SourceValidationResult(
+            source_id="src-dir",
+            url="https://example.com/tree/empty",
+            classification="directory",
+            suggested_replacement_urls=[],
+        )]
+
+        results = remediate_directory_sources(conn, vr)
+        assert results[0].action == "skipped"
+
+    def test_substantive_not_touched(self):
+        conn = _make_test_db()
+        _add_source(conn, "src-good", "https://example.com/good")
+
+        vr = [SourceValidationResult(
+            source_id="src-good",
+            url="https://example.com/good",
+            classification="substantive",
+        )]
+
+        results = remediate_directory_sources(conn, vr)
+        assert len(results) == 0
+
+
+# ---------------------------------------------------------------------------
+# update_code_example_urls (ALG-KK-UPDATE-CODE-EXAMPLE-URLS)
+# ---------------------------------------------------------------------------
+
+def _add_concept(conn, concept_id, code_examples):
+    conn.execute(
+        "INSERT INTO nodes (id, kind, attrs) VALUES (?, 'Concept', ?)",
+        (concept_id, json.dumps({
+            "name": "Test",
+            "description": "Test concept",
+            "code_examples": code_examples,
+        })),
+    )
+    conn.commit()
+
+
+def _get_code_examples(conn, concept_id):
+    row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (concept_id,)).fetchone()
+    return json.loads(row[0])["code_examples"] if row else []
+
+
+class TestUpdateCodeExampleUrls:
+    def test_url_updated_after_source_change(self):
+        conn = _make_test_db()
+        _add_concept(conn, "c1", [
+            {"label": "Example", "code": "x", "source_url": "https://old.com/slab.rst"},
+        ])
+
+        results = [RemediationResult(
+            source_id="src-1", old_url="https://old.com/slab.rst",
+            new_url="https://git.kernel.org/.../mm/slub.c",
+            action="stub_replaced",
+        )]
+
+        count = update_code_example_urls(conn, results)
+        assert count == 1
+
+        examples = _get_code_examples(conn, "c1")
+        assert examples[0]["source_url"] == "https://git.kernel.org/.../mm/slub.c"
+
+    def test_url_unchanged_no_match(self):
+        conn = _make_test_db()
+        _add_concept(conn, "c1", [
+            {"label": "Example", "code": "x", "source_url": "https://other.com/doc"},
+        ])
+
+        results = [RemediationResult(
+            source_id="src-1", old_url="https://old.com/slab.rst",
+            new_url="https://git.kernel.org/.../mm/slub.c",
+            action="stub_replaced",
+        )]
+
+        count = update_code_example_urls(conn, results)
+        assert count == 0
+
+        examples = _get_code_examples(conn, "c1")
+        assert examples[0]["source_url"] == "https://other.com/doc"
+
+    def test_example_without_source_url_unchanged(self):
+        conn = _make_test_db()
+        _add_concept(conn, "c1", [
+            {"label": "Example", "code": "x"},
+        ])
+
+        results = [RemediationResult(
+            source_id="src-1", old_url="https://old.com/slab.rst",
+            new_url="https://new.com/slub.c",
+            action="stub_replaced",
+        )]
+
+        count = update_code_example_urls(conn, results)
+        assert count == 0
+
+        examples = _get_code_examples(conn, "c1")
+        assert "source_url" not in examples[0]
+
+    def test_multiple_examples_partial_update(self):
+        conn = _make_test_db()
+        _add_concept(conn, "c1", [
+            {"label": "Ex1", "code": "a", "source_url": "https://old.com/slab.rst"},
+            {"label": "Ex2", "code": "b", "source_url": "https://other.com/doc"},
+            {"label": "Ex3", "code": "c"},
+        ])
+
+        results = [RemediationResult(
+            source_id="src-1", old_url="https://old.com/slab.rst",
+            new_url="https://new.com/slub.c",
+            action="stub_replaced",
+        )]
+
+        count = update_code_example_urls(conn, results)
+        assert count == 1
+
+        examples = _get_code_examples(conn, "c1")
+        assert examples[0]["source_url"] == "https://new.com/slub.c"
+        assert examples[1]["source_url"] == "https://other.com/doc"
+        assert "source_url" not in examples[2]
+
+    def test_no_remediation_results(self):
+        conn = _make_test_db()
+        _add_concept(conn, "c1", [
+            {"label": "Ex", "code": "x", "source_url": "https://example.com"},
+        ])
+
+        count = update_code_example_urls(conn, [])
+        assert count == 0
