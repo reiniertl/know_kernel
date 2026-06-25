@@ -1,9 +1,10 @@
 """Source URL remediation for provenance grounding.
 
 Spec: ALG-KK-REMEDIATE-STUB-SOURCE, ALG-KK-REMEDIATE-DIRECTORY-SOURCE,
-      ALG-KK-UPDATE-CODE-EXAMPLE-URLS, INV-KK-REMEDIATION-BACKUP,
-      INV-KK-STUB-SOURCE-REPLACED, INV-KK-DIRECTORY-SOURCE-REPLACED,
-      INV-KK-CODE-EXAMPLE-SOURCE-VALID
+      ALG-KK-UPDATE-CODE-EXAMPLE-URLS, ALG-KK-REGENERATE-EVIDENCE-EXCERPT,
+      INV-KK-REMEDIATION-BACKUP, INV-KK-STUB-SOURCE-REPLACED,
+      INV-KK-DIRECTORY-SOURCE-REPLACED, INV-KK-CODE-EXAMPLE-SOURCE-VALID,
+      INV-KK-EVIDENCE-EXCERPT-GROUNDED, INV-KK-EVIDENCE-EXCERPT-FROM-FETCH
 """
 
 from __future__ import annotations
@@ -11,8 +12,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import shutil
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -225,7 +228,160 @@ def update_code_example_urls(
     return updated_count
 
 
-def generate_remediation_report(results: list[RemediationResult], code_example_count: int = 0) -> str:
+# ---------------------------------------------------------------------------
+# Evidence excerpt regeneration (ALG-KK-REGENERATE-EVIDENCE-EXCERPT)
+# ---------------------------------------------------------------------------
+
+_C_HEADER_COMMENT_RE = re.compile(r"/\*\*?\s*\n(.*?)\*/", re.DOTALL)
+_C_SINGLE_LINE_COMMENT_RE = re.compile(r"^\s*//\s?(.*)$", re.MULTILINE)
+_KERNEL_DOC_FUNC_RE = re.compile(r"/\*\*\s*\n\s*\*\s+(\w+)\s*[-–—]\s*(.*?)\*/", re.DOTALL)
+
+
+def extract_code_file_excerpt(content: str, max_len: int = 2000) -> str:
+    """Extract excerpt from a C/H source file.
+
+    Parses header comment block and kernel-doc function comments.
+    Returns up to max_len chars. Uses ONLY the fetched content
+    (INV-KK-EVIDENCE-EXCERPT-FROM-FETCH).
+    """
+    if not content:
+        return ""
+
+    parts: list[str] = []
+
+    header_match = _C_HEADER_COMMENT_RE.search(content[:3000])
+    if header_match:
+        comment_body = header_match.group(1)
+        lines = []
+        for line in comment_body.splitlines():
+            stripped = line.strip().lstrip("*").strip()
+            if stripped:
+                lines.append(stripped)
+        if lines:
+            parts.append(" ".join(lines))
+
+    for m in _KERNEL_DOC_FUNC_RE.finditer(content):
+        func_name = m.group(1)
+        doc_body = m.group(2)
+        doc_lines = []
+        for line in doc_body.splitlines():
+            stripped = line.strip().lstrip("*").strip()
+            if stripped:
+                doc_lines.append(stripped)
+        if doc_lines:
+            parts.append(f"{func_name}: {' '.join(doc_lines[:3])}")
+
+    result = "\n".join(parts)
+    if len(result) > max_len:
+        result = result[:max_len] + "..."
+    return result
+
+
+def extract_prose_excerpt(html_or_rst: str, max_len: int = 2000) -> str:
+    """Extract prose excerpt from HTML or RST content.
+
+    Strips markup and returns first max_len chars of prose.
+    Uses ONLY the fetched content (INV-KK-EVIDENCE-EXCERPT-FROM-FETCH).
+    """
+    if not html_or_rst:
+        return ""
+
+    cleaned = re.sub(r"<[^>]+>", " ", html_or_rst)
+    cleaned = re.sub(r"^\.\.\s+\S+::.*$", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r":\w+:`([^`]*)`", r"\1", cleaned)
+    cleaned = re.sub(r"[=\-~^`]{3,}", "", cleaned)
+    cleaned = re.sub(r"^\s*\.\.\s+.*$", "", cleaned, flags=re.MULTILINE)
+
+    lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
+    result = " ".join(lines)
+    if len(result) > max_len:
+        result = result[:max_len] + "..."
+    return result
+
+
+def _is_code_url(url: str) -> bool:
+    path = url.rsplit("/", 1)[-1] if "/" in url else url
+    return path.endswith(".c") or path.endswith(".h")
+
+
+def regenerate_evidence_excerpts(
+    conn: sqlite3.Connection,
+    remediation_results: list[RemediationResult],
+    fetch_fn: Callable[[str], str] | None = None,
+    rate_limit: float = 1.0,
+) -> int:
+    """Regenerate Evidence excerpts from fetched source content
+    (ALG-KK-REGENERATE-EVIDENCE-EXCERPT).
+
+    For each remediated source, finds the linked Evidence node via
+    sourced-from edge, fetches the new URL, extracts an excerpt
+    (code or prose), and updates the Evidence node.
+    Satisfies INV-KK-EVIDENCE-EXCERPT-GROUNDED, INV-KK-EVIDENCE-EXCERPT-FROM-FETCH.
+    """
+    from ingest.validate_sources import _default_fetch
+
+    fetch = fetch_fn or _default_fetch
+    remediated_sources = {
+        r.source_id: r.new_url
+        for r in remediation_results
+        if r.action in ("stub_replaced", "directory_replaced")
+    }
+    if not remediated_sources:
+        return 0
+
+    count = 0
+    last_fetch = 0.0
+
+    for source_id, new_url in remediated_sources.items():
+        ev_rows = conn.execute(
+            "SELECT source_id FROM edges WHERE kind = 'sourced-from' AND target_id = ?",
+            (source_id,),
+        ).fetchall()
+
+        if not ev_rows:
+            log.warning("No Evidence linked to Source %s", source_id)
+            continue
+
+        elapsed = time.monotonic() - last_fetch
+        if elapsed < rate_limit and last_fetch > 0:
+            time.sleep(rate_limit - elapsed)
+
+        content = fetch(new_url)
+        last_fetch = time.monotonic()
+
+        if _is_code_url(new_url):
+            excerpt = extract_code_file_excerpt(content)
+        else:
+            excerpt = extract_prose_excerpt(content)
+
+        if not excerpt:
+            log.warning("Empty excerpt for %s from %s", source_id, new_url)
+            continue
+
+        for (evidence_id,) in ev_rows:
+            ev_row = conn.execute(
+                "SELECT attrs FROM nodes WHERE id = ?", (evidence_id,)
+            ).fetchone()
+            if ev_row is None:
+                continue
+            attrs = json.loads(ev_row[0]) if isinstance(ev_row[0], str) else ev_row[0]
+            attrs["excerpt"] = excerpt
+            conn.execute(
+                "UPDATE nodes SET attrs = ? WHERE id = ?",
+                (json.dumps(attrs), evidence_id),
+            )
+            count += 1
+            log.info("Regenerated excerpt for Evidence %s from %s", evidence_id, new_url)
+
+    conn.commit()
+    return count
+
+
+def generate_remediation_report(
+    results: list[RemediationResult],
+    code_example_count: int = 0,
+    excerpt_count: int = 0,
+) -> str:
     """Generate a markdown report of remediation changes."""
     stub_replaced = [r for r in results if r.action == "stub_replaced"]
     dir_replaced = [r for r in results if r.action == "directory_replaced"]
@@ -241,6 +397,7 @@ def generate_remediation_report(results: list[RemediationResult], code_example_c
         f"- **Directory sources replaced:** {len(dir_replaced)}",
         f"- **Directory sources flagged (ambiguous):** {len(flagged)}",
         f"- **Code examples updated:** {code_example_count}",
+        f"- **Evidence excerpts regenerated:** {excerpt_count}",
         f"- **Skipped:** {len(skipped)}",
         "",
     ]
@@ -292,12 +449,16 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--stub-only", action="store_true", help="Only remediate stub sources")
     parser.add_argument("--directory-only", action="store_true", help="Only remediate directory sources")
     parser.add_argument("--code-examples-only", action="store_true", help="Only update code example URLs")
+    parser.add_argument("--excerpts-only", action="store_true", help="Only regenerate evidence excerpts")
+    parser.add_argument("--skip-excerpts", action="store_true", help="Skip excerpt regeneration")
     parser.add_argument("--rate-limit", type=float, default=1.0)
     parser.add_argument("--no-backup", action="store_true", help="Skip backup (dangerous)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO)
-    do_all = not (args.stub_only or args.directory_only or args.code_examples_only)
+    only_flags = (args.stub_only or args.directory_only
+                  or args.code_examples_only or args.excerpts_only)
+    do_all = not only_flags
 
     if not args.no_backup:
         backup_database(args.db)
@@ -307,6 +468,7 @@ def main(argv: list[str] | None = None) -> None:
 
     all_results: list[RemediationResult] = []
     code_count = 0
+    excerpt_count = 0
 
     if do_all or args.stub_only:
         all_results.extend(remediate_stub_sources(conn, validation_results))
@@ -317,7 +479,14 @@ def main(argv: list[str] | None = None) -> None:
     if do_all or args.code_examples_only:
         code_count = update_code_example_urls(conn, all_results)
 
-    report = generate_remediation_report(all_results, code_example_count=code_count)
+    if (do_all or args.excerpts_only) and not args.skip_excerpts:
+        excerpt_count = regenerate_evidence_excerpts(
+            conn, all_results, rate_limit=args.rate_limit,
+        )
+
+    report = generate_remediation_report(
+        all_results, code_example_count=code_count, excerpt_count=excerpt_count,
+    )
 
     if args.output:
         Path(args.output).write_text(report, encoding="utf-8")

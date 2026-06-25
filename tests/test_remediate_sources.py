@@ -1,7 +1,10 @@
 """Tests for scripts/remediate_sources.py.
 
-Covers: ALG-KK-REMEDIATE-STUB-SOURCE, INV-KK-REMEDIATION-BACKUP,
-        INV-KK-STUB-SOURCE-REPLACED
+Covers: ALG-KK-REMEDIATE-STUB-SOURCE, ALG-KK-REMEDIATE-DIRECTORY-SOURCE,
+        ALG-KK-UPDATE-CODE-EXAMPLE-URLS, ALG-KK-REGENERATE-EVIDENCE-EXCERPT,
+        INV-KK-REMEDIATION-BACKUP, INV-KK-STUB-SOURCE-REPLACED,
+        INV-KK-DIRECTORY-SOURCE-REPLACED, INV-KK-CODE-EXAMPLE-SOURCE-VALID,
+        INV-KK-EVIDENCE-EXCERPT-GROUNDED, INV-KK-EVIDENCE-EXCERPT-FROM-FETCH
 """
 
 import json
@@ -17,7 +20,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 from remediate_sources import (
     RemediationResult,
     backup_database,
+    extract_code_file_excerpt,
+    extract_prose_excerpt,
     generate_remediation_report,
+    regenerate_evidence_excerpts,
     remediate_directory_sources,
     remediate_stub_sources,
     update_code_example_urls,
@@ -452,3 +458,225 @@ class TestUpdateCodeExampleUrls:
 
         count = update_code_example_urls(conn, [])
         assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# extract_code_file_excerpt
+# ---------------------------------------------------------------------------
+
+class TestExtractCodeFileExcerpt:
+    def test_header_comment(self):
+        content = """\
+/*
+ * SLUB: A slab allocator that limits cache line use instead of queuing
+ * objects in per cpu and per node lists.
+ */
+
+#include <linux/mm.h>
+"""
+        excerpt = extract_code_file_excerpt(content)
+        assert "SLUB" in excerpt
+        assert "slab allocator" in excerpt
+
+    def test_kernel_doc_function(self):
+        content = """\
+/*
+ * Memory allocator header
+ */
+
+/**
+ * kmalloc - allocate memory
+ * @size: how many bytes
+ * @flags: the type of memory
+ *
+ * Returns pointer to allocated memory.
+ */
+void *kmalloc(size_t size, gfp_t flags)
+{
+}
+"""
+        excerpt = extract_code_file_excerpt(content)
+        assert "Memory allocator" in excerpt
+        assert "kmalloc" in excerpt
+
+    def test_empty_content(self):
+        assert extract_code_file_excerpt("") == ""
+
+    def test_max_len_truncation(self):
+        content = "/*\n * " + "x " * 2000 + "\n */\n"
+        excerpt = extract_code_file_excerpt(content, max_len=100)
+        assert len(excerpt) <= 104  # 100 + "..."
+
+
+# ---------------------------------------------------------------------------
+# extract_prose_excerpt
+# ---------------------------------------------------------------------------
+
+class TestExtractProseExcerpt:
+    def test_strips_rst_markup(self):
+        text = """\
+Title
+=====
+
+This document describes the scheduler.
+
+.. toctree::
+   :maxdepth: 2
+
+The CFS scheduler uses a :ref:`red-black tree <rbtree>` to track processes.
+
+.. note::
+   This is a note.
+
+The algorithm is O(log n).
+"""
+        excerpt = extract_prose_excerpt(text)
+        assert "scheduler" in excerpt
+        assert "red-black tree" in excerpt or "rbtree" in excerpt
+        assert "O(log n)" in excerpt
+        assert "toctree" not in excerpt
+        assert "====" not in excerpt
+
+    def test_strips_html_tags(self):
+        text = "<h1>Title</h1><p>This is the <b>content</b> of the page.</p>"
+        excerpt = extract_prose_excerpt(text)
+        assert "Title" in excerpt
+        assert "content" in excerpt
+        assert "<h1>" not in excerpt
+
+    def test_empty_content(self):
+        assert extract_prose_excerpt("") == ""
+
+    def test_max_len_truncation(self):
+        text = "word " * 500
+        excerpt = extract_prose_excerpt(text, max_len=100)
+        assert len(excerpt) <= 104
+
+
+# ---------------------------------------------------------------------------
+# regenerate_evidence_excerpts (ALG-KK-REGENERATE-EVIDENCE-EXCERPT)
+# ---------------------------------------------------------------------------
+
+def _add_evidence(conn, evidence_id, source_id, excerpt="old synthetic excerpt"):
+    conn.execute(
+        "INSERT INTO nodes (id, kind, attrs) VALUES (?, 'Evidence', ?)",
+        (evidence_id, json.dumps({
+            "artifact_class": "A",
+            "contamination_level": "L1",
+            "excerpt": excerpt,
+            "description": "Test evidence",
+        })),
+    )
+    conn.execute(
+        "INSERT INTO edges (kind, source_id, target_id) VALUES ('sourced-from', ?, ?)",
+        (evidence_id, source_id),
+    )
+    conn.commit()
+
+
+def _get_excerpt(conn, evidence_id):
+    row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (evidence_id,)).fetchone()
+    return json.loads(row[0])["excerpt"] if row else None
+
+
+class TestRegenerateEvidenceExcerpts:
+    def test_excerpt_from_c_file(self):
+        conn = _make_test_db()
+        _add_source(conn, "src-1", "https://example.com/mm/slub.c")
+        _add_evidence(conn, "ev-1", "src-1")
+
+        c_content = "/*\n * SLUB allocator for kernel memory.\n */\nint main() {}\n"
+        results = [RemediationResult(
+            source_id="src-1", old_url="https://old.com/slab.rst",
+            new_url="https://example.com/mm/slub.c",
+            action="stub_replaced",
+        )]
+
+        count = regenerate_evidence_excerpts(
+            conn, results, fetch_fn=lambda _: c_content, rate_limit=0.0,
+        )
+        assert count == 1
+        excerpt = _get_excerpt(conn, "ev-1")
+        assert "SLUB" in excerpt
+        assert excerpt != "old synthetic excerpt"
+
+    def test_excerpt_from_rst(self):
+        conn = _make_test_db()
+        _add_source(conn, "src-1", "https://example.com/doc.rst")
+        _add_evidence(conn, "ev-1", "src-1")
+
+        rst_content = "Title\n=====\n\nThe scheduler manages CPU time allocation.\n"
+        results = [RemediationResult(
+            source_id="src-1", old_url="https://old.com/dir",
+            new_url="https://example.com/doc.rst",
+            action="directory_replaced",
+        )]
+
+        count = regenerate_evidence_excerpts(
+            conn, results, fetch_fn=lambda _: rst_content, rate_limit=0.0,
+        )
+        assert count == 1
+        excerpt = _get_excerpt(conn, "ev-1")
+        assert "scheduler" in excerpt
+
+    def test_thin_source_thin_excerpt(self):
+        conn = _make_test_db()
+        _add_source(conn, "src-1", "https://example.com/thin.rst")
+        _add_evidence(conn, "ev-1", "src-1")
+
+        thin_content = "Short doc.\n"
+        results = [RemediationResult(
+            source_id="src-1", old_url="https://old.com/x",
+            new_url="https://example.com/thin.rst",
+            action="stub_replaced",
+        )]
+
+        count = regenerate_evidence_excerpts(
+            conn, results, fetch_fn=lambda _: thin_content, rate_limit=0.0,
+        )
+        assert count == 1
+        excerpt = _get_excerpt(conn, "ev-1")
+        assert excerpt == "Short doc."
+
+    def test_skipped_sources_not_regenerated(self):
+        conn = _make_test_db()
+        _add_source(conn, "src-1", "https://example.com/x")
+        _add_evidence(conn, "ev-1", "src-1", excerpt="original")
+
+        results = [RemediationResult(
+            source_id="src-1", old_url="https://example.com/x",
+            new_url="https://example.com/x",
+            action="skipped",
+        )]
+
+        count = regenerate_evidence_excerpts(
+            conn, results, fetch_fn=lambda _: "new content", rate_limit=0.0,
+        )
+        assert count == 0
+        assert _get_excerpt(conn, "ev-1") == "original"
+
+    def test_no_results(self):
+        conn = _make_test_db()
+        count = regenerate_evidence_excerpts(conn, [], rate_limit=0.0)
+        assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Full report with all sections
+# ---------------------------------------------------------------------------
+
+class TestFullReport:
+    def test_all_sections_present(self):
+        results = [
+            RemediationResult("s1", "old1", "new1", "stub_replaced", "mm/a.c"),
+            RemediationResult("s2", "old2", "new2", "directory_replaced"),
+            RemediationResult("s3", "old3", "old3", "flagged_ambiguous"),
+            RemediationResult("s4", "old4", "old4", "skipped"),
+        ]
+        report = generate_remediation_report(results, code_example_count=2, excerpt_count=5)
+        assert "Stub sources replaced:** 1" in report
+        assert "Directory sources replaced:** 1" in report
+        assert "Directory sources flagged (ambiguous):** 1" in report
+        assert "Code examples updated:** 2" in report
+        assert "Evidence excerpts regenerated:** 5" in report
+        assert "Skipped:** 1" in report
