@@ -1,16 +1,25 @@
 """Tests for src/ingest/validate_sources.py.
 
 Covers: ALG-KK-CLASSIFY-SOURCE-CONTENT, ALG-KK-EXTRACT-KERNEL-DOC-REFS,
-        INV-KK-SOURCE-CONTENT-SUFFICIENT
+        INV-KK-SOURCE-CONTENT-SUFFICIENT, ALG-KK-VALIDATE-SOURCE-CONTENT,
+        ALG-KK-RESOLVE-DIRECTORY-SOURCE, INV-KK-VALIDATE-RATE-LIMITED
 """
+
+import json
+import sqlite3
+import time
 
 import pytest
 
 from ingest.validate_sources import (
     ContentClassification,
+    SourceValidationResult,
     build_replacement_url,
     classify_content,
     extract_kernel_doc_refs,
+    generate_report,
+    resolve_directory_url,
+    validate_all_sources,
 )
 
 
@@ -210,3 +219,196 @@ class TestContentClassificationDataclass:
         assert cc.word_count == 12
         assert cc.kernel_doc_refs == ["mm/slub.c"]
         assert cc.prose_excerpt == "SLUB Allocator"
+
+
+# ---------------------------------------------------------------------------
+# resolve_directory_url (ALG-KK-RESOLVE-DIRECTORY-SOURCE)
+# ---------------------------------------------------------------------------
+
+_MOCK_DIR_HTML = """
+<html><body>
+<table class="list">
+<tr><td><a href="../">parent directory</a></td></tr>
+<tr><td><a href="index.rst">index.rst</a></td></tr>
+<tr><td><a href="overview.rst">overview.rst</a></td></tr>
+<tr><td><a href="internals.rst">internals.rst</a></td></tr>
+<tr><td><a href="main.c">main.c</a></td></tr>
+<tr><td><a href="helper.h">helper.h</a></td></tr>
+<tr><td><a href="Makefile">Makefile</a></td></tr>
+</table>
+</body></html>
+"""
+
+
+class TestResolveDirectoryUrl:
+    def test_filters_and_orders(self):
+        results = resolve_directory_url(
+            "https://example.com/tree/Documentation/mm",
+            fetch_fn=lambda _url: _MOCK_DIR_HTML,
+        )
+        assert len(results) >= 4
+        assert results[0].endswith("index.rst")
+        assert all(".rst" in u or ".c" in u or ".h" in u for u in results)
+        assert "Makefile" not in " ".join(results)
+
+    def test_empty_fetch(self):
+        results = resolve_directory_url(
+            "https://example.com/tree/empty",
+            fetch_fn=lambda _url: "",
+        )
+        assert results == []
+
+    def test_no_index(self):
+        html = '<a href="notes.rst">notes.rst</a><a href="core.c">core.c</a>'
+        results = resolve_directory_url(
+            "https://example.com/tree/dir",
+            fetch_fn=lambda _url: html,
+        )
+        assert len(results) == 2
+        assert results[0].endswith("notes.rst")
+
+
+# ---------------------------------------------------------------------------
+# validate_all_sources (ALG-KK-VALIDATE-SOURCE-CONTENT)
+# ---------------------------------------------------------------------------
+
+def _make_test_db():
+    """Create an in-memory DB with Source nodes for testing."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("""
+        CREATE TABLE nodes (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            attrs TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE edges (
+            kind TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            target_id TEXT NOT NULL
+        )
+    """)
+    return conn
+
+
+def _add_source(conn, source_id, url):
+    conn.execute(
+        "INSERT INTO nodes (id, kind, attrs) VALUES (?, 'Source', ?)",
+        (source_id, json.dumps({"url": url, "source_type": "documentation"})),
+    )
+    conn.commit()
+
+
+class TestValidateAllSources:
+    def test_mixed_sources(self):
+        conn = _make_test_db()
+        _add_source(conn, "src-good", "https://example.com/good")
+        _add_source(conn, "src-stub", "https://example.com/stub")
+        _add_source(conn, "src-dir", "https://example.com/dir")
+
+        substantive_text = " ".join(["word"] * 150)
+        stub_text = "Title\n=====\n\n.. kernel-doc:: mm/slub.c\n"
+        dir_text = '<table class="list"><tr><td>files</td></tr></table>'
+
+        def mock_fetch(url):
+            if "good" in url:
+                return substantive_text
+            elif "stub" in url:
+                return stub_text
+            elif "dir" in url:
+                return dir_text
+            return ""
+
+        results = validate_all_sources(conn, fetch_fn=mock_fetch, rate_limit=0.0)
+        by_id = {r.source_id: r for r in results}
+
+        assert by_id["src-good"].classification == "substantive"
+        assert by_id["src-stub"].classification == "stub"
+        assert len(by_id["src-stub"].suggested_replacement_urls) > 0
+        assert by_id["src-dir"].classification == "directory"
+
+    def test_empty_url_unreachable(self):
+        conn = _make_test_db()
+        _add_source(conn, "src-empty", "")
+
+        results = validate_all_sources(conn, fetch_fn=lambda _: "", rate_limit=0.0)
+        assert results[0].classification == "unreachable"
+
+    def test_no_sources(self):
+        conn = _make_test_db()
+        results = validate_all_sources(conn, fetch_fn=lambda _: "", rate_limit=0.0)
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting (INV-KK-VALIDATE-RATE-LIMITED)
+# ---------------------------------------------------------------------------
+
+class TestRateLimiting:
+    def test_rate_limiting_respected(self):
+        conn = _make_test_db()
+        _add_source(conn, "src-1", "https://example.com/a")
+        _add_source(conn, "src-2", "https://example.com/b")
+
+        fetch_times: list[float] = []
+
+        def timed_fetch(url):
+            fetch_times.append(time.monotonic())
+            return " ".join(["word"] * 150)
+
+        validate_all_sources(conn, fetch_fn=timed_fetch, rate_limit=0.1)
+
+        assert len(fetch_times) == 2
+        gap = fetch_times[1] - fetch_times[0]
+        assert gap >= 0.09  # allow small float imprecision
+
+
+# ---------------------------------------------------------------------------
+# generate_report
+# ---------------------------------------------------------------------------
+
+class TestGenerateReport:
+    def test_report_format(self):
+        results = [
+            SourceValidationResult(
+                source_id="src-1", url="https://example.com/good",
+                classification="substantive", word_count=200,
+            ),
+            SourceValidationResult(
+                source_id="src-2", url="https://example.com/stub",
+                classification="stub", word_count=10,
+                kernel_doc_refs=["mm/slub.c"],
+                suggested_replacement_urls=["https://git.kernel.org/.../mm/slub.c"],
+            ),
+            SourceValidationResult(
+                source_id="src-3", url="https://example.com/thin",
+                classification="thin", word_count=60,
+            ),
+        ]
+        report = generate_report(results)
+        assert "# Source Content Validation Report" in report
+        assert "| substantive | 1 |" in report
+        assert "| stub | 1 |" in report
+        assert "| thin | 1 |" in report
+        assert "**Total** | **3**" in report
+        assert "src-2" in report
+        assert "Needs Manual Review" in report
+        assert "Stub Sources" in report
+
+    def test_report_empty(self):
+        report = generate_report([])
+        assert "**Total** | **0**" in report
+
+
+# ---------------------------------------------------------------------------
+# SourceValidationResult dataclass
+# ---------------------------------------------------------------------------
+
+class TestSourceValidationResult:
+    def test_defaults(self):
+        r = SourceValidationResult(source_id="s1", url="u1", classification="substantive")
+        assert r.word_count == 0
+        assert r.kernel_doc_refs == []
+        assert r.suggested_replacement_urls == []
+        assert r.prose_excerpt == ""
