@@ -1,8 +1,10 @@
-﻿"""LLM concept extraction â€” Evidence (Class A) â†’ Concepts (Class B) (ALG-KK-LLM-EXTRACT)."""
+"""LLM concept extraction -- Evidence (Class A) -> Concepts (Class B) (ALG-KK-LLM-EXTRACT)."""
 
 from __future__ import annotations
 
 import json
+import logging
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
@@ -11,20 +13,29 @@ from typing import Any, Protocol
 from graph.engine import add_edge, add_node
 from ingest.gate import SessionGate
 
+log = logging.getLogger(__name__)
+
 
 EXTRACTION_SYSTEM_PROMPT = """\
 You are a concept extraction agent for a kernel-design intelligence system.
 
 Your task: given a document about operating system or kernel design, extract \
-abstract concepts â€” the IDEAS, MECHANISMS, and DESIGN PATTERNS described, \
+abstract concepts --" the IDEAS, MECHANISMS, and DESIGN PATTERNS described, \
 NOT the specific text or expression used to describe them.
 
-CRITICAL RULES â€” LEGAL PROTECTION:
+CRITICAL RULES --" LEGAL PROTECTION:
 - NEVER quote verbatim from the source material.
 - NEVER copy sentences, phrases, or distinctive wording from the source.
 - Express each concept in your own words as an abstract description of the mechanism.
 - Focus on WHAT the mechanism does and WHY, not HOW the original author expressed it.
 - If you cannot describe a concept without copying the source, skip it.
+
+PROVENANCE GROUNDING RULES:
+- Your evidence excerpt MUST summarize only what appears in the provided document text.
+- Do NOT add claims about features, APIs, or design details that are not mentioned in the document.
+- If the document is sparse (short or mostly code), your excerpt should reflect that -- a brief excerpt is better than a fabricated detailed one.
+- The concepts you extract must be supported by the document content. If the document does not discuss a topic in sufficient detail to extract a concept, skip it.
+- Do NOT use your general training knowledge to embellish or augment what the document says.
 
 For each concept, provide:
 - name: A short descriptive name (2-5 words)
@@ -44,11 +55,11 @@ over alternatives
 extracting in this same batch. Each entry has:
   - target: The exact name of the other concept
   - kind: One of:
-    - "refines" — this concept is a more specific version of the target
-    - "contradicts" — this concept and the target cannot coexist
-    - "prerequisite" — this concept requires the target to exist first
-    - "alternative-to" — this concept and the target solve the same problem differently
-    - "supersedes" — this concept replaces the target entirely
+    - "refines" -- this concept is a more specific version of the target
+    - "contradicts" -- this concept and the target cannot coexist
+    - "prerequisite" -- this concept requires the target to exist first
+    - "alternative-to" -- this concept and the target solve the same problem differently
+    - "supersedes" -- this concept replaces the target entirely
   - reason: One sentence explaining the relationship
   If a concept has no relationships, use an empty list.
 - invariants: A list of rules or properties that MUST HOLD for this \
@@ -59,7 +70,7 @@ can observe a partially-updated data structure")
 (violation = deadlock/starvation), "performance" (violation = regression), \
 "structural" (violation = design inconsistency)
   - scope: One of "per-operation", "per-object", "system-wide"
-  Each invariant may include failure_modes â€" what happens when this \
+  Each invariant may include failure_modes --" what happens when this \
 invariant is violated:
   - failure_modes: A list of consequences. Each entry has:
     - symptom: Observable behavior (e.g., "data corruption", "deadlock", \
@@ -69,7 +80,7 @@ invariant is violated:
   Extract 1-3 invariants per concept. Focus on the most critical rules. \
 If a concept has no clear invariants, use an empty list.
 
-For each concept, also extract performance_profiles — quantitative \
+For each concept, also extract performance_profiles -- quantitative \
 performance characteristics. Each entry has:
 - metric: What is measured (e.g., "read latency", "memory overhead")
 - complexity: Big-O or qualitative bound (e.g., "O(1)", "O(log n)", "constant")
@@ -218,7 +229,42 @@ def validate_extraction_item(item: Any) -> dict | None:
 def build_extraction_prompt(evidence_text: str) -> str:
     if evidence_text:
         return f"Extract abstract concepts from this document:\n\n{evidence_text}"
-    return "Extract abstract concepts from metadata only — no source text available."
+    return "Extract abstract concepts from metadata only -- no source text available."
+
+
+def validate_excerpt_grounding(excerpt: str, document_text: str) -> list[str]:
+    """Check that key phrases in the excerpt appear in the document text
+    (ALG-KK-VALIDATE-EXCERPT-GROUNDING).
+
+    Extracts consecutive word bigrams from the excerpt, checks each against
+    document_text via case-insensitive substring match. Returns list of
+    ungrounded phrases (empty = fully grounded).
+    """
+    if not excerpt or not excerpt.strip():
+        return []
+
+    words = excerpt.split()
+    bigrams: set[str] = set()
+    for i in range(len(words) - 1):
+        w1 = words[i].strip(".,;:!?()\"'")
+        w2 = words[i + 1].strip(".,;:!?()\"'")
+        if len(w1) >= 3 and len(w2) >= 3:
+            bigrams.add(f"{w1} {w2}")
+
+    if not bigrams:
+        return []
+
+    if not document_text or not document_text.strip():
+        return sorted(bigrams)
+
+    doc_lower = document_text.lower()
+
+    ungrounded = []
+    for phrase in sorted(bigrams):
+        if phrase.lower() not in doc_lower:
+            ungrounded.append(phrase)
+
+    return ungrounded
 
 
 ALLOWED_RELATIONSHIP_KINDS = {"refines", "contradicts", "prerequisite", "alternative-to", "supersedes"}
@@ -847,6 +893,20 @@ def extract_concepts(
         comp_id = store_comparative_analysis(conn, validated_comp, evidence_id, name_to_id)
         if comp_id:
             comparatives_created += 1
+
+    # Post-extraction grounding check (INV-KK-EXTRACT-GROUNDING-CHECK)
+    if evidence_text:
+        for item in concepts_data[:10]:
+            if not isinstance(item, dict):
+                continue
+            desc = item.get("description", "")
+            if desc:
+                ungrounded = validate_excerpt_grounding(desc, evidence_text)
+                if ungrounded:
+                    log.warning(
+                        "Grounding check: concept '%s' has ungrounded phrases: %s",
+                        item.get("name", "?"), ungrounded,
+                    )
 
     return ExtractionResult(
         evidence_id=evidence_id,

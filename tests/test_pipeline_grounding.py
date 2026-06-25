@@ -1,7 +1,8 @@
-"""Tests for pipeline content sufficiency gate.
+"""Tests for pipeline content sufficiency gate and extraction grounding.
 
 Covers: INV-KK-INGEST-REJECTS-STUB, INV-KK-INGEST-REJECTS-DIRECTORY,
-        ALG-KK-INGEST-DOCUMENT (content sufficiency check)
+        ALG-KK-INGEST-DOCUMENT, INV-KK-EXTRACT-PROMPT-GROUNDING,
+        INV-KK-EXTRACT-GROUNDING-CHECK, ALG-KK-VALIDATE-EXCERPT-GROUNDING
 """
 
 import logging
@@ -9,6 +10,7 @@ import logging
 import pytest
 
 from graph.schema import init_db
+from ingest.extractor import EXTRACTION_SYSTEM_PROMPT, validate_excerpt_grounding
 from ingest.pipeline import ingest_document
 
 
@@ -127,3 +129,69 @@ class TestErrorMessageContent:
             ingest_document(conn, path, "https://example.com/dir", "documentation")
 
         assert "directory" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# EXTRACTION_SYSTEM_PROMPT grounding rules (INV-KK-EXTRACT-PROMPT-GROUNDING)
+# ---------------------------------------------------------------------------
+
+class TestExtractionPromptGrounding:
+    def test_contains_grounding_rules(self):
+        assert "PROVENANCE GROUNDING RULES" in EXTRACTION_SYSTEM_PROMPT
+
+    def test_grounding_after_legal(self):
+        legal_pos = EXTRACTION_SYSTEM_PROMPT.index("CRITICAL RULES")
+        grounding_pos = EXTRACTION_SYSTEM_PROMPT.index("PROVENANCE GROUNDING RULES")
+        assert grounding_pos > legal_pos
+
+    def test_contains_key_instructions(self):
+        assert "summarize only what appears" in EXTRACTION_SYSTEM_PROMPT
+        assert "Do NOT add claims" in EXTRACTION_SYSTEM_PROMPT
+        assert "sparse" in EXTRACTION_SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# validate_excerpt_grounding (ALG-KK-VALIDATE-EXCERPT-GROUNDING)
+# ---------------------------------------------------------------------------
+
+class TestValidateExcerptGrounding:
+    def test_catches_fabrication(self):
+        excerpt = "The SLUB allocator uses per-CPU freelists and cache merging to optimize allocation."
+        doc = "SLUB is a slab allocator. It uses object caching for fast allocation."
+        ungrounded = validate_excerpt_grounding(excerpt, doc)
+        assert any("per-CPU" in p for p in ungrounded)
+        assert any("cache merging" in p for p in ungrounded)
+
+    def test_passes_real(self):
+        doc = "The red-black tree provides O(log n) lookup time for the scheduler."
+        excerpt = "The red-black tree provides lookup time."
+        ungrounded = validate_excerpt_grounding(excerpt, doc)
+        assert any("red-black tree" in p for p in ungrounded) is False
+
+    def test_case_insensitive(self):
+        doc = "The SLUB allocator manages kernel memory."
+        excerpt = "The SLUB allocator handles memory."
+        ungrounded = validate_excerpt_grounding(excerpt, doc)
+        # "SLUB allocator" is in both doc and excerpt (case-insensitive)
+        slub_phrases = [p for p in ungrounded if "slub" in p.lower()]
+        assert len(slub_phrases) == 0
+
+    def test_empty_excerpt(self):
+        assert validate_excerpt_grounding("", "some document text") == []
+
+    def test_empty_document(self):
+        result = validate_excerpt_grounding("Per-CPU freelists optimize allocation speed", "")
+        assert len(result) > 0
+
+    def test_whitespace_only_excerpt(self):
+        assert validate_excerpt_grounding("   ", "doc text") == []
+
+    def test_bigrams_only(self):
+        excerpt = "Memory allocation caching helps"
+        doc = "Something completely unrelated here"
+        result = validate_excerpt_grounding(excerpt, doc)
+        # All bigrams should be ungrounded since doc is unrelated
+        assert len(result) > 0
+        # Each entry should be a bigram (two words)
+        for phrase in result:
+            assert len(phrase.split()) == 2
