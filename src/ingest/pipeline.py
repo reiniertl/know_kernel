@@ -1,7 +1,8 @@
-﻿"""Ingestion pipeline â€” parse â†’ scan â†’ graph write (ALG-KK-INGEST-PIPELINE)."""
+"""Ingestion pipeline -- parse -> classify -> scan -> graph write (ALG-KK-INGEST-PIPELINE)."""
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -11,6 +12,9 @@ from graph.rules import validate_node
 from ingest.gate import SessionGate
 from ingest.parser import parse_document
 from ingest.scanner import ArtifactClass, ScanResult, scan_license
+from ingest.validate_sources import classify_content
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -29,7 +33,7 @@ def ingest_document(
     source_type: str,
     gate: SessionGate | None = None,
 ) -> IngestResult:
-    """Ingest one document: parse â†’ scan â†’ write Source + Evidence to graph.
+    """Ingest one document: parse -> scan -> write Source + Evidence to graph.
 
     Creates exactly one Source node, one Evidence node, and a sourced-from edge
     (INV-KK-INGEST-CREATES-EVIDENCE). Does not create Advisory nodes
@@ -38,6 +42,24 @@ def ingest_document(
     Raises FileNotFoundError if file_path does not exist.
     """
     parsed = parse_document(file_path, source_type)
+
+    # Content sufficiency gate (INV-KK-INGEST-REJECTS-STUB, INV-KK-INGEST-REJECTS-DIRECTORY)
+    classification = classify_content(parsed.text)
+    if classification.classification in ("stub", "directory"):
+        refs_info = ""
+        if classification.kernel_doc_refs:
+            refs_info = f" Kernel-doc refs: {classification.kernel_doc_refs}."
+        raise ValueError(
+            f"Source content is non-substantive ({classification.classification}). "
+            f"Word count: {classification.word_count}.{refs_info} "
+            f"Provide a URL to substantive content instead."
+        )
+    if classification.classification == "thin":
+        log.warning(
+            "Thin content for %s (%d words) -- ingesting but flagging for review",
+            file_path, classification.word_count,
+        )
+
     scan = scan_license(parsed)
 
     if gate is not None and scan.artifact_class is ArtifactClass.A:
