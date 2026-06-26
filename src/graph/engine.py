@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from typing import Any
 
 from graph.rules import Violation, validate_node
-from graph.schema import EDGE_VALID_PAIRS, REQUIRED_ATTRS
+from graph.schema import DATE_ATTRS, EDGE_VALID_PAIRS, REQUIRED_ATTRS
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?$")
 
 
 class AdmissibilityError(Exception):
@@ -27,6 +30,14 @@ def add_node(
         raise ValueError(
             f"Node '{node_id}' (kind={kind}) missing required attributes: {', '.join(missing)}"
         )
+    for attr_name in DATE_ATTRS:
+        if attr_name in resolved:
+            val = resolved[attr_name]
+            if not isinstance(val, str) or not _ISO_DATE_RE.match(val):
+                raise ValueError(
+                    f"Node '{node_id}' attribute '{attr_name}' must be an ISO-8601 date "
+                    f"(e.g., '2026-06-15' or '2026-06-15T10:30:00'), got: {val!r}"
+                )
     conn.execute(
         "INSERT INTO nodes (id, kind, attrs) VALUES (?, ?, ?)",
         (node_id, kind, json.dumps(resolved)),
@@ -95,15 +106,15 @@ def add_edge(
         "INSERT INTO edges (kind, source_id, target_id, attrs) VALUES (?, ?, ?, ?)",
         (kind, source_id, target_id, json.dumps(attrs or {})),
     )
-    if kind == "contradicts":
+    if kind in ("contradicts", "contradicted-by"):
         existing = conn.execute(
-            "SELECT 1 FROM edges WHERE kind = 'contradicts' AND source_id = ? AND target_id = ? LIMIT 1",
-            (target_id, source_id),
+            "SELECT 1 FROM edges WHERE kind = ? AND source_id = ? AND target_id = ? LIMIT 1",
+            (kind, target_id, source_id),
         ).fetchone()
         if existing is None:
             conn.execute(
                 "INSERT INTO edges (kind, source_id, target_id, attrs) VALUES (?, ?, ?, ?)",
-                ("contradicts", target_id, source_id, json.dumps(attrs or {})),
+                (kind, target_id, source_id, json.dumps(attrs or {})),
             )
 
 
@@ -166,10 +177,10 @@ def delete_edge(conn: sqlite3.Connection, edge_id: int) -> None:
 
     conn.execute("SAVEPOINT delete_edge_check")
     conn.execute("DELETE FROM edges WHERE id = ?", (edge_id,))
-    if edge_kind == "contradicts":
+    if edge_kind in ("contradicts", "contradicted-by"):
         conn.execute(
-            "DELETE FROM edges WHERE kind = 'contradicts' AND source_id = ? AND target_id = ?",
-            (target_id, source_id),
+            "DELETE FROM edges WHERE kind = ? AND source_id = ? AND target_id = ?",
+            (edge_kind, target_id, source_id),
         )
     if source_node:
         violations = validate_node(conn, source_id, source_node["kind"])

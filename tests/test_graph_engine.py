@@ -598,3 +598,51 @@ class TestRankedRecommendations:
         recs = ranked_recommendations(conn, goal_id, limit=2)
         assert len(recs) == 2
         assert recs[0]["score"] >= recs[1]["score"]
+
+
+# --- INV-KK-CONTRADICTED-SYMMETRIC ---
+
+
+def test_contradicted_by_symmetric(conn: sqlite3.Connection):
+    add_node(conn, "obs1", "Observation", {
+        "claim": "X is true", "confidence": "0.9",
+        "source_date": "2026-01-01", "artifact_class": "B",
+    })
+    add_node(conn, "obs2", "Observation", {
+        "claim": "X is false", "confidence": "0.8",
+        "source_date": "2026-01-02", "artifact_class": "B",
+    })
+    add_edge(conn, "contradicted-by", "obs1", "obs2")
+    reverse = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'contradicted-by' AND source_id = 'obs2' AND target_id = 'obs1'"
+    ).fetchone()
+    assert reverse is not None
+
+
+# --- INV-KK-DATE-FORMAT ---
+
+
+def test_source_date_valid_date(conn: sqlite3.Connection):
+    add_node(conn, "prob1", "Problem", {
+        "title": "test", "description": "test", "severity": "low",
+        "status": "open", "source_date": "2026-06-15", "artifact_class": "B",
+    })
+    node = get_node(conn, "prob1")
+    assert node is not None
+
+
+def test_source_date_valid_datetime(conn: sqlite3.Connection):
+    add_node(conn, "prob1", "Problem", {
+        "title": "test", "description": "test", "severity": "low",
+        "status": "open", "source_date": "2026-06-15T10:30:00", "artifact_class": "B",
+    })
+    node = get_node(conn, "prob1")
+    assert node is not None
+
+
+def test_source_date_invalid_rejected(conn: sqlite3.Connection):
+    with pytest.raises(ValueError, match="ISO-8601"):
+        add_node(conn, "prob1", "Problem", {
+            "title": "test", "description": "test", "severity": "low",
+            "status": "open", "source_date": "yesterday", "artifact_class": "B",
+        })
