@@ -198,6 +198,66 @@ def check_advisory_has_assessor(conn: sqlite3.Connection, node_id: str) -> Viola
     return None
 
 
+def check_problem_has_concept(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    row = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'identifies-problem' AND source_id = ? LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return Violation(node_id, "problem-identifies-concept", "Problem must identifies-problem at least one Concept")
+    return None
+
+
+def check_observation_has_concept(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    row = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'observes' AND source_id = ? LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return Violation(node_id, "observation-observes-concept", "Observation must observes at least one Concept")
+    return None
+
+
+def check_discussion_has_concept(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    row = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'discusses' AND source_id = ? LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return Violation(node_id, "discussion-discusses-concept", "Discussion must discusses at least one Concept")
+    return None
+
+
+def check_benchmark_has_concept(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    row = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'benchmarks' AND source_id = ? LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return Violation(node_id, "benchmark-benchmarks-concept", "Benchmark must benchmarks at least one Concept")
+    return None
+
+
+def check_proposal_has_concept(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    row = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'grounded-in' AND source_id = ? LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return Violation(node_id, "proposal-grounded-in-concept", "Proposal must be grounded-in at least one Concept")
+    return None
+
+
+def check_vulnerability_has_concept(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    row = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'exploits' AND source_id = ? LIMIT 1",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        return Violation(node_id, "vulnerability-exploits-concept", "Vulnerability must exploits at least one Concept")
+    return None
+
+
 RULES_BY_KIND = {
     "Concept": [check_concept_has_belongs_to, check_concept_has_provenance],
     "Evidence": [check_evidence_has_source],
@@ -213,6 +273,14 @@ RULES_BY_KIND = {
     "OptimizationGoal": [],
     "UseCaseScenario": [],
     "Kernel": [],
+    "Problem": [check_problem_has_concept],
+    "Observation": [check_observation_has_concept],
+    "Discussion": [check_discussion_has_concept],
+    "Benchmark": [check_benchmark_has_concept],
+    "Rejection": [],
+    "Vulnerability": [check_vulnerability_has_concept],
+    "Fix": [],
+    "Proposal": [check_proposal_has_concept],
 }
 
 
