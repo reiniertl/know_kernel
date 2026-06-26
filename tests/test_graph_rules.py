@@ -9,22 +9,28 @@ from graph.rules import (
     RULES_BY_KIND,
     Violation,
     check_advisory_has_assessor,
+    check_benchmark_has_concept,
     check_compat_concept_pairs,
     check_compat_provenance,
     check_comparative_concept_pairs,
     check_concept_has_belongs_to,
     check_concept_has_provenance,
+    check_discussion_has_concept,
     check_evidence_has_source,
     check_failure_mode_provenance,
     check_failure_mode_trigger,
     check_kinv_belongs_to_subsystem,
     check_kinv_governed_by_concept,
+    check_observation_has_concept,
+    check_problem_has_concept,
     check_profile_concept,
     check_profile_provenance,
+    check_proposal_has_concept,
     check_protocol_concept_pairs,
     check_protocol_provenance,
     check_source_has_advisory,
     check_subsystem_has_children,
+    check_vulnerability_has_concept,
     validate_node,
 )
 from graph.schema import NODE_KINDS
@@ -370,6 +376,104 @@ def test_advisory_has_assessor_fail(conn: sqlite3.Connection):
     v = check_advisory_has_assessor(conn, "adv1")
     assert isinstance(v, Violation)
     assert "assessed-by" in v.message.lower()
+
+
+# --- INV-KK-PROBLEM-CONCEPT ---
+
+
+def test_problem_has_concept_pass(populated: sqlite3.Connection):
+    assert check_problem_has_concept(populated, "prob1") is None
+
+
+def test_problem_has_concept_fail(conn: sqlite3.Connection):
+    add_node(conn, "prob1", "Problem", {
+        "title": "test", "description": "test", "severity": "low",
+        "status": "open", "source_date": "2026-01-01", "artifact_class": "B",
+    })
+    v = check_problem_has_concept(conn, "prob1")
+    assert isinstance(v, Violation)
+    assert "identifies-problem" in v.message
+
+
+# --- INV-KK-OBSERVATION-CONCEPT ---
+
+
+def test_observation_has_concept_pass(populated: sqlite3.Connection):
+    assert check_observation_has_concept(populated, "obs1") is None
+
+
+def test_observation_has_concept_fail(conn: sqlite3.Connection):
+    add_node(conn, "obs1", "Observation", {
+        "claim": "test", "confidence": "0.5",
+        "source_date": "2026-01-01", "artifact_class": "B",
+    })
+    v = check_observation_has_concept(conn, "obs1")
+    assert isinstance(v, Violation)
+
+
+# --- INV-KK-DISCUSSION-CONCEPT ---
+
+
+def test_discussion_has_concept_pass(populated: sqlite3.Connection):
+    assert check_discussion_has_concept(populated, "disc1") is None
+
+
+def test_discussion_has_concept_fail(conn: sqlite3.Connection):
+    add_node(conn, "disc1", "Discussion", {
+        "title": "test", "forum": "lkml", "participant_count": "0",
+        "source_date": "2026-01-01", "artifact_class": "B",
+    })
+    v = check_discussion_has_concept(conn, "disc1")
+    assert isinstance(v, Violation)
+
+
+# --- INV-KK-BENCHMARK-CONCEPT ---
+
+
+def test_benchmark_has_concept_pass(populated: sqlite3.Connection):
+    assert check_benchmark_has_concept(populated, "bench1") is None
+
+
+def test_benchmark_has_concept_fail(conn: sqlite3.Connection):
+    add_node(conn, "bench1", "Benchmark", {
+        "metric": "latency", "result_summary": "fast", "conditions": "test",
+        "source_date": "2026-01-01", "artifact_class": "B",
+    })
+    v = check_benchmark_has_concept(conn, "bench1")
+    assert isinstance(v, Violation)
+
+
+# --- INV-KK-PROPOSAL-CONCEPT ---
+
+
+def test_proposal_has_concept_pass(populated: sqlite3.Connection):
+    assert check_proposal_has_concept(populated, "prop1") is None
+
+
+def test_proposal_has_concept_fail(conn: sqlite3.Connection):
+    add_node(conn, "prop1", "Proposal", {
+        "name": "test", "description": "test", "status": "draft",
+        "source_date": "2026-01-01", "artifact_class": "B",
+    })
+    v = check_proposal_has_concept(conn, "prop1")
+    assert isinstance(v, Violation)
+
+
+# --- INV-KK-VULN-CONCEPT ---
+
+
+def test_vulnerability_has_concept_pass(populated: sqlite3.Connection):
+    assert check_vulnerability_has_concept(populated, "vuln1") is None
+
+
+def test_vulnerability_has_concept_fail(conn: sqlite3.Connection):
+    add_node(conn, "vuln1", "Vulnerability", {
+        "cve_id": "CVE-2026-00001", "title": "test", "description": "test",
+        "severity": "low", "cvss_score": "3.0", "affected_versions": "",
+        "status": "unfixed", "source_date": "2026-01-01", "artifact_class": "B",
+    })
+    v = check_vulnerability_has_concept(conn, "vuln1")
+    assert isinstance(v, Violation)
 
 
 # --- INV-KK-RULES-FULL-COVERAGE ---
