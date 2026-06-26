@@ -5,8 +5,10 @@ from __future__ import annotations
 import sqlite3
 
 from graph.schema import (
+    DATE_ATTRS,
     EDGE_KINDS,
     EDGE_VALID_PAIRS,
+    ID_PREFIXES,
     NODE_KINDS,
     REQUIRED_ATTRS,
     init_db,
@@ -14,17 +16,31 @@ from graph.schema import (
 
 
 def test_node_kinds_complete():
-    assert set(NODE_KINDS) == {"Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel"}
+    assert set(NODE_KINDS) == {
+        "Concept", "Source", "Evidence", "Advisory", "Subsystem",
+        "KernelInvariant", "FailureMode", "InteractionProtocol",
+        "PerformanceProfile", "CompatibilityAssessment",
+        "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis",
+        "Kernel", "Problem", "Observation", "Discussion", "Benchmark",
+        "Rejection", "Vulnerability", "Fix", "Proposal",
+    }
+    assert len(NODE_KINDS) == 22
 
 
 def test_edge_kinds_complete():
     expected = {
         "belongs-to", "extracted-from", "sourced-from", "alternative-to",
         "refines", "contradicts", "prerequisite", "supersedes",
-        "assessed-by", "governed-by", "triggered-by", "constrains-composition", "profiled-by", "assesses-compatibility",
+        "assessed-by", "governed-by", "triggered-by", "constrains-composition",
+        "profiled-by", "assesses-compatibility",
         "contributes-to", "suited-for", "compares", "implemented-in",
+        "identifies-problem", "observes", "discusses", "benchmarks",
+        "rejected-for", "grounded-in", "exploits", "affects-subsystem",
+        "fixes", "patches", "addresses", "contradicted-by",
+        "resulted-in", "motivated-by",
     }
     assert set(EDGE_KINDS) == expected
+    assert len(EDGE_KINDS) == 32
 
 
 def test_edge_valid_pairs_covers_all_edge_kinds():
@@ -77,3 +93,12 @@ def test_edge_unique_constraint(conn: sqlite3.Connection):
     conn.execute("INSERT INTO edges (kind, source_id, target_id, attrs) VALUES ('alternative-to', 'n1', 'n2', '{}')")
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO edges (kind, source_id, target_id, attrs) VALUES ('alternative-to', 'n1', 'n2', '{}')")
+
+
+def test_date_attrs_is_frozenset():
+    assert isinstance(DATE_ATTRS, frozenset)
+    assert "source_date" in DATE_ATTRS
+
+
+def test_id_prefixes_covers_all_node_kinds():
+    assert set(ID_PREFIXES.keys()) == set(NODE_KINDS)
