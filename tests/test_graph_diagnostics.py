@@ -157,6 +157,52 @@ def test_diag_detects_duplicate_names(conn):
     assert set(dup_entry[1]) == {"dup-1", "dup-2"}
 
 
+def test_orphan_problems_detected(conn):
+    add_node(conn, "prob1", "Problem", {
+        "title": "orphan", "description": "test", "severity": "low",
+        "status": "open", "source_date": "2026-01-01", "artifact_class": "B",
+    })
+    conn.commit()
+    report = diagnose_graph(conn)
+    assert "prob1" in report.orphan_problems
+
+
+def test_orphan_problems_clean(populated):
+    report = diagnose_graph(populated)
+    assert len(report.orphan_problems) == 0
+
+
+def test_orphan_observations_detected(conn):
+    add_node(conn, "obs1", "Observation", {
+        "claim": "test", "confidence": "0.5",
+        "source_date": "2026-01-01", "artifact_class": "B",
+    })
+    conn.commit()
+    report = diagnose_graph(conn)
+    assert "obs1" in report.orphan_observations
+
+
+def test_orphan_observations_clean(populated):
+    report = diagnose_graph(populated)
+    assert len(report.orphan_observations) == 0
+
+
+def test_unlinked_vulnerabilities_detected(conn):
+    add_node(conn, "vuln1", "Vulnerability", {
+        "cve_id": "CVE-2026-00001", "title": "test", "description": "test",
+        "severity": "low", "cvss_score": "3.0", "affected_versions": "",
+        "status": "unfixed", "source_date": "2026-01-01", "artifact_class": "B",
+    })
+    conn.commit()
+    report = diagnose_graph(conn)
+    assert "vuln1" in report.unlinked_vulnerabilities
+
+
+def test_unlinked_vulnerabilities_clean(populated):
+    report = diagnose_graph(populated)
+    assert len(report.unlinked_vulnerabilities) == 0
+
+
 def test_diag_total_counts(conn):
     _subsystem(conn, "sub-tc", "Sub")
     _concept(conn, "c-tc", "Concept")

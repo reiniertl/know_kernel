@@ -19,6 +19,9 @@ class DiagnosticReport:
     subsystem_coverage: dict[str, int] = field(default_factory=dict)
     invariant_density: float = 0.0
     duplicate_names: list[tuple[str, list[str]]] = field(default_factory=list)
+    orphan_problems: list[str] = field(default_factory=list)
+    orphan_observations: list[str] = field(default_factory=list)
+    unlinked_vulnerabilities: list[str] = field(default_factory=list)
     total_nodes: int = 0
     total_edges: int = 0
 
@@ -68,6 +71,39 @@ def diagnose_graph(conn: sqlite3.Connection) -> DiagnosticReport:
         "HAVING edge_count < 2"
     ).fetchall()
     report.lone_protocols = [r[0] for r in rows]
+
+    report.orphan_problems = [
+        r[0]
+        for r in conn.execute(
+            "SELECT n.id FROM nodes n "
+            "WHERE n.kind = 'Problem' "
+            "AND n.id NOT IN ("
+            "  SELECT e.source_id FROM edges e WHERE e.kind = 'identifies-problem'"
+            ")"
+        ).fetchall()
+    ]
+
+    report.orphan_observations = [
+        r[0]
+        for r in conn.execute(
+            "SELECT n.id FROM nodes n "
+            "WHERE n.kind = 'Observation' "
+            "AND n.id NOT IN ("
+            "  SELECT e.source_id FROM edges e WHERE e.kind = 'observes'"
+            ")"
+        ).fetchall()
+    ]
+
+    report.unlinked_vulnerabilities = [
+        r[0]
+        for r in conn.execute(
+            "SELECT n.id FROM nodes n "
+            "WHERE n.kind = 'Vulnerability' "
+            "AND n.id NOT IN ("
+            "  SELECT e.source_id FROM edges e WHERE e.kind = 'exploits'"
+            ")"
+        ).fetchall()
+    ]
 
     sub_rows = conn.execute(
         "SELECT n.attrs, COUNT(e.source_id) AS concept_count "
