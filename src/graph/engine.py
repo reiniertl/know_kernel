@@ -484,3 +484,76 @@ def path_exists(
             ).fetchall()
         stack.extend(r[0] for r in rows)
     return False
+
+
+def evidence_in_window(
+    conn: sqlite3.Connection,
+    kind: str,
+    since: str,
+    until: str | None = None,
+) -> list[dict[str, Any]]:
+    if until is not None:
+        rows = conn.execute(
+            "SELECT id, kind, attrs FROM nodes "
+            "WHERE kind = ? "
+            "AND json_extract(attrs, '$.source_date') >= ? "
+            "AND json_extract(attrs, '$.source_date') <= ? "
+            "ORDER BY json_extract(attrs, '$.source_date') ASC",
+            (kind, since, until),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, kind, attrs FROM nodes "
+            "WHERE kind = ? "
+            "AND json_extract(attrs, '$.source_date') >= ? "
+            "ORDER BY json_extract(attrs, '$.source_date') ASC",
+            (kind, since),
+        ).fetchall()
+    return [{"id": r[0], "kind": r[1], "attrs": json.loads(r[2])} for r in rows]
+
+
+def evidence_count_for_concept(
+    conn: sqlite3.Connection,
+    concept_id: str,
+    edge_kind: str,
+    since: str,
+    until: str | None = None,
+) -> int:
+    if until is not None:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM edges e "
+            "JOIN nodes n ON e.source_id = n.id "
+            "WHERE e.kind = ? AND e.target_id = ? "
+            "AND json_extract(n.attrs, '$.source_date') >= ? "
+            "AND json_extract(n.attrs, '$.source_date') <= ?",
+            (edge_kind, concept_id, since, until),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM edges e "
+            "JOIN nodes n ON e.source_id = n.id "
+            "WHERE e.kind = ? AND e.target_id = ? "
+            "AND json_extract(n.attrs, '$.source_date') >= ?",
+            (edge_kind, concept_id, since),
+        ).fetchone()
+    return row[0]
+
+
+def concept_timeline(
+    conn: sqlite3.Connection,
+    concept_id: str,
+) -> list[dict[str, Any]]:
+    evidence_edge_kinds = (
+        "identifies-problem", "observes", "discusses",
+        "benchmarks", "rejected-for", "grounded-in", "exploits",
+    )
+    placeholders = ",".join("?" for _ in evidence_edge_kinds)
+    rows = conn.execute(
+        f"SELECT n.id, n.kind, n.attrs, json_extract(n.attrs, '$.source_date') as sd "
+        f"FROM nodes n "
+        f"JOIN edges e ON e.source_id = n.id AND e.target_id = ? "
+        f"WHERE e.kind IN ({placeholders}) "
+        f"ORDER BY sd ASC",
+        (concept_id, *evidence_edge_kinds),
+    ).fetchall()
+    return [{"id": r[0], "kind": r[1], "attrs": json.loads(r[2]), "source_date": r[3]} for r in rows]

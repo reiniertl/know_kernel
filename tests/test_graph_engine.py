@@ -646,3 +646,45 @@ def test_source_date_invalid_rejected(conn: sqlite3.Connection):
             "title": "test", "description": "test", "severity": "low",
             "status": "open", "source_date": "yesterday", "artifact_class": "B",
         })
+
+
+# --- ALG-KK-EVIDENCE-WINDOW ---
+
+
+def test_evidence_in_window(populated: sqlite3.Connection):
+    from graph.engine import evidence_in_window
+    results = evidence_in_window(populated, "Problem", "2026-05-01", "2026-07-01")
+    assert len(results) >= 1
+    assert all(r["kind"] == "Problem" for r in results)
+
+
+def test_evidence_in_window_empty(populated: sqlite3.Connection):
+    from graph.engine import evidence_in_window
+    results = evidence_in_window(populated, "Problem", "2020-01-01", "2020-12-31")
+    assert len(results) == 0
+
+
+# --- ALG-KK-EVIDENCE-COUNT ---
+
+
+def test_evidence_count_for_concept(populated: sqlite3.Connection):
+    from graph.engine import evidence_count_for_concept
+    count = evidence_count_for_concept(populated, "c1", "identifies-problem", "2026-01-01")
+    assert count >= 1
+
+
+def test_evidence_count_for_concept_empty_window(populated: sqlite3.Connection):
+    from graph.engine import evidence_count_for_concept
+    count = evidence_count_for_concept(populated, "c1", "identifies-problem", "2030-01-01")
+    assert count == 0
+
+
+# --- ALG-KK-CONCEPT-TIMELINE ---
+
+
+def test_concept_timeline(populated: sqlite3.Connection):
+    from graph.engine import concept_timeline
+    timeline = concept_timeline(populated, "c1")
+    assert len(timeline) >= 1
+    dates = [e["source_date"] for e in timeline if e["source_date"]]
+    assert dates == sorted(dates)
