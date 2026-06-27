@@ -14,7 +14,7 @@ from typing import Any
 from graph.engine import validate_graph
 from graph.schema import init_db
 
-ALLOWED_KINDS = ("Concept", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel")
+ALLOWED_KINDS = ("Concept", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal")
 
 
 class ExportValidationError(Exception):
@@ -82,8 +82,10 @@ def validate_snapshot(
 ) -> dict[str, Any]:
     issues: list[str] = []
 
+    allowed_placeholders = ",".join("?" for _ in ALLOWED_KINDS)
     forbidden = conn.execute(
-        "SELECT kind, COUNT(*) FROM nodes WHERE kind NOT IN ('Concept', 'Subsystem', 'KernelInvariant', 'FailureMode', 'InteractionProtocol', 'PerformanceProfile', 'CompatibilityAssessment', 'OptimizationGoal', 'UseCaseScenario', 'ComparativeAnalysis', 'Kernel') GROUP BY kind"
+        f"SELECT kind, COUNT(*) FROM nodes WHERE kind NOT IN ({allowed_placeholders}) GROUP BY kind",
+        ALLOWED_KINDS,
     ).fetchall()
     for kind, count in forbidden:
         issues.append(f"Snapshot contains {count} forbidden {kind} node(s)")

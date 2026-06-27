@@ -76,8 +76,8 @@ class TestExportClassBSnapshot:
     def test_node_counts(self, admissible_master_db: Path, tmp_path: Path) -> None:
         output = tmp_path / "snapshot.db"
         report = export_class_b_snapshot(admissible_master_db, output)
-        assert report["node_count"] == 3  # sub1, c1, c2
-        assert report["edge_count"] == 3  # belongs-to x2, alternative-to
+        assert report["node_count"] == 11  # sub1, c1, c2 + 8 evidence-layer nodes
+        assert report["edge_count"] == 13  # belongs-to x2, alternative-to + 10 evidence edges
 
     def test_edge_filtering(self, admissible_master_db: Path, tmp_path: Path) -> None:
         """Edges referencing filtered-out nodes must not appear."""
@@ -220,3 +220,40 @@ class TestKernelInvariantInSnapshot:
         report = validate_snapshot(conn)
         conn.close()
         assert report["class_a_count"] == 0
+
+
+class TestEvidenceLayerExport:
+    def test_snapshot_includes_evidence_kinds(self, admissible_master_db: Path, tmp_path: Path) -> None:
+        output = tmp_path / "snap.db"
+        report = export_class_b_snapshot(admissible_master_db, output)
+        snap = sqlite3.connect(str(output))
+        kinds = {r[0] for r in snap.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
+        snap.close()
+        assert "Problem" in kinds
+        assert "Vulnerability" in kinds
+        assert "Proposal" in kinds
+        assert "Evidence" not in kinds
+        assert "Source" not in kinds
+        assert "Advisory" not in kinds
+
+    def test_validate_snapshot_uses_allowed_kinds(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "mixed.db"
+        conn = init_db(db_path)
+        add_node(conn, "prob1", "Problem", {
+            "title": "test", "description": "test", "severity": "low",
+            "status": "open", "source_date": "2026-01-01", "artifact_class": "B",
+        })
+        conn.commit()
+        report = validate_snapshot(conn)
+        conn.close()
+        assert report["class_a_count"] == 0
+        assert report["issues"] == []
+
+        bad_path = tmp_path / "bad.db"
+        bad_conn = init_db(bad_path)
+        add_node(bad_conn, "src1", "Source", {"url": "http://x", "source_type": "paper", "license": "PD"})
+        bad_conn.commit()
+        report2 = validate_snapshot(bad_conn)
+        bad_conn.close()
+        assert report2["class_a_count"] == 1
+        assert any("Source" in i for i in report2["issues"])
