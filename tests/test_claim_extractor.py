@@ -17,6 +17,8 @@ from ingest.claim_extractor import (
     build_claim_extraction_context,
     build_claim_user_prompt,
     extract_claims,
+    fuzzy_match_concept,
+    levenshtein_distance,
     parse_llm_response,
     validate_benchmark,
     validate_discussion,
@@ -262,6 +264,80 @@ class TestValidateDiscussion:
 # ── LLM response parsing ──
 
 
+# ── Fuzzy matching tests (INV-KK-CLAIM-FUZZY-THRESHOLD) ──
+
+
+class TestLevenshteinDistance:
+    def test_identical(self):
+        assert levenshtein_distance("rcu", "rcu") == 0
+
+    def test_one_insertion(self):
+        assert levenshtein_distance("rcu", "rcuu") == 1
+
+    def test_one_deletion(self):
+        assert levenshtein_distance("rcu", "rc") == 1
+
+    def test_one_substitution(self):
+        assert levenshtein_distance("rcu", "rcx") == 1
+
+    def test_two_edits(self):
+        assert levenshtein_distance("slab", "slxb") == 1
+        assert levenshtein_distance("kitten", "sitting") == 3
+
+    def test_three_edits_beyond_threshold(self):
+        assert levenshtein_distance("abc", "xyz") == 3
+
+    def test_empty_strings(self):
+        assert levenshtein_distance("", "") == 0
+        assert levenshtein_distance("abc", "") == 3
+        assert levenshtein_distance("", "abc") == 3
+
+    def test_symmetric(self):
+        assert levenshtein_distance("kitten", "sitting") == levenshtein_distance("sitting", "kitten")
+
+
+class TestFuzzyMatchConcept:
+    def test_exact_match_case_insensitive(self):
+        names = {"virtual memory": "c1", "rcu": "c2"}
+        assert fuzzy_match_concept("Virtual Memory", names) == "c1"
+        assert fuzzy_match_concept("RCU", names) == "c2"
+
+    def test_prefix_match_query_is_prefix(self):
+        names = {"virtual memory management": "c1"}
+        assert fuzzy_match_concept("virtual memory", names) == "c1"
+
+    def test_prefix_match_name_is_prefix(self):
+        names = {"slab": "c1"}
+        assert fuzzy_match_concept("slab allocator", names) == "c1"
+
+    def test_levenshtein_within_threshold(self):
+        names = {"slab allocator": "c1"}
+        assert fuzzy_match_concept("slab alocator", names) == "c1"
+
+    def test_levenshtein_at_boundary(self):
+        names = {"scheduler": "c1"}
+        assert fuzzy_match_concept("sceduler", names) == "c1"  # distance 1
+
+    def test_levenshtein_exceeds_threshold(self):
+        names = {"scheduler": "c1"}
+        assert fuzzy_match_concept("sxyzuler", names) is None  # distance > 2
+
+    def test_no_match(self):
+        names = {"virtual memory": "c1", "rcu": "c2"}
+        assert fuzzy_match_concept("completely different", names) is None
+
+    def test_exact_preferred_over_prefix(self):
+        names = {"rcu": "c1", "rcu grace periods": "c2"}
+        assert fuzzy_match_concept("rcu", names) == "c1"
+
+    def test_empty_name_map(self):
+        assert fuzzy_match_concept("anything", {}) is None
+
+    def test_levenshtein_picks_closest(self):
+        names = {"slab allocator": "c1", "slob allocator": "c2"}
+        assert fuzzy_match_concept("slab allocatr", names) == "c1"  # distance 1 vs 3
+
+
 class TestParseLlmResponse:
     def test_valid_json(self):
         result = parse_llm_response('{"problems": []}')
@@ -453,6 +529,49 @@ class TestExtractClaims:
             "SELECT * FROM edges WHERE kind = 'identifies-problem'"
         ).fetchall()
         assert len(edges) == 1
+
+    def test_fuzzy_match_prefix(self, conn):
+        """INV-KK-CLAIM-FUZZY-THRESHOLD: prefix matching works in extraction."""
+        eid = _add_evidence(conn)
+        _add_concept(conn, "Virtual Memory Management")
+        client = _make_mock_client({
+            "problems": [{
+                "title": "P", "description": "d", "severity": "low",
+                "related_concepts": ["virtual memory"],
+            }],
+        })
+        result = extract_claims(conn, eid, source_date="2026-06-15", client=client)
+        assert result.concepts_matched == 1
+
+    def test_fuzzy_match_levenshtein(self, conn):
+        """INV-KK-CLAIM-FUZZY-THRESHOLD: Levenshtein ≤ 2 matches."""
+        eid = _add_evidence(conn)
+        _add_concept(conn, "Slab Allocator")
+        client = _make_mock_client({
+            "observations": [{
+                "claim": "slabs work", "confidence": 0.8,
+                "related_concepts": ["slab alocator"],
+            }],
+        })
+        result = extract_claims(conn, eid, source_date="2026-06-15", client=client)
+        assert result.concepts_matched == 1
+        edges = conn.execute(
+            "SELECT * FROM edges WHERE kind = 'observes'"
+        ).fetchall()
+        assert len(edges) == 1
+
+    def test_fuzzy_match_beyond_threshold_skipped(self, conn):
+        """INV-KK-CLAIM-FUZZY-THRESHOLD: distance > 2 is not matched."""
+        eid = _add_evidence(conn)
+        _add_concept(conn, "Scheduler")
+        client = _make_mock_client({
+            "problems": [{
+                "title": "P", "description": "d", "severity": "low",
+                "related_concepts": ["something totally different"],
+            }],
+        })
+        result = extract_claims(conn, eid, source_date="2026-06-15", client=client)
+        assert result.concepts_matched == 0
 
     def test_unmatched_concepts_skipped(self, conn):
         eid = _add_evidence(conn)

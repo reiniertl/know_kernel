@@ -133,6 +133,45 @@ def _resolve_concept_names(conn: sqlite3.Connection) -> dict[str, str]:
     return {r[1].lower(): r[0] for r in rows if r[1]}
 
 
+def levenshtein_distance(s: str, t: str) -> int:
+    """Compute Levenshtein edit distance between two strings."""
+    if len(s) < len(t):
+        return levenshtein_distance(t, s)
+    if not t:
+        return len(s)
+    prev = list(range(len(t) + 1))
+    for i, sc in enumerate(s):
+        curr = [i + 1]
+        for j, tc in enumerate(t):
+            cost = 0 if sc == tc else 1
+            curr.append(min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost))
+        prev = curr
+    return prev[-1]
+
+
+def fuzzy_match_concept(
+    query: str, name_to_id: dict[str, str], max_distance: int = 2,
+) -> str | None:
+    """Three-tier fuzzy match: exact, prefix, Levenshtein (INV-KK-CLAIM-FUZZY-THRESHOLD).
+
+    Returns the concept node ID or None.
+    """
+    q = query.lower()
+    if q in name_to_id:
+        return name_to_id[q]
+    for name, cid in name_to_id.items():
+        if name.startswith(q) or q.startswith(name):
+            return cid
+    best_id = None
+    best_dist = max_distance + 1
+    for name, cid in name_to_id.items():
+        d = levenshtein_distance(q, name)
+        if d <= max_distance and d < best_dist:
+            best_dist = d
+            best_id = cid
+    return best_id
+
+
 def validate_problem(item: Any) -> dict | None:
     if not isinstance(item, dict):
         return None
@@ -495,9 +534,10 @@ def _wire_concept_edges(
     name_to_id: dict[str, str],
     edge_kind: str,
 ) -> int:
+    """INV-KK-CLAIM-EDGE-VALID: only create edges for matched concepts."""
     created = 0
     for concept_name in related_concepts:
-        concept_id = name_to_id.get(concept_name.lower())
+        concept_id = fuzzy_match_concept(concept_name, name_to_id)
         if concept_id:
             add_edge(conn, edge_kind, node_id, concept_id)
             created += 1
@@ -505,4 +545,4 @@ def _wire_concept_edges(
 
 
 def _count_matches(related_concepts: list[str], name_to_id: dict[str, str]) -> int:
-    return sum(1 for c in related_concepts if c.lower() in name_to_id)
+    return sum(1 for c in related_concepts if fuzzy_match_concept(c, name_to_id) is not None)
