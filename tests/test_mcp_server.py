@@ -340,3 +340,106 @@ def test_mcp_query_edges_returns_list(rich_snapshot_path):
     results = srv.query_edges("governed-by")
     assert isinstance(results, list)
     assert len(results) >= 1
+
+
+# --- Evidence-layer kind tests (INV-KK-MCP-SEARCH-ALL-KINDS) ---
+
+EVIDENCE_KINDS = frozenset({
+    "Problem", "Observation", "Discussion", "Benchmark",
+    "Rejection", "Vulnerability", "Fix", "Proposal",
+})
+
+
+def test_evidence_kinds_in_allowed():
+    """All 8 evidence-layer kinds must be in ALLOWED_KINDS."""
+    from export.exporter import ALLOWED_KINDS
+    allowed = set(ALLOWED_KINDS)
+    missing = EVIDENCE_KINDS - allowed
+    assert not missing, f"Evidence kinds missing from ALLOWED_KINDS: {missing}"
+
+
+@pytest.fixture
+def evidence_snapshot_path(tmp_path):
+    """Snapshot with evidence-layer nodes for MCP searchability tests."""
+    master_path = tmp_path / "master.db"
+    snap_path = tmp_path / "snapshot.db"
+
+    conn = init_db(master_path)
+    add_node(conn, "src-1", "Source", {
+        "url": "https://example.com/paper.pdf",
+        "source_type": "paper",
+        "license": "MIT",
+    })
+    add_node(conn, "ev-1", "Evidence", {"artifact_class": "A", "contamination_level": "weak-copyleft"})
+    add_edge(conn, "sourced-from", "ev-1", "src-1")
+    add_node(conn, "adv-1", "Advisory", {"assessment": "Cleared.", "contamination_confirmed": "none"})
+    add_edge(conn, "assessed-by", "src-1", "adv-1")
+
+    add_node(conn, "sub-sched", "Subsystem", {"name": "Scheduler"})
+    add_node(conn, "concept-1", "Concept", {
+        "name": "RCU",
+        "description": "Read-Copy-Update synchronization mechanism.",
+        "artifact_class": "B",
+        "key_properties": ["lock-free reads"],
+        "tradeoffs": ["grace period latency"],
+        "design_rationale": "Read-heavy optimization.",
+    })
+    add_edge(conn, "extracted-from", "concept-1", "ev-1")
+    add_edge(conn, "belongs-to", "concept-1", "sub-sched")
+
+    add_node(conn, "prob-1", "Problem", {
+        "title": "RCU grace period stall",
+        "description": "Grace period can stall under heavy load.",
+        "severity": "high",
+        "status": "open",
+        "source_date": "2024-01-15",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "identifies-problem", "prob-1", "concept-1")
+
+    add_node(conn, "vuln-1", "Vulnerability", {
+        "cve_id": "CVE-2024-9999",
+        "title": "Use-after-free in RCU callback",
+        "description": "Callback invoked after memory freed.",
+        "severity": "critical",
+        "cvss_score": 9.8,
+        "affected_versions": "5.15-6.1",
+        "status": "patched",
+        "source_date": "2024-03-01",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "exploits", "vuln-1", "concept-1")
+
+    add_node(conn, "obs-1", "Observation", {
+        "claim": "RCU read-side critical sections show zero overhead.",
+        "confidence": "high",
+        "source_date": "2024-02-10",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "observes", "obs-1", "concept-1")
+
+    conn.commit()
+    conn.close()
+
+    export_class_b_snapshot(master_path, snap_path)
+    srv.init_snapshot(str(snap_path))
+    yield snap_path
+
+    if srv._conn is not None:
+        srv._conn.close()
+        srv._conn = None
+
+
+def test_search_returns_evidence_kinds(evidence_snapshot_path):
+    """INV-KK-MCP-SEARCH-ALL-KINDS: evidence-layer nodes are searchable."""
+    results = srv.search_concepts("grace period")
+    kinds_found = {r["kind"] for r in results}
+    assert "Problem" in kinds_found, f"Problem not found, got kinds: {kinds_found}"
+
+    results = srv.search_concepts("CVE")
+    kinds_found = {r["kind"] for r in results}
+    assert "Vulnerability" in kinds_found, f"Vulnerability not found, got kinds: {kinds_found}"
+
+    results = srv.search_concepts("zero overhead")
+    kinds_found = {r["kind"] for r in results}
+    assert "Observation" in kinds_found, f"Observation not found, got kinds: {kinds_found}"
