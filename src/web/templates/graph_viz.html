@@ -13,7 +13,10 @@
     PerformanceProfile: 'teal', OptimizationGoal: 'gold',
     UseCaseScenario: 'coral', Kernel: 'darkslategray',
     CompatibilityAssessment: 'sienna', ComparativeAnalysis: 'slateblue',
-    Source: 'gray', Evidence: 'gray', Advisory: 'gray'
+    Source: 'gray', Evidence: 'gray', Advisory: 'gray',
+    Problem: '#ef5350', Observation: '#ff7043', Discussion: '#ffa726',
+    Benchmark: '#66bb6a', Rejection: '#bf360c', Vulnerability: '#b71c1c',
+    Fix: '#43a047', Proposal: '#1565c0'
   };
   const edgeColor = {
     'belongs-to': '#27ae60',
@@ -33,11 +36,26 @@
     'contributes-to': '#2c3e50',
     'suited-for': '#e91e63',
     'compares': '#34495e',
-    'implemented-in': '#795548'
+    'implemented-in': '#795548',
+    'identifies-problem': '#ef5350',
+    'observes': '#ff7043',
+    'discusses': '#ffa726',
+    'benchmarks': '#66bb6a',
+    'motivated-by': '#ab47bc',
+    'exploits': '#b71c1c',
+    'affects-subsystem': '#d32f2f',
+    'fixes': '#2e7d32',
+    'patches': '#43a047',
+    'addresses': '#388e3c',
+    'grounded-in': '#1565c0',
+    'resulted-in': '#0277bd',
+    'contradicted-by': '#c62828',
+    'rejected-for': '#bf360c'
   };
   const edgeDash = {
     'governed-by': '6,3', 'triggered-by': '3,3',
-    'contradicts': '4,4', 'alternative-to': '8,4'
+    'contradicts': '4,4', 'alternative-to': '8,4',
+    'contradicted-by': '4,4'
   };
 
   const container = document.getElementById('graph-container');
@@ -90,7 +108,11 @@
       InteractionProtocol: ['rule', 60], PerformanceProfile: ['metric', 40],
       CompatibilityAssessment: ['synergy', 60], OptimizationGoal: ['name', null],
       UseCaseScenario: ['name', null], ComparativeAnalysis: ['dimension', 60],
-      Kernel: ['name', null]
+      Kernel: ['name', null],
+      Problem: ['title', null], Observation: ['claim', 60],
+      Discussion: ['title', null], Benchmark: ['metric', 40],
+      Rejection: ['proposal_title', 60], Vulnerability: ['cve_id', null],
+      Fix: ['title', 60], Proposal: ['name', null]
     };
     node.append('title').text(d => {
       const spec = displayFields[d.kind];
