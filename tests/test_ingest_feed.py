@@ -1,9 +1,10 @@
-"""Tests for feed ingestion core -- ALG-KK-FEED-POLL and ALG-KK-FEED-RSS invariants."""
+"""Tests for feed ingestion core -- ALG-KK-FEED-POLL, ALG-KK-FEED-RSS, ALG-KK-FEED-HN invariants."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -13,7 +14,10 @@ from ingest.feed import (
     FeedConfig,
     FeedItem,
     FeedPoller,
+    HNFeedPoller,
+    KERNEL_FILTER_RE,
     RSSFeedPoller,
+    _epoch_to_iso,
     _extract_rss_content,
     _struct_time_to_iso,
     ingest_item,
@@ -405,3 +409,237 @@ class TestRSSFeedPoller:
         state = load_feed_state(state_path)
         assert "lwn" in state
         assert len(state["lwn"]["seen_urls"]) == 2
+
+
+# --- HackerNews API Poller Tests (ALG-KK-FEED-HN) ---
+
+
+def _mock_hn_client(top_stories: list[int], stories: dict[int, dict | None]):
+    """Build a mock httpx client that serves HN API responses."""
+    client = MagicMock()
+
+    def mock_get(url: str):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        if url.endswith("/topstories.json"):
+            resp.json.return_value = top_stories
+        else:
+            for sid, data in stories.items():
+                if url.endswith(f"/item/{sid}.json"):
+                    resp.json.return_value = data
+                    break
+            else:
+                resp.json.return_value = None
+        return resp
+
+    client.get = mock_get
+    return client
+
+
+class TestEpochToIso:
+    def test_valid_epoch(self):
+        assert _epoch_to_iso(1718409600) == "2024-06-15"
+
+    def test_none_returns_empty(self):
+        assert _epoch_to_iso(None) == ""
+
+    def test_zero_epoch(self):
+        assert _epoch_to_iso(0) == "1970-01-01"
+
+
+class TestKernelFilterRegex:
+    @pytest.mark.parametrize("title", [
+        "Linux 6.10 release candidate",
+        "New kernel scheduler improvements",
+        "io_uring performance benchmarks",
+        "BPF subsystem updates",
+        "eBPF verifier changes",
+        "RCU grace period optimization",
+        "NUMA balancing patches",
+        "folio migration in memory management",
+        "mm: page cache improvements",
+        "VFS layer refactoring",
+        "ext4 filesystem bug fix",
+        "TCP networking stack changes",
+        "New GPU driver for AMD",
+        "Kernel module loading",
+        "Memory management rework",
+    ])
+    def test_matching_titles(self, title):
+        """INV-KK-FEED-HN-FILTER: kernel-topic titles pass filter."""
+        assert KERNEL_FILTER_RE.search(title) is not None
+
+    @pytest.mark.parametrize("title", [
+        "React 19 released",
+        "How I built my startup",
+        "Python 3.13 new features",
+        "Rust async patterns",
+        "Ask HN: Best laptop for coding?",
+        "Show HN: My todo app",
+        "YC W26 batch",
+    ])
+    def test_non_matching_titles(self, title):
+        """INV-KK-FEED-HN-FILTER: non-kernel titles are rejected."""
+        assert KERNEL_FILTER_RE.search(title) is None
+
+
+class TestHNFeedPoller:
+    def _config(self):
+        return FeedConfig(
+            name="hackernews", feed_type="api",
+            url="https://hacker-news.firebaseio.com/v0",
+            kernel_filter="linux|kernel",
+        )
+
+    def test_fetch_kernel_stories(self, state_path):
+        """ALG-KK-FEED-HN: fetches and filters kernel-related stories."""
+        stories = {
+            101: {"title": "Linux 6.10 released", "url": "https://lwn.net/linux610", "time": 1718409600, "score": 200, "descendants": 50},
+            102: {"title": "React 19 is out", "url": "https://react.dev/19", "time": 1718409601, "score": 300, "descendants": 80},
+            103: {"title": "Kernel scheduler rework", "url": "https://lkml.org/sched", "time": 1718409602, "score": 150, "descendants": 30},
+        }
+        client = _mock_hn_client([101, 102, 103], stories)
+        poller = HNFeedPoller(self._config(), state_path, http_client=client)
+        items = poller.fetch()
+        assert len(items) == 2
+        titles = {i.title for i in items}
+        assert "Linux 6.10 released" in titles
+        assert "Kernel scheduler rework" in titles
+        assert "React 19 is out" not in titles
+
+    def test_epoch_to_published(self, state_path):
+        """INV-KK-FEED-HN-EPOCH: Unix epoch converted to ISO-8601."""
+        stories = {
+            201: {"title": "Linux kernel update", "url": "https://example.com", "time": 1718409600, "score": 10, "descendants": 5},
+        }
+        client = _mock_hn_client([201], stories)
+        poller = HNFeedPoller(self._config(), state_path, http_client=client)
+        items = poller.fetch()
+        assert len(items) == 1
+        assert items[0].published == "2024-06-15"
+
+    def test_missing_time_uses_empty(self, state_path):
+        """INV-KK-FEED-HN-EPOCH: missing time produces empty string."""
+        stories = {
+            301: {"title": "Linux patch", "url": "https://example.com", "score": 5, "descendants": 1},
+        }
+        client = _mock_hn_client([301], stories)
+        poller = HNFeedPoller(self._config(), state_path, http_client=client)
+        items = poller.fetch()
+        assert len(items) == 1
+        assert items[0].published == ""
+
+    def test_metadata_stored(self, state_path):
+        """ALG-KK-FEED-HN: score and descendants stored in metadata."""
+        stories = {
+            401: {"title": "Kernel memory leak", "url": "https://example.com", "time": 1718409600, "score": 42, "descendants": 15},
+        }
+        client = _mock_hn_client([401], stories)
+        poller = HNFeedPoller(self._config(), state_path, http_client=client)
+        items = poller.fetch()
+        assert items[0].metadata["hn_id"] == 401
+        assert items[0].metadata["score"] == 42
+        assert items[0].metadata["descendants"] == 15
+
+    def test_dedup_by_story_id(self, state_path):
+        """INV-KK-FEED-HN-DEDUP: already-seen story IDs are skipped."""
+        stories = {
+            501: {"title": "Linux RCU update", "url": "https://example.com/501", "time": 1718409600, "score": 10, "descendants": 2},
+            502: {"title": "Linux BPF patches", "url": "https://example.com/502", "time": 1718409601, "score": 20, "descendants": 5},
+        }
+        client = _mock_hn_client([501, 502], stories)
+        poller = HNFeedPoller(self._config(), state_path, http_client=client)
+        items1 = poller.fetch()
+        assert len(items1) == 2
+
+        items2 = poller.fetch()
+        assert len(items2) == 0
+
+    def test_dedup_persists_across_instances(self, state_path):
+        """INV-KK-FEED-HN-DEDUP: seen IDs persist in feed state file."""
+        stories = {
+            601: {"title": "Linux NUMA fix", "url": "https://example.com/601", "time": 1718409600, "score": 10, "descendants": 1},
+        }
+        client = _mock_hn_client([601], stories)
+        poller1 = HNFeedPoller(self._config(), state_path, http_client=client)
+        poller1.fetch()
+        state = load_feed_state(state_path)
+        assert 601 in state["hackernews"]["seen_ids"]
+
+        poller2 = HNFeedPoller(self._config(), state_path, http_client=client)
+        items = poller2.fetch()
+        assert len(items) == 0
+
+    def test_empty_top_stories(self, state_path):
+        """ALG-KK-FEED-HN: empty top stories returns empty list."""
+        client = _mock_hn_client([], {})
+        poller = HNFeedPoller(self._config(), state_path, http_client=client)
+        items = poller.fetch()
+        assert items == []
+
+    def test_null_story_response(self, state_path):
+        """ALG-KK-FEED-HN: null story API response is skipped."""
+        stories = {701: None}
+        client = _mock_hn_client([701], stories)
+        poller = HNFeedPoller(self._config(), state_path, http_client=client)
+        items = poller.fetch()
+        assert items == []
+
+    def test_story_without_url_uses_hn_link(self, state_path):
+        """ALG-KK-FEED-HN: stories without URL use HN discussion link."""
+        stories = {
+            801: {"title": "Ask HN: Linux kernel question", "time": 1718409600, "score": 50, "descendants": 20},
+        }
+        client = _mock_hn_client([801], stories)
+        poller = HNFeedPoller(self._config(), state_path, http_client=client)
+        items = poller.fetch()
+        assert len(items) == 1
+        assert items[0].url == "https://news.ycombinator.com/item?id=801"
+
+    def test_source_feed_set(self, state_path):
+        """ALG-KK-FEED-HN: source_feed matches config name."""
+        stories = {
+            901: {"title": "Linux driver model", "url": "https://example.com/901", "time": 1718409600, "score": 5, "descendants": 1},
+        }
+        client = _mock_hn_client([901], stories)
+        poller = HNFeedPoller(self._config(), state_path, http_client=client)
+        items = poller.fetch()
+        assert items[0].source_feed == "hackernews"
+
+    def test_max_stories_limit(self, state_path):
+        """ALG-KK-FEED-HN: only first max_stories are fetched."""
+        all_ids = list(range(1000, 1010))
+        stories = {
+            sid: {"title": "Linux kernel patch", "url": f"https://example.com/{sid}", "time": 1718409600, "score": 10, "descendants": 1}
+            for sid in all_ids
+        }
+        client = _mock_hn_client(all_ids, stories)
+        poller = HNFeedPoller(self._config(), state_path, http_client=client, max_stories=3)
+        items = poller.fetch()
+        assert len(items) == 3
+
+    def test_non_matching_ids_still_tracked(self, state_path):
+        """INV-KK-FEED-HN-DEDUP: non-kernel stories are still tracked to prevent refetch."""
+        stories = {
+            1101: {"title": "React 19 released", "url": "https://react.dev", "time": 1718409600, "score": 500, "descendants": 200},
+        }
+        client = _mock_hn_client([1101], stories)
+        poller = HNFeedPoller(self._config(), state_path, http_client=client)
+        items = poller.fetch()
+        assert len(items) == 0
+        state = load_feed_state(state_path)
+        assert 1101 in state["hackernews"]["seen_ids"]
+
+    def test_poll_integration(self, conn, state_path):
+        """Full poll: HN fetch -> filter -> dedup -> ingest -> state."""
+        stories = {
+            1201: {"title": "Linux kernel 6.11", "url": "https://lwn.net/611", "time": 1718409600, "score": 100, "descendants": 30},
+            1202: {"title": "React hooks update", "url": "https://react.dev", "time": 1718409601, "score": 200, "descendants": 50},
+        }
+        client = _mock_hn_client([1201, 1202], stories)
+        poller = HNFeedPoller(self._config(), state_path, http_client=client)
+        results = poller.poll(conn)
+        assert len(results) == 1
+        state = load_feed_state(state_path)
+        assert "hackernews" in state
+        assert "https://lwn.net/611" in state["hackernews"]["seen_urls"]

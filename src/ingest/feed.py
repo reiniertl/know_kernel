@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -188,4 +190,101 @@ class RSSFeedPoller(FeedPoller):
                 published=published,
                 source_feed=self.config.name,
             ))
+        return items
+
+
+# --- HackerNews API Poller (ALG-KK-FEED-HN) ---
+
+KERNEL_FILTER_RE = re.compile(
+    r"linux|kernel|scheduler|memory|io_uring|bpf|ebpf|rcu|numa|folio|mm"
+    r"|vfs|filesystem|networking|net|driver|module",
+    re.IGNORECASE,
+)
+
+HN_API_BASE = "https://hacker-news.firebaseio.com/v0"
+
+
+def _epoch_to_iso(epoch: int | None) -> str:
+    """INV-KK-FEED-HN-EPOCH: convert Unix epoch to ISO-8601 date. Empty string if None."""
+    if epoch is None:
+        return ""
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+class HNFeedPoller(FeedPoller):
+    """ALG-KK-FEED-HN: HackerNews API poller with kernel-topic filtering."""
+
+    def __init__(
+        self,
+        config: FeedConfig,
+        state_path: Path = DEFAULT_STATE_PATH,
+        http_client: Any | None = None,
+        max_stories: int = 50,
+    ) -> None:
+        super().__init__(config, state_path)
+        self._http_client = http_client
+        self._max_stories = max_stories
+
+    def _get_client(self) -> Any:
+        if self._http_client is not None:
+            return self._http_client
+        import httpx
+        return httpx.Client(timeout=30)
+
+    def fetch(self) -> list[FeedItem]:
+        client = self._get_client()
+        state = load_feed_state(self.state_path)
+        source_state = state.get(self.config.name, {})
+        seen_ids: set[int] = set(source_state.get("seen_ids", []))
+
+        resp = client.get(f"{self.config.url}/topstories.json")
+        resp.raise_for_status()
+        story_ids: list[int] = resp.json()
+
+        story_ids = story_ids[: self._max_stories]
+
+        items: list[FeedItem] = []
+        new_seen: list[int] = []
+
+        for sid in story_ids:
+            if sid in seen_ids:
+                continue
+
+            story_resp = client.get(f"{self.config.url}/item/{sid}.json")
+            story_resp.raise_for_status()
+            story = story_resp.json()
+
+            if story is None:
+                continue
+
+            title = story.get("title", "")
+            if not title or not KERNEL_FILTER_RE.search(title):
+                new_seen.append(sid)
+                continue
+
+            url = story.get("url", "")
+            if not url:
+                url = f"https://news.ycombinator.com/item?id={sid}"
+
+            published = _epoch_to_iso(story.get("time"))
+
+            items.append(FeedItem(
+                title=title,
+                url=url,
+                content=title,
+                published=published,
+                source_feed=self.config.name,
+                metadata={
+                    "hn_id": sid,
+                    "score": story.get("score", 0),
+                    "descendants": story.get("descendants", 0),
+                },
+            ))
+            new_seen.append(sid)
+
+        all_seen = list(seen_ids | set(new_seen))
+        source_state["seen_ids"] = all_seen
+        state[self.config.name] = source_state
+        save_feed_state(state, self.state_path)
+
         return items
