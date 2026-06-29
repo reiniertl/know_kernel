@@ -12,12 +12,17 @@ import pytest
 from graph.engine import add_edge, add_node
 from graph.schema import init_db
 from graph.scoring import (
+    compute_all_scores,
     cvss_weight,
+    frontier_score,
     get_linked_failure_modes,
     get_linked_problems,
     get_linked_vulns,
     heat_score,
+    impact_score,
+    leverage_score,
     pain_score,
+    refresh_scores,
 )
 
 
@@ -353,3 +358,236 @@ class TestGetLinkedFailureModes:
     def test_empty_when_none(self, conn):
         cid = _add_concept(conn, "RCU")
         assert get_linked_failure_modes(conn, cid) == []
+
+
+# ── Impact score tests (ALG-KK-SCORE-IMPACT) ──
+
+
+def _add_kernel_invariant(conn: sqlite3.Connection, concept_id: str, tag: str = "a") -> str:
+    kinv_id = f"kinv-{tag}-{concept_id[:8]}"
+    add_node(conn, kinv_id, "KernelInvariant", {
+        "predicate": f"invariant {tag}",
+        "strength": "safety",
+        "scope": "per-operation",
+        "artifact_class": "abstracted-mechanism",
+    })
+    add_edge(conn, "governed-by", kinv_id, concept_id)
+    return kinv_id
+
+
+def _add_optimization_goal(conn: sqlite3.Connection, concept_id: str, tag: str = "a") -> str:
+    gid = f"goal-{tag}-{concept_id[:8]}"
+    add_node(conn, gid, "OptimizationGoal", {
+        "name": f"Goal {tag}",
+        "description": f"test goal {tag}",
+        "metric": "throughput",
+        "direction": "maximize",
+    })
+    add_edge(conn, "contributes-to", concept_id, gid)
+    return gid
+
+
+class TestImpactScore:
+    def test_isolated_concept(self, conn):
+        """INV-KK-SCORE-NON-NEGATIVE: no downstream = 0.0."""
+        cid = _add_concept(conn, "RCU")
+        assert impact_score(conn, cid) == 0.0
+
+    def test_with_invariants(self, conn):
+        cid = _add_concept(conn, "Slab")
+        _add_kernel_invariant(conn, cid, "x")
+        _add_kernel_invariant(conn, cid, "y")
+        assert impact_score(conn, cid) == 2.0
+
+    def test_with_goals(self, conn):
+        cid = _add_concept(conn, "VM")
+        _add_optimization_goal(conn, cid, "perf")
+        assert impact_score(conn, cid) == 1.0
+
+    def test_hub_concept(self, conn):
+        cid = _add_concept(conn, "Net")
+        _add_kernel_invariant(conn, cid, "a")
+        _add_kernel_invariant(conn, cid, "b")
+        _add_optimization_goal(conn, cid, "lat")
+        _add_failure_mode(conn, cid)
+        assert impact_score(conn, cid) >= 4.0
+
+    def test_nonexistent_concept(self, conn):
+        assert impact_score(conn, "concept-ghost") == 0.0
+
+
+# ── Leverage score tests (ALG-KK-SCORE-LEVERAGE) ──
+
+
+class TestLeverageScore:
+    def test_no_problems(self, conn):
+        """INV-KK-SCORE-NON-NEGATIVE: no problems = 0.0."""
+        cid = _add_concept(conn, "RCU")
+        assert leverage_score(conn, cid) == 0.0
+
+    def test_critical_weight(self, conn):
+        """INV-KK-SCORE-LEVERAGE-WEIGHTS: critical = 4."""
+        cid = _add_concept(conn, "Slab")
+        _add_problem(conn, cid, "critical")
+        assert leverage_score(conn, cid) == 4.0
+
+    def test_high_weight(self, conn):
+        cid = _add_concept(conn, "VM")
+        _add_problem(conn, cid, "high")
+        assert leverage_score(conn, cid) == 3.0
+
+    def test_medium_weight(self, conn):
+        cid = _add_concept(conn, "Net")
+        _add_problem(conn, cid, "medium")
+        assert leverage_score(conn, cid) == 2.0
+
+    def test_low_weight(self, conn):
+        cid = _add_concept(conn, "VFS")
+        _add_problem(conn, cid, "low")
+        assert leverage_score(conn, cid) == 1.0
+
+    def test_mixed_severities(self, conn):
+        cid = _add_concept(conn, "MM")
+        _add_problem(conn, cid, "critical")
+        _add_problem(conn, cid, "low")
+        assert leverage_score(conn, cid) == 5.0  # 4 + 1
+
+    def test_nonexistent_concept(self, conn):
+        assert leverage_score(conn, "concept-ghost") == 0.0
+
+
+# ── Frontier score tests (ALG-KK-SCORE-FRONTIER) ──
+
+
+class TestFrontierScore:
+    def test_zero_everything(self, conn):
+        """INV-KK-SCORE-NON-NEGATIVE: no data = 0.0."""
+        cid = _add_concept(conn, "RCU")
+        assert frontier_score(conn, cid) == 0.0
+
+    def test_formula_with_known_inputs(self, conn):
+        """INV-KK-SCORE-FRONTIER-FORMULA: verify the composite formula."""
+        cid = _add_concept(conn, "Slab")
+        _add_discussion(conn, cid, _recent_date(5))
+        _add_problem(conn, cid, "high")
+        # heat=1.0 (1 discussion in window), pain=2.0 (1 problem*2x),
+        # leverage=3.0 (high=3), solved=0.0 (no resolved)
+        # frontier = 1.0*0.3 + 2.0*0.3 + 3.0*0.3 - 0.0*10 = 1.8
+        assert frontier_score(conn, cid, window_days=90) == pytest.approx(1.8)
+
+    def test_all_resolved_negative_contribution(self, conn):
+        """INV-KK-SCORE-SOLVED-RATIO: all resolved → solved_confidence=1.0."""
+        cid = _add_concept(conn, "VM")
+        pid = _add_problem(conn, cid, "medium")
+        conn.execute(
+            "UPDATE nodes SET attrs = json_set(attrs, '$.status', 'resolved') WHERE id = ?",
+            (pid,),
+        )
+        # heat=0, pain=2.0, leverage=2.0, solved=1.0
+        # raw = 0*0.3 + 2.0*0.3 + 2.0*0.3 - 1.0*10 = 1.2 - 10 = -8.8
+        # floored at 0.0
+        assert frontier_score(conn, cid) == 0.0
+
+    def test_partial_resolved(self, conn):
+        cid = _add_concept(conn, "Net")
+        pid1 = _add_problem(conn, cid, "critical")
+        _add_problem(conn, cid, "high")
+        conn.execute(
+            "UPDATE nodes SET attrs = json_set(attrs, '$.status', 'resolved') WHERE id = ?",
+            (pid1,),
+        )
+        # heat=0, pain=4.0 (2 problems*2x), leverage=7.0 (4+3), solved=0.5
+        # raw = 0*0.3 + 4.0*0.3 + 7.0*0.3 - 0.5*10 = 3.3 - 5.0 = -1.7 → 0.0
+        assert frontier_score(conn, cid) == 0.0
+
+    def test_frontier_nonexistent(self, conn):
+        assert frontier_score(conn, "concept-ghost") == 0.0
+
+
+# ── compute_all_scores tests ──
+
+
+class TestComputeAllScores:
+    def test_returns_all_five_keys(self, conn):
+        cid = _add_concept(conn, "RCU")
+        scores = compute_all_scores(conn, cid)
+        assert set(scores.keys()) == {"heat", "pain", "impact", "leverage", "frontier"}
+
+    def test_all_zero_for_empty_concept(self, conn):
+        cid = _add_concept(conn, "Slab")
+        scores = compute_all_scores(conn, cid)
+        assert all(v == 0.0 for v in scores.values())
+
+    def test_values_match_individual_functions(self, conn):
+        cid = _add_concept(conn, "VM")
+        _add_discussion(conn, cid, _recent_date(5))
+        _add_problem(conn, cid, "high")
+        scores = compute_all_scores(conn, cid, window_days=90)
+        assert scores["heat"] == heat_score(conn, cid, window_days=90)
+        assert scores["pain"] == pain_score(conn, cid)
+        assert scores["impact"] == impact_score(conn, cid)
+        assert scores["leverage"] == leverage_score(conn, cid)
+        assert scores["frontier"] == frontier_score(conn, cid, window_days=90)
+
+
+# ── refresh_scores tests (ALG-KK-SCORE-REFRESH) ──
+
+
+class TestRefreshScores:
+    def test_caches_in_attrs(self, conn):
+        """INV-KK-SCORE-CACHE-ATTR: _scores + _scores_computed_at stored in attrs."""
+        cid = _add_concept(conn, "RCU")
+        refresh_scores(conn, [cid])
+        row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
+        attrs = json.loads(row[0])
+        assert "_scores" in attrs
+        assert "_scores_computed_at" in attrs
+        cached = json.loads(attrs["_scores"])
+        assert set(cached.keys()) == {"heat", "pain", "impact", "leverage", "frontier"}
+
+    def test_timestamp_is_iso8601(self, conn):
+        cid = _add_concept(conn, "Slab")
+        refresh_scores(conn, [cid])
+        row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
+        attrs = json.loads(row[0])
+        ts = attrs["_scores_computed_at"]
+        datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
+
+    def test_refresh_all_concepts(self, conn):
+        """INV-KK-SCORE-REFRESH-ALL: None refreshes all Concept nodes."""
+        cid1 = _add_concept(conn, "RCU", "concept-rcu-all")
+        cid2 = _add_concept(conn, "Slab", "concept-slab-all")
+        count = refresh_scores(conn, None)
+        assert count == 2
+        for cid in [cid1, cid2]:
+            row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
+            attrs = json.loads(row[0])
+            assert "_scores" in attrs
+
+    def test_refresh_specific_ids(self, conn):
+        cid1 = _add_concept(conn, "RCU", "concept-rcu-spec")
+        cid2 = _add_concept(conn, "Slab", "concept-slab-spec")
+        count = refresh_scores(conn, [cid1])
+        assert count == 1
+        row1 = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid1,)).fetchone()
+        row2 = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid2,)).fetchone()
+        assert "_scores" in json.loads(row1[0])
+        assert "_scores" not in json.loads(row2[0])
+
+    def test_returns_count(self, conn):
+        _add_concept(conn, "A", "concept-a")
+        _add_concept(conn, "B", "concept-b")
+        _add_concept(conn, "C", "concept-c")
+        assert refresh_scores(conn, None) == 3
+
+    def test_scores_update_on_refresh(self, conn):
+        cid = _add_concept(conn, "RCU", "concept-rcu-upd")
+        refresh_scores(conn, [cid])
+        row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
+        scores1 = json.loads(json.loads(row[0])["_scores"])
+        assert scores1["heat"] == 0.0
+        _add_discussion(conn, cid, _recent_date(3))
+        refresh_scores(conn, [cid])
+        row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
+        scores2 = json.loads(json.loads(row[0])["_scores"])
+        assert scores2["heat"] == 1.0

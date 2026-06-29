@@ -11,7 +11,12 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Any
 
-from graph.engine import evidence_count_for_concept
+from graph.engine import (
+    evidence_count_for_concept,
+    list_nodes,
+    transitive_impact,
+    update_node_attrs,
+)
 
 
 _HEAT_EDGE_KINDS = ("discusses", "observes", "benchmarks", "grounded-in")
@@ -112,3 +117,108 @@ def pain_score(
     score += len(failure_modes) * 3.0
     score += sum(cvss_weight(v) * 5.0 for v in vulns)
     return score
+
+
+_LEVERAGE_SEVERITY_WEIGHTS = {
+    "critical": 4.0,
+    "high": 3.0,
+    "medium": 2.0,
+    "low": 1.0,
+}
+
+
+def impact_score(
+    conn: sqlite3.Connection,
+    concept_id: str,
+) -> float:
+    """Count distinct downstream nodes via transitive_impact (ALG-KK-SCORE-IMPACT).
+
+    INV-KK-SCORE-NON-NEGATIVE: returns >= 0.0.
+    """
+    impact = transitive_impact(conn, concept_id)
+    return float(sum(len(v) for v in impact.values()))
+
+
+def leverage_score(
+    conn: sqlite3.Connection,
+    concept_id: str,
+) -> float:
+    """Sum severity weights for linked Problems (ALG-KK-SCORE-LEVERAGE).
+
+    INV-KK-SCORE-LEVERAGE-WEIGHTS: critical=4, high=3, medium=2, low=1.
+    INV-KK-SCORE-NON-NEGATIVE: returns >= 0.0.
+    """
+    problems = get_linked_problems(conn, concept_id)
+    return sum(
+        _LEVERAGE_SEVERITY_WEIGHTS.get(p.get("severity", "low"), 1.0)
+        for p in problems
+    )
+
+
+def _solved_confidence(
+    conn: sqlite3.Connection,
+    concept_id: str,
+) -> float:
+    """Ratio of resolved problems to total problems (INV-KK-SCORE-SOLVED-RATIO)."""
+    problems = get_linked_problems(conn, concept_id)
+    if not problems:
+        return 0.0
+    resolved = sum(1 for p in problems if p.get("status") == "resolved")
+    return resolved / len(problems)
+
+
+def frontier_score(
+    conn: sqlite3.Connection,
+    concept_id: str,
+    window_days: int = 90,
+) -> float:
+    """Composite frontier score (ALG-KK-SCORE-FRONTIER).
+
+    INV-KK-SCORE-FRONTIER-FORMULA: heat*0.3 + pain*0.3 + leverage*0.3 - solved*10.
+    INV-KK-SCORE-NON-NEGATIVE: floored at 0.0.
+    """
+    h = heat_score(conn, concept_id, window_days=window_days)
+    p = pain_score(conn, concept_id)
+    lev = leverage_score(conn, concept_id)
+    solved = _solved_confidence(conn, concept_id)
+    raw = h * 0.3 + p * 0.3 + lev * 0.3 - solved * 10.0
+    return max(0.0, raw)
+
+
+def compute_all_scores(
+    conn: sqlite3.Connection,
+    concept_id: str,
+    window_days: int = 90,
+) -> dict[str, float]:
+    """Return all 5 scores for a concept."""
+    return {
+        "heat": heat_score(conn, concept_id, window_days=window_days),
+        "pain": pain_score(conn, concept_id),
+        "impact": impact_score(conn, concept_id),
+        "leverage": leverage_score(conn, concept_id),
+        "frontier": frontier_score(conn, concept_id, window_days=window_days),
+    }
+
+
+def refresh_scores(
+    conn: sqlite3.Connection,
+    concept_ids: list[str] | None = None,
+    window_days: int = 90,
+) -> int:
+    """Batch recompute + cache scores as node attrs (ALG-KK-SCORE-REFRESH).
+
+    INV-KK-SCORE-CACHE-ATTR: stores _scores dict + _scores_computed_at timestamp.
+    INV-KK-SCORE-REFRESH-ALL: None concept_ids refreshes all Concept nodes.
+    Returns count of concepts refreshed.
+    """
+    if concept_ids is None:
+        concepts = list_nodes(conn, kind="Concept")
+        concept_ids = [c["id"] for c in concepts]
+    now = datetime.now(tz=None).strftime("%Y-%m-%dT%H:%M:%S")
+    for cid in concept_ids:
+        scores = compute_all_scores(conn, cid, window_days=window_days)
+        update_node_attrs(conn, cid, {
+            "_scores": json.dumps(scores),
+            "_scores_computed_at": now,
+        })
+    return len(concept_ids)
