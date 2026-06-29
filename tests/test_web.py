@@ -1180,3 +1180,41 @@ def test_failure_mode_no_related_code_when_no_concept_code(tmp_path):
         response = c.get("/concepts/fm-1")
     assert response.status_code == 200
     assert "Related Code" not in response.text
+
+
+# --- ALG-KK-WEB-DISPLAY-NAME: evidence-layer kinds ---
+
+
+def test_display_name_problem():
+    from web.routes import display_name_for_node
+    assert display_name_for_node("Problem", {"title": "Grace period latency"}, "prob-123") == "Grace period latency"
+
+
+def test_display_name_vulnerability():
+    from web.routes import display_name_for_node
+    assert display_name_for_node("Vulnerability", {"cve_id": "CVE-2026-99999"}, "vuln-123") == "CVE-2026-99999"
+
+
+def test_display_name_vulnerability_no_cve():
+    from web.routes import display_name_for_node
+    result = display_name_for_node("Vulnerability", {"cve_id": "", "title": "Use-after-free in RCU"}, "vuln-123")
+    assert result == "Use-after-free in RCU"
+
+
+def test_display_name_proposal():
+    from web.routes import display_name_for_node
+    assert display_name_for_node("Proposal", {"name": "NUMA batching"}, "prop-123") == "NUMA batching"
+
+
+def test_display_name_observation():
+    from web.routes import display_name_for_node
+    long_claim = "A" * 80
+    result = display_name_for_node("Observation", {"claim": long_claim}, "obs-123")
+    assert result == "A" * 60 + "..."
+
+
+def test_display_name_fix():
+    from web.routes import display_name_for_node
+    long_title = "B" * 80
+    result = display_name_for_node("Fix", {"title": long_title}, "fix-123")
+    assert result == "B" * 60 + "..."

@@ -50,6 +50,14 @@ _DISPLAY_FIELDS: dict[str, tuple[str, int | None]] = {
     "UseCaseScenario": ("name", None),
     "ComparativeAnalysis": ("dimension", 60),
     "Kernel": ("name", None),
+    "Problem": ("title", None),
+    "Observation": ("claim", 60),
+    "Discussion": ("title", None),
+    "Benchmark": ("metric", 40),
+    "Rejection": ("proposal_title", 60),
+    "Vulnerability": ("cve_id", None),
+    "Fix": ("title", 60),
+    "Proposal": ("name", None),
 }
 
 
@@ -61,6 +69,10 @@ def display_name_for_node(kind: str, attrs: dict, node_id: str) -> str:
         if value:
             if max_len and len(value) > max_len:
                 return value[:max_len] + "..."
+            return value
+    if kind == "Vulnerability":
+        value = (attrs.get("title") or "").strip()
+        if value:
             return value
     if kind == "Evidence":
         return f"Evidence {node_id[-8:]}"
