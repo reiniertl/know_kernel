@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -136,3 +137,55 @@ class FeedPoller(ABC):
         save_feed_state(state, self.state_path)
 
         return results
+
+
+def _struct_time_to_iso(t: time.struct_time | None) -> str:
+    """INV-KK-FEED-RSS-DATE: convert time_struct to ISO-8601 date. Empty string if None."""
+    if t is None:
+        return ""
+    return time.strftime("%Y-%m-%d", t)
+
+
+def _extract_rss_content(entry: Any) -> str:
+    """INV-KK-FEED-RSS-CONTENT: extract content from RSS entry, never empty."""
+    if hasattr(entry, "content") and entry.content:
+        value = entry.content[0].get("value", "")
+        if value.strip():
+            return value.strip()
+    summary = getattr(entry, "summary", "")
+    if summary and summary.strip():
+        return summary.strip()
+    return getattr(entry, "title", "No content").strip() or "No content"
+
+
+class RSSFeedPoller(FeedPoller):
+    """ALG-KK-FEED-RSS: RSS/Atom feed parser using feedparser library."""
+
+    def __init__(self, config: FeedConfig, state_path: Path = DEFAULT_STATE_PATH, raw_xml: str | None = None) -> None:
+        super().__init__(config, state_path)
+        self._raw_xml = raw_xml
+
+    def fetch(self) -> list[FeedItem]:
+        import feedparser
+
+        if self._raw_xml is not None:
+            feed = feedparser.parse(self._raw_xml)
+        else:
+            feed = feedparser.parse(self.config.url)
+
+        items: list[FeedItem] = []
+        for entry in feed.entries:
+            link = getattr(entry, "link", "")
+            if not link:
+                continue
+            title = getattr(entry, "title", "").strip() or "Untitled"
+            content = _extract_rss_content(entry)
+            published = _struct_time_to_iso(getattr(entry, "published_parsed", None))
+            items.append(FeedItem(
+                title=title,
+                url=link,
+                content=content,
+                published=published,
+                source_feed=self.config.name,
+            ))
+        return items

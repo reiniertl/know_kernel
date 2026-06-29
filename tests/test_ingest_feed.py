@@ -1,4 +1,4 @@
-"""Tests for feed ingestion core -- ALG-KK-FEED-POLL invariants."""
+"""Tests for feed ingestion core -- ALG-KK-FEED-POLL and ALG-KK-FEED-RSS invariants."""
 
 from __future__ import annotations
 
@@ -13,6 +13,9 @@ from ingest.feed import (
     FeedConfig,
     FeedItem,
     FeedPoller,
+    RSSFeedPoller,
+    _extract_rss_content,
+    _struct_time_to_iso,
     ingest_item,
     is_duplicate,
     load_feed_state,
@@ -216,3 +219,189 @@ class TestFeedPoller:
         poller.poll(conn)
         state = load_feed_state(state_path)
         assert state["test"]["last_fetched_timestamp"] == "2024-01-15"
+
+
+# --- RSS Feed Poller Tests (ALG-KK-FEED-RSS) ---
+
+_LWN_RSS = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>LWN.net</title>
+    <item>
+      <title>Memory folios and large pages</title>
+      <link>https://lwn.net/Articles/123456/</link>
+      <description>An article about memory folios in the Linux kernel.</description>
+      <pubDate>Sun, 15 Jun 2026 00:00:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>RCU and NUMA scalability</title>
+      <link>https://lwn.net/Articles/789012/</link>
+      <description>Deep dive into RCU grace periods on NUMA systems.</description>
+      <pubDate>Mon, 16 Jun 2026 10:30:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
+_EMPTY_RSS = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Empty</title></channel></rss>
+"""
+
+_CONTENT_ENCODED_RSS = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Test</title>
+    <item>
+      <title>Content Encoded Test</title>
+      <link>https://example.com/content-encoded</link>
+      <description>Short summary</description>
+      <content:encoded><![CDATA[<p>This is the full article content with HTML.</p>]]></content:encoded>
+      <pubDate>Wed, 18 Jun 2026 12:00:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
+_NO_DATE_RSS = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>No Date</title>
+    <item>
+      <title>Article without date</title>
+      <link>https://example.com/no-date</link>
+      <description>No pubDate present.</description>
+    </item>
+  </channel>
+</rss>
+"""
+
+_NO_LINK_RSS = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>No Link</title>
+    <item>
+      <title>Article without link</title>
+      <description>Missing link element.</description>
+    </item>
+  </channel>
+</rss>
+"""
+
+
+import time as time_mod
+
+
+class TestStructTimeToIso:
+    def test_valid_time(self):
+        t = time_mod.strptime("2026-06-15", "%Y-%m-%d")
+        assert _struct_time_to_iso(t) == "2026-06-15"
+
+    def test_none_returns_empty(self):
+        assert _struct_time_to_iso(None) == ""
+
+
+class TestExtractRssContent:
+    def test_summary_used(self):
+        class Entry:
+            summary = "Summary text"
+        assert _extract_rss_content(Entry()) == "Summary text"
+
+    def test_content_encoded_preferred(self):
+        class Entry:
+            content = [{"value": "Full content"}]
+            summary = "Short summary"
+        assert _extract_rss_content(Entry()) == "Full content"
+
+    def test_empty_content_falls_to_summary(self):
+        class Entry:
+            content = [{"value": ""}]
+            summary = "Fallback summary"
+        assert _extract_rss_content(Entry()) == "Fallback summary"
+
+    def test_no_content_no_summary_uses_title(self):
+        class Entry:
+            title = "Title Fallback"
+        assert _extract_rss_content(Entry()) == "Title Fallback"
+
+    def test_completely_empty_uses_default(self):
+        class Entry:
+            pass
+        result = _extract_rss_content(Entry())
+        assert result == "No content"
+
+
+class TestRSSFeedPoller:
+    def test_parse_lwn_rss(self, state_path):
+        """ALG-KK-FEED-RSS: parses standard RSS 2.0 entries."""
+        config = FeedConfig(name="lwn", feed_type="rss", url="https://lwn.net/rss")
+        poller = RSSFeedPoller(config, state_path, raw_xml=_LWN_RSS)
+        items = poller.fetch()
+        assert len(items) == 2
+        assert items[0].title == "Memory folios and large pages"
+        assert items[0].url == "https://lwn.net/Articles/123456/"
+        assert items[1].title == "RCU and NUMA scalability"
+
+    def test_pubdate_to_iso(self, state_path):
+        """INV-KK-FEED-RSS-DATE: pubDate converted to ISO-8601."""
+        config = FeedConfig(name="lwn", feed_type="rss", url="https://lwn.net/rss")
+        poller = RSSFeedPoller(config, state_path, raw_xml=_LWN_RSS)
+        items = poller.fetch()
+        assert items[0].published == "2026-06-15"
+        assert items[1].published == "2026-06-16"
+
+    def test_content_extraction(self, state_path):
+        """INV-KK-FEED-RSS-CONTENT: content from description."""
+        config = FeedConfig(name="lwn", feed_type="rss", url="https://lwn.net/rss")
+        poller = RSSFeedPoller(config, state_path, raw_xml=_LWN_RSS)
+        items = poller.fetch()
+        assert "memory folios" in items[0].content.lower()
+
+    def test_content_encoded_preferred(self, state_path):
+        """INV-KK-FEED-RSS-CONTENT: content:encoded preferred over description."""
+        config = FeedConfig(name="test", feed_type="rss", url="https://test.com")
+        poller = RSSFeedPoller(config, state_path, raw_xml=_CONTENT_ENCODED_RSS)
+        items = poller.fetch()
+        assert len(items) == 1
+        assert "full article content" in items[0].content.lower()
+
+    def test_empty_feed(self, state_path):
+        config = FeedConfig(name="empty", feed_type="rss", url="https://empty.com")
+        poller = RSSFeedPoller(config, state_path, raw_xml=_EMPTY_RSS)
+        items = poller.fetch()
+        assert items == []
+
+    def test_no_date_entry(self, state_path):
+        """INV-KK-FEED-RSS-DATE: missing pubDate produces empty string."""
+        config = FeedConfig(name="nodate", feed_type="rss", url="https://nodate.com")
+        poller = RSSFeedPoller(config, state_path, raw_xml=_NO_DATE_RSS)
+        items = poller.fetch()
+        assert len(items) == 1
+        assert items[0].published == ""
+
+    def test_no_link_entry_skipped(self, state_path):
+        """Entries without a link are skipped."""
+        config = FeedConfig(name="nolink", feed_type="rss", url="https://nolink.com")
+        poller = RSSFeedPoller(config, state_path, raw_xml=_NO_LINK_RSS)
+        items = poller.fetch()
+        assert items == []
+
+    def test_source_feed_set(self, state_path):
+        config = FeedConfig(name="phoronix", feed_type="rss", url="https://phoronix.com/rss")
+        poller = RSSFeedPoller(config, state_path, raw_xml=_LWN_RSS)
+        items = poller.fetch()
+        assert all(item.source_feed == "phoronix" for item in items)
+
+    def test_poll_integration(self, conn, state_path):
+        """Full poll: RSS parse -> dedup -> ingest -> state."""
+        config = FeedConfig(name="lwn", feed_type="rss", url="https://lwn.net/rss")
+        poller = RSSFeedPoller(config, state_path, raw_xml=_LWN_RSS)
+        results = poller.poll(conn)
+        assert len(results) == 2
+        state = load_feed_state(state_path)
+        assert "lwn" in state
+        assert len(state["lwn"]["seen_urls"]) == 2
