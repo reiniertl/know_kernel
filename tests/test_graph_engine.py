@@ -135,13 +135,13 @@ def test_update_node_attrs_rejects_nonexistent(conn: sqlite3.Connection):
 
 def test_delete_node_cascades_edges(populated: sqlite3.Connection):
     edges_before = populated.execute(
-        "SELECT COUNT(*) FROM edges WHERE source_id='c1' OR target_id='c1'"
+        "SELECT COUNT(*) FROM edges WHERE source_id='c2' OR target_id='c2'"
     ).fetchone()[0]
     assert edges_before > 0
-    delete_node(populated, "c1")
-    assert get_node(populated, "c1") is None
+    delete_node(populated, "c2")
+    assert get_node(populated, "c2") is None
     edges_after = populated.execute(
-        "SELECT COUNT(*) FROM edges WHERE source_id='c1' OR target_id='c1'"
+        "SELECT COUNT(*) FROM edges WHERE source_id='c2' OR target_id='c2'"
     ).fetchone()[0]
     assert edges_after == 0
 
@@ -284,7 +284,7 @@ def test_get_edge_missing(conn: sqlite3.Connection):
 
 def test_list_nodes_all(populated: sqlite3.Connection):
     nodes = list_nodes(populated)
-    assert len(nodes) == 6
+    assert len(nodes) == 14
 
 
 def test_list_nodes_by_kind(populated: sqlite3.Connection):
