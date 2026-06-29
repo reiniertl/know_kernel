@@ -1,0 +1,29 @@
+{
+  "feeds": [
+    {
+      "name": "lwn",
+      "feed_type": "rss",
+      "url": "https://lwn.net/headlines/Features",
+      "poll_interval_seconds": 604800
+    },
+    {
+      "name": "hackernews",
+      "feed_type": "api",
+      "url": "https://hacker-news.firebaseio.com/v0/",
+      "poll_interval_seconds": 3600,
+      "kernel_filter": "(linux|kernel|scheduler|memory|io_uring|bpf|ebpf|rcu|numa|folio|mm|vfs|filesystem|networking|net|driver|module)"
+    },
+    {
+      "name": "lkml",
+      "feed_type": "rss",
+      "url": "https://lkml.org/lkml/rss",
+      "poll_interval_seconds": 86400
+    },
+    {
+      "name": "phoronix",
+      "feed_type": "rss",
+      "url": "https://www.phoronix.com/rss.php",
+      "poll_interval_seconds": 86400
+    }
+  ]
+}
