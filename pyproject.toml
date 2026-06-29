@@ -27,6 +27,7 @@ dev = [
 
 [project.scripts]
 kk-ingest = "ingest.cli:main"
+kk-feed = "ingest.cli_feed:main"
 kk-web = "web.app:main"
 kk-export = "export.cli:main"
 kk-mcp = "mcp_server.server:main"
