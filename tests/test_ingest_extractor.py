@@ -1328,3 +1328,66 @@ class TestExtractionPromptKeys:
         import ingest.extractor as extractor
         assert not hasattr(extractor, "build_compatibility_prompt")
         assert not hasattr(extractor, "build_profile_extraction_prompt")
+
+
+class TestDiscourseExtraction:
+    """INV-KK-EXTRACT-DISCOURSE-RULES: discourse sources use modified prompt."""
+
+    def test_discourse_system_prompt_includes_addendum(self) -> None:
+        from ingest.extractor import DISCOURSE_EXTRACTION_ADDENDUM, get_system_prompt
+        prompt = get_system_prompt("discourse")
+        assert DISCOURSE_EXTRACTION_ADDENDUM in prompt
+        assert "DISCOURSE SOURCE RULES" in prompt
+
+    def test_non_discourse_system_prompt_unchanged(self) -> None:
+        from ingest.extractor import DISCOURSE_EXTRACTION_ADDENDUM, get_system_prompt
+        prompt = get_system_prompt("paper")
+        assert DISCOURSE_EXTRACTION_ADDENDUM not in prompt
+
+    def test_none_source_type_system_prompt_unchanged(self) -> None:
+        from ingest.extractor import DISCOURSE_EXTRACTION_ADDENDUM, get_system_prompt
+        prompt = get_system_prompt(None)
+        assert DISCOURSE_EXTRACTION_ADDENDUM not in prompt
+
+    def test_discourse_user_prompt_prefix(self) -> None:
+        prompt = build_extraction_prompt("Some text about RCU.", source_type="discourse")
+        assert prompt.startswith("Extract abstract concepts from this discourse source:")
+
+    def test_non_discourse_user_prompt_prefix(self) -> None:
+        prompt = build_extraction_prompt("Some text about RCU.", source_type="paper")
+        assert prompt.startswith("Extract abstract concepts from this document:")
+
+    def test_none_source_type_user_prompt_prefix(self) -> None:
+        prompt = build_extraction_prompt("Some text about RCU.", source_type=None)
+        assert prompt.startswith("Extract abstract concepts from this document:")
+
+    def test_discourse_prompt_permits_factual_claims(self) -> None:
+        from ingest.extractor import get_system_prompt
+        prompt = get_system_prompt("discourse")
+        assert "Factual claims" in prompt
+        assert "stated directly" in prompt
+
+    def test_discourse_prompt_still_requires_grounding(self) -> None:
+        from ingest.extractor import get_system_prompt
+        prompt = get_system_prompt("discourse")
+        assert "PROVENANCE GROUNDING RULES" in prompt
+
+    def test_extract_concepts_with_discourse_source(self, conn, evidence_node) -> None:
+        """Integration: extract_concepts auto-detects source_type from Source node attrs."""
+        conn.execute(
+            "UPDATE nodes SET attrs = json_set(attrs, '$.source_type', 'discourse') WHERE id = 'src-ext1'"
+        )
+        conn.commit()
+        client = MockLLMClient()
+        gate = SessionGate()
+        result = extract_concepts(conn, evidence_node, gate, client=client)
+        assert len(client.calls) == 1
+        assert "DISCOURSE SOURCE RULES" in client.calls[0]["system"]
+
+    def test_extract_concepts_with_paper_source(self, conn, evidence_node) -> None:
+        """Integration: paper source_type uses standard prompt without discourse addendum."""
+        client = MockLLMClient()
+        gate = SessionGate()
+        result = extract_concepts(conn, evidence_node, gate, client=client)
+        assert len(client.calls) == 1
+        assert "DISCOURSE SOURCE RULES" not in client.calls[0]["system"]

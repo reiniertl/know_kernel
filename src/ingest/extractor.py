@@ -226,10 +226,37 @@ def validate_extraction_item(item: Any) -> dict | None:
     return sanitized
 
 
-def build_extraction_prompt(evidence_text: str) -> str:
+DISCOURSE_EXTRACTION_ADDENDUM = """\
+
+DISCOURSE SOURCE RULES (INV-KK-EXTRACT-DISCOURSE-RULES):
+This source is a factual discourse item (news article, mailing list thread, \
+forum post, or conference notes). The following modified rules apply:
+- Factual claims, problem statements, and technical observations may be \
+stated directly without rephrasing.
+- Only CREATIVE EXPRESSION (metaphors, distinctive literary phrasing, \
+opinion editorials) must be rephrased.
+- Focus on extracting WHAT people are saying about kernel mechanisms, \
+not the mechanisms themselves.
+- The PROVENANCE GROUNDING RULES above still apply: only extract what \
+the source actually says.\
+"""
+
+
+def build_extraction_prompt(evidence_text: str, source_type: str | None = None) -> str:
+    if source_type == "discourse":
+        prefix = "Extract abstract concepts from this discourse source:\n\n"
+    else:
+        prefix = "Extract abstract concepts from this document:\n\n"
     if evidence_text:
-        return f"Extract abstract concepts from this document:\n\n{evidence_text}"
+        return f"{prefix}{evidence_text}"
     return "Extract abstract concepts from metadata only -- no source text available."
+
+
+def get_system_prompt(source_type: str | None = None) -> str:
+    """Return the appropriate system prompt based on source type."""
+    if source_type == "discourse":
+        return EXTRACTION_SYSTEM_PROMPT + DISCOURSE_EXTRACTION_ADDENDUM
+    return EXTRACTION_SYSTEM_PROMPT
 
 
 def validate_excerpt_grounding(excerpt: str, document_text: str) -> list[str]:
@@ -710,6 +737,7 @@ def extract_concepts(
     model: str = "claude-sonnet-4-6",
     dry_run: bool = False,
     client: LLMClient | None = None,
+    source_type: str | None = None,
 ) -> ExtractionResult:
     """Extract abstract Concepts from an Evidence node via LLM.
 
@@ -760,13 +788,22 @@ def extract_concepts(
             src_attrs = json.loads(src_attrs_row[0])
             evidence_text = src_attrs.get("text", "")
 
-    user_prompt = build_extraction_prompt(evidence_text)
+    if source_type is None and source_id:
+        src_type_row = conn.execute(
+            "SELECT attrs FROM nodes WHERE id = ?", (source_id,)
+        ).fetchone()
+        if src_type_row:
+            st_attrs = json.loads(src_type_row[0])
+            source_type = st_attrs.get("source_type")
+
+    system_prompt = get_system_prompt(source_type)
+    user_prompt = build_extraction_prompt(evidence_text, source_type)
 
     if dry_run:
         return ExtractionResult(
             evidence_id=evidence_id,
             extraction_model=model,
-            prompt_tokens=len(EXTRACTION_SYSTEM_PROMPT.split()) + len(user_prompt.split()),
+            prompt_tokens=len(system_prompt.split()) + len(user_prompt.split()),
         )
 
     if client is None:
@@ -774,7 +811,7 @@ def extract_concepts(
 
     response = client.create_message(
         model=model,
-        system=EXTRACTION_SYSTEM_PROMPT,
+        system=system_prompt,
         user=user_prompt,
         max_tokens=4096,
     )

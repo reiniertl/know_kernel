@@ -67,12 +67,20 @@ _LICENSE_RULES: List[Tuple[str, ContaminationLevel, str]] = [
 ]
 
 
-def scan_license(parsed_doc: "ParsedDocument") -> ScanResult:
+def scan_license(parsed_doc: "ParsedDocument", source_type: str | None = None) -> ScanResult:
     """Scan a ParsedDocument for license markers and classify contamination level.
 
     INV-KK-ALL-EVIDENCE-CLASS-A: always returns artifact_class=A.
     INV-KK-UNKNOWN-LICENSE-L4: returns L4 when no license is detected.
+    INV-KK-SCAN-DISCOURSE: discourse sources bypass text scanning, return L1.
     """
+    if source_type == "discourse":
+        return ScanResult(
+            artifact_class=ArtifactClass.A,
+            contamination_level=ContaminationLevel.L1,
+            licenses_found=[],
+        )
+
     text = parsed_doc.text
     found_levels: set[ContaminationLevel] = set()
     licenses: list[str] = []
