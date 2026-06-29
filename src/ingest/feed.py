@@ -80,6 +80,7 @@ def ingest_item(conn: sqlite3.Connection, item: FeedItem) -> tuple[str, str]:
         "url": item.url,
         "source_type": "discourse",
         "license": "unknown",
+        "published_date": item.published,
     })
 
     add_node(conn, evidence_id, "Evidence", {

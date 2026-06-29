@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from graph.schema import init_db
+from ingest.claim_extractor import extract_claims
 from ingest.feed import (
     FeedConfig,
     HNFeedPoller,
@@ -71,6 +72,7 @@ def cmd_poll(args: argparse.Namespace, configs: list[FeedConfig]) -> int:
 
     config_map = {c.name: c for c in configs}
     total = 0
+    ingested_pairs: list[tuple[str, str]] = []
 
     for source_name in sources_to_poll:
         if source_name == "kernel-git":
@@ -94,12 +96,36 @@ def cmd_poll(args: argparse.Namespace, configs: list[FeedConfig]) -> int:
             results = poller.poll(conn)
             count = len(results)
             total += count
+            ingested_pairs.extend(results)
             print(f"[{source_name}] Ingested {count} new item(s).")
         except Exception as exc:
             print(f"[{source_name}] Error: {exc}", file=sys.stderr)
 
-    if args.extract:
-        print("[extract] Claim extraction not yet available (Phase 5).")
+    if args.extract and ingested_pairs:
+        print(f"\n[extract] Running claim extraction on {len(ingested_pairs)} source(s)...")
+        extracted = 0
+        for src_id, ev_id in ingested_pairs:
+            src_row = conn.execute(
+                "SELECT attrs FROM nodes WHERE id = ?", (src_id,),
+            ).fetchone()
+            published = ""
+            if src_row:
+                src_attrs = json.loads(src_row[0])
+                published = src_attrs.get("published_date", "")
+            try:
+                result = extract_claims(conn, ev_id, source_date=published)
+                total_nodes = (
+                    result.problems_created + result.observations_created
+                    + result.proposals_created + result.benchmarks_created
+                    + result.rejections_created + result.discussions_created
+                )
+                print(f"  [{src_id}] Extracted {total_nodes} claim node(s).")
+                extracted += total_nodes
+            except Exception as exc:
+                print(f"  [{src_id}] Extraction error: {exc}", file=sys.stderr)
+        print(f"[extract] Total: {extracted} claim node(s) created.")
+    elif args.extract:
+        print("[extract] No new sources to extract from.")
 
     print(f"\nTotal: {total} new item(s) ingested.")
     return 0

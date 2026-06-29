@@ -44,7 +44,7 @@ EDGE_KINDS = (
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "belongs-to": [("Concept", "Subsystem"), ("KernelInvariant", "Subsystem")],
-    "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence"), ("InteractionProtocol", "Evidence"), ("PerformanceProfile", "Evidence"), ("CompatibilityAssessment", "Evidence"), ("ComparativeAnalysis", "Evidence")],
+    "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence"), ("InteractionProtocol", "Evidence"), ("PerformanceProfile", "Evidence"), ("CompatibilityAssessment", "Evidence"), ("ComparativeAnalysis", "Evidence"), ("Problem", "Evidence"), ("Observation", "Evidence"), ("Discussion", "Evidence"), ("Benchmark", "Evidence"), ("Rejection", "Evidence"), ("Proposal", "Evidence")],
     "sourced-from": ("Evidence", "Source"),
     "alternative-to": ("Concept", "Concept"),
     "refines": ("Concept", "Concept"),

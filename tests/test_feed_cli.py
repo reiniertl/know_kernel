@@ -113,13 +113,13 @@ class TestCmdPoll:
         captured = capsys.readouterr()
         assert "cve" in captured.out.lower()
 
-    def test_extract_stub_message(self, db_path, capsys):
-        """INV-KK-FEED-CLI-EXTRACT-STUB: --extract prints stub message."""
+    def test_extract_no_sources_message(self, db_path, capsys):
+        """INV-KK-FEED-CLI-EXTRACT-STUB: --extract with no items prints info message."""
         configs = []
         result = cmd_poll(self._args(source="kernel-git", extract=True, db=db_path), configs)
         assert result == 0
         captured = capsys.readouterr()
-        assert "not yet available" in captured.out.lower() or "phase 5" in captured.out.lower()
+        assert "no new sources" in captured.out.lower()
 
     @patch("ingest.cli_feed._make_poller")
     def test_poll_dispatches_to_poller(self, mock_make, db_path, capsys):
