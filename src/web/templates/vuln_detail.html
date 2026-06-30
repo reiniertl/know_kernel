@@ -1,58 +1,161 @@
 {% extends "base.html" %}
 {% block content %}
 {% set attrs = node.attrs or {} %}
+
+{# --- Section 1: Header --- #}
+<p><a href="/vulns">&larr; Back to Vulnerabilities</a></p>
 <h1>{{ attrs.get("cve_id", node.id) }}</h1>
-<p><code>{{ node.id }}</code> &nbsp; <span class="badge badge-severity-{{ severity }}">{{ severity }}</span> &nbsp; CVSS: {{ "%.1f"|format(cvss_score) }}</p>
+<p>
+  <span class="badge badge-severity-{{ severity }}">{{ severity }}</span>
+  CVSS: <strong>{{ "%.1f"|format(cvss_score) }}</strong>
+  {% if attrs.get("status") %}&middot; Status: {{ attrs.status }}{% endif %}
+  {% if attrs.get("affected_versions") %}&middot; Affected: {{ attrs.affected_versions }}{% endif %}
+  {% if attrs.get("source_date") %}&middot; Disclosed: {{ attrs.source_date }}{% endif %}
+</p>
 
-{% if attrs.get("title") %}
-<h2>{{ attrs.title }}</h2>
-{% endif %}
-
+{# --- Section 2: Description (VERBATIM) --- #}
 {% if attrs.get("description") %}
-<p>{{ attrs.description }}</p>
+<div class="attrs-section">
+  <h3>Description</h3>
+  <p>{{ attrs.description }}</p>
+</div>
 {% endif %}
 
-<h2>Directly Exploited Concepts ({{ direct_concepts|length }})</h2>
-{% if direct_concepts %}
-<ul>
-{% for c in direct_concepts %}
-  <li><a href="/concepts/{{ c.id }}">{{ c.display_name }}</a> ({{ c.kind }})</li>
-{% endfor %}
-</ul>
-{% else %}
-<p>No directly exploited concepts.</p>
+{# --- Section 3: Affected Subsystems --- #}
+{% if affected_subsystems %}
+<div class="attrs-section">
+  <h3>Affected Subsystems</h3>
+  <ul>
+  {% for sub in affected_subsystems %}
+    <li>{{ sub.name }}</li>
+  {% endfor %}
+  </ul>
+</div>
 {% endif %}
 
-<h2>Propagated At-Risk Concepts</h2>
-{% set has_propagated = propagated.dependents|length + propagated.composed_with|length + propagated.shared_invariant|length %}
-{% if has_propagated %}
-  {% if propagated.dependents %}
-  <h3>Dependents (prerequisite coupling)</h3>
-  <ul>
-  {% for p in propagated.dependents %}
-    <li><a href="/concepts/{{ p.id }}">{{ p.display_name }}</a> ({{ p.kind }})</li>
-  {% endfor %}
-  </ul>
-  {% endif %}
+{# --- Section 4: Directly Exploited Concepts --- #}
+{% if direct_briefs %}
+<div class="attrs-section">
+  <h2>Directly Exploited Concepts ({{ direct_briefs|length }})</h2>
+  {% for brief in direct_briefs %}
+  <div style="margin-bottom:1.5em; padding:0.5em; border-left:3px solid #c0392b;">
+    <h3><a href="/concepts/{{ brief.concept.id }}">{{ brief.concept.name }}</a>
+    {% if brief.subsystem %}<span class="badge badge-kind">{{ brief.subsystem.name }}</span>{% endif %}
+    </h3>
+    {% if brief.concept.description %}
+    <p>{{ brief.concept.description }}</p>
+    {% endif %}
 
-  {% if propagated.composed_with %}
-  <h3>Composed With (protocol coupling)</h3>
-  <ul>
-  {% for p in propagated.composed_with %}
-    <li><a href="/concepts/{{ p.id }}">{{ p.display_name }}</a> ({{ p.kind }})</li>
-  {% endfor %}
-  </ul>
-  {% endif %}
+    {% if brief.invariants %}
+    <h4>Invariants at Risk</h4>
+    {% for inv in brief.invariants %}
+    <div class="card" style="margin-bottom:0.3em;">
+      <code>{{ inv.predicate }}</code>
+      {% if inv.strength %}<small> &middot; Strength: {{ inv.strength }}</small>{% endif %}
+      {% if inv.scope %}<small> &middot; Scope: {{ inv.scope }}</small>{% endif %}
+    </div>
+    {% endfor %}
+    {% endif %}
 
-  {% if propagated.shared_invariant %}
-  <h3>Shared Invariant (governance coupling)</h3>
-  <ul>
-  {% for p in propagated.shared_invariant %}
-    <li><a href="/concepts/{{ p.id }}">{{ p.display_name }}</a> ({{ p.kind }})</li>
+    {% if brief.failure_modes %}
+    <h4>Failure Modes if Exploited</h4>
+    {% for fm in brief.failure_modes %}
+    <div class="card" style="margin-bottom:0.3em;">
+      {{ fm.symptom }}
+      {% if fm.blast_radius %}<small> &middot; Blast radius: {{ fm.blast_radius }}</small>{% endif %}
+      {% if fm.recoverability %}<small> &middot; {{ fm.recoverability }}</small>{% endif %}
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if brief.profiles %}
+    <h4>Performance Implications</h4>
+    <table>
+      <thead><tr><th>Metric</th><th>Complexity</th><th>Worst Case</th></tr></thead>
+      <tbody>
+      {% for prof in brief.profiles %}
+        <tr>
+          <td>{{ prof.metric }}</td>
+          <td>{{ prof.complexity }}</td>
+          <td>{{ prof.worst_case }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if brief.problems %}
+    <h4>Other Open Problems</h4>
+    {% for p in brief.problems %}
+    <div class="card" style="margin-bottom:0.3em;">
+      <span class="badge" style="background:{% if p.severity == 'critical' %}#c0392b{% elif p.severity == 'high' %}#e67e22{% elif p.severity == 'medium' %}#f1c40f;color:#333{% else %}#95a5a6{% endif %};">{{ p.severity }}</span>
+      <strong>{{ p.title }}</strong>
+      <p style="margin:0.3em 0;">{{ p.description }}</p>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if brief.code_examples %}
+    <h4>Code Context</h4>
+    {% for ex in brief.code_examples %}
+    <div style="margin-bottom:0.5em;">
+      <span class="badge badge-kind">{{ ex.language }}</span>
+      {% if ex.description %}<small> {{ ex.description }}</small>{% endif %}
+      <pre><code class="language-{{ ex.language }}">{{ ex.code }}</code></pre>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if brief.prerequisites.depended_on_by %}
+    <h4>Dependencies</h4>
+    <p>{{ brief.prerequisites.depended_on_by|length }} component{{ "s" if brief.prerequisites.depended_on_by|length != 1 else "" }} depend{{ "" if brief.prerequisites.depended_on_by|length != 1 else "s" }} on {{ brief.concept.name }}:</p>
+    <ul>
+    {% for dep in brief.prerequisites.depended_on_by %}
+      <li><a href="/concepts/{{ dep.id }}">{{ dep.name }}</a></li>
+    {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
   {% endfor %}
-  </ul>
-  {% endif %}
-{% else %}
-<p>No propagated at-risk concepts.</p>
+</div>
 {% endif %}
+
+{# --- Section 5: Blast Radius --- #}
+{% if propagated_details %}
+<div class="attrs-section">
+  <h2>Blast Radius ({{ propagated_details|length }} additional concept{{ "s" if propagated_details|length != 1 else "" }} at risk)</h2>
+  {% for group_key, label in coupling_labels.items() %}
+    {% set group_items = propagated_details|selectattr("coupling_type", "equalto", group_key)|list %}
+    {% if group_items %}
+    <h3>{{ label }}</h3>
+    <ul>
+    {% for pd in group_items %}
+      <li>
+        <a href="/concepts/{{ pd.id }}">{{ pd.name }}</a>
+        {% if pd.subsystem %}<span class="badge badge-kind">{{ pd.subsystem }}</span>{% endif %}
+      </li>
+    {% endfor %}
+    </ul>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+
+{# --- Section 6: Related Fixes --- #}
+<div class="attrs-section">
+  <h3>Related Fixes</h3>
+  {% if fixes %}
+  {% for fix in fixes %}
+  <div class="card" style="margin-bottom:0.3em;">
+    {% if fix.fix_type %}<span class="badge badge-kind">{{ fix.fix_type }}</span>{% endif %}
+    <code>{{ fix.commit_hash }}</code>
+    {{ fix.title }}
+    {% if fix.source_date %}<small> &middot; {{ fix.source_date }}</small>{% endif %}
+  </div>
+  {% endfor %}
+  {% else %}
+  <p>No fixes for this vulnerability yet.</p>
+  {% endif %}
+</div>
+
 {% endblock %}

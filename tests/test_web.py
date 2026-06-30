@@ -1513,6 +1513,16 @@ def radar_vuln_client(tmp_path):
         "key_properties": [], "tradeoffs": [], "design_rationale": "test",
     })
     add_edge(conn, "prerequisite", "concept-dep", "concept-rcu")
+    # KernelInvariant for concept-rcu
+    add_node(conn, "kinv-rcu", "KernelInvariant", {
+        "predicate": "RCU read-side critical sections must not sleep",
+        "strength": "strong",
+        "scope": "all RCU flavors",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "governed-by", "kinv-rcu", "concept-rcu")
+    # Fix for vuln-1
+    add_edge(conn, "fixes", "fix-1", "vuln-1")
     add_node(conn, "trend-slab", "Trend", {
         "title": "SLAB convergence", "description": "Trend for slab",
         "strength": 3, "window_start": "2026-06-01", "window_end": "2026-06-20",
@@ -1595,19 +1605,20 @@ def test_vuln_detail_shows_severity(radar_vuln_client):
     assert "9.8" in response.text
 
 
-def test_vuln_detail_shows_direct_concepts(radar_vuln_client):
+def test_vuln_detail_shows_concept_brief(radar_vuln_client):
+    """INV-KK-WEB-VULN-BRIEF-DEPTH: exploited concept name + description."""
     response = radar_vuln_client.get("/vulns/vuln-1")
     assert "RCU" in response.text
     assert "Directly Exploited" in response.text
+    assert "Read-Copy-Update" in response.text
 
 
-def test_vuln_detail_shows_propagated(radar_vuln_client):
+def test_vuln_detail_shows_blast_radius(radar_vuln_client):
     """INV-KK-WEB-VULN-PROPAGATION: shows propagated at-risk concepts."""
     response = radar_vuln_client.get("/vulns/vuln-1")
     text = response.text
-    assert "Propagated" in text
+    assert "Blast Radius" in text
     assert "CFS" in text
-    assert "Dependents" in text
 
 
 def test_vuln_detail_404_for_missing(radar_vuln_client):
@@ -1618,6 +1629,35 @@ def test_vuln_detail_404_for_missing(radar_vuln_client):
 def test_vuln_detail_404_for_non_vuln(radar_vuln_client):
     response = radar_vuln_client.get("/vulns/concept-rcu")
     assert response.status_code == 404
+
+
+def test_vuln_detail_shows_invariants_at_risk(radar_vuln_client):
+    """INV-KK-WEB-VULN-BRIEF-DEPTH: invariant predicate text appears."""
+    response = radar_vuln_client.get("/vulns/vuln-1")
+    assert response.status_code == 200
+    assert "RCU read-side critical sections must not sleep" in response.text
+
+
+def test_vuln_detail_shows_coupling_type(radar_vuln_client):
+    """INV-KK-WEB-VULN-PROPAGATION: coupling type labels appear."""
+    response = radar_vuln_client.get("/vulns/vuln-1")
+    text = response.text
+    assert "Prerequisite dependency" in text
+
+
+def test_vuln_detail_shows_fixes(radar_vuln_client):
+    """Fix commit hash appears in Related Fixes section."""
+    response = radar_vuln_client.get("/vulns/vuln-1")
+    assert response.status_code == 200
+    assert "abc123" in response.text
+    assert "Related Fixes" in response.text
+
+
+def test_vuln_detail_shows_subsystems(radar_vuln_client):
+    """Affected subsystem names appear."""
+    response = radar_vuln_client.get("/vulns/vuln-1")
+    assert response.status_code == 200
+    assert "Scheduler" in response.text
 
 
 def test_api_ideas_json_returns_array(radar_vuln_client):

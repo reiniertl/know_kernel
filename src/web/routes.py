@@ -776,9 +776,10 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
 
     @app.get("/vulns/{vuln_id}", response_class=HTMLResponse)
     async def vuln_detail(request: Request, vuln_id: str):
-        """Vulnerability detail with propagation (ALG-KK-WEB-VULNS-DETAIL).
+        """Vulnerability research brief (ALG-KK-WEB-VULNS-DETAIL).
 
-        INV-KK-WEB-VULN-PROPAGATION: shows propagated at-risk concepts.
+        INV-KK-WEB-VULN-PROPAGATION: propagated concepts with coupling context.
+        INV-KK-WEB-VULN-BRIEF-DEPTH: full graph depth per exploited concept.
         """
         conn = request.app.state.conn
         row = conn.execute(
@@ -803,36 +804,85 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             severity = "high"
         elif cvss >= 4.0:
             severity = "medium"
+
         prop = vulnerability_propagation(conn, vuln_id)
-        direct_concepts: list[dict] = []
+
+        direct_briefs = []
         for cid in prop["direct"]:
-            cn = get_node(conn, cid)
-            if cn:
-                cn["display_name"] = display_name_for_node(cn["kind"], cn.get("attrs") or {}, cn["id"])
-                direct_concepts.append(cn)
-        propagated_groups: dict[str, list[dict]] = {
-            "dependents": [], "composed_with": [], "shared_invariant": [],
-        }
+            brief = build_concept_brief(conn, cid)
+            direct_briefs.append(brief)
+
+        propagated_details: list[dict] = []
         seen_ids: set[str] = set(prop["direct"])
-        for _cid, coupling in prop["propagated"].items():
+        for cid, coupling in prop["propagated"].items():
             for group_key in ("dependents", "composed_with", "shared_invariant"):
                 for pid in coupling.get(group_key, []):
-                    if pid not in seen_ids:
-                        seen_ids.add(pid)
-                        pn = get_node(conn, pid)
-                        if pn:
-                            pn["display_name"] = display_name_for_node(
-                                pn["kind"], pn.get("attrs") or {}, pn["id"]
-                            )
-                            propagated_groups[group_key].append(pn)
+                    if pid in seen_ids:
+                        continue
+                    seen_ids.add(pid)
+                    cn = get_node(conn, pid)
+                    if not cn:
+                        continue
+                    cn_attrs = cn.get("attrs") or {}
+                    sub_row = conn.execute(
+                        "SELECT json_extract(n.attrs, '$.name') FROM edges e "
+                        "JOIN nodes n ON e.target_id = n.id "
+                        "WHERE e.kind = 'belongs-to' AND e.source_id = ? AND n.kind = 'Subsystem'",
+                        (pid,),
+                    ).fetchone()
+                    propagated_details.append({
+                        "id": pid,
+                        "name": cn_attrs.get("name", pid),
+                        "description": cn_attrs.get("description", ""),
+                        "subsystem": sub_row[0] if sub_row else None,
+                        "coupling_type": group_key,
+                        "coupled_to": cid,
+                    })
+
+        coupling_labels = {
+            "dependents": "Prerequisite dependency",
+            "composed_with": "Protocol composition",
+            "shared_invariant": "Shared invariant governance",
+        }
+
+        fix_rows = conn.execute(
+            "SELECT n.id, n.attrs FROM nodes n "
+            "JOIN edges e ON e.source_id = n.id "
+            "WHERE e.kind = 'fixes' AND e.target_id = ? AND n.kind = 'Fix'",
+            (vuln_id,),
+        ).fetchall()
+        fixes = []
+        for fr in fix_rows:
+            fa = json.loads(fr[1]) if isinstance(fr[1], str) else (fr[1] or {})
+            fixes.append({
+                "id": fr[0],
+                "title": fa.get("title", fr[0]),
+                "commit_hash": fa.get("commit_hash", ""),
+                "fix_type": fa.get("fix_type", ""),
+                "source_date": fa.get("source_date", ""),
+            })
+
+        affected_subsystems: list[dict] = []
+        seen_subs: set[str] = set()
+        for b in direct_briefs:
+            if b["subsystem"] and b["subsystem"]["id"] not in seen_subs:
+                seen_subs.add(b["subsystem"]["id"])
+                affected_subsystems.append(b["subsystem"])
+        for pd in propagated_details:
+            if pd["subsystem"] and pd["subsystem"] not in [s["name"] for s in affected_subsystems]:
+                affected_subsystems.append({"id": None, "name": pd["subsystem"]})
+
         return templates.TemplateResponse(
             request, "vuln_detail.html",
             {
                 "node": node,
                 "cvss_score": cvss,
                 "severity": severity,
-                "direct_concepts": direct_concepts,
-                "propagated": propagated_groups,
+                "direct_briefs": direct_briefs,
+                "propagated_details": propagated_details,
+                "coupling_labels": coupling_labels,
+                "fixes": fixes,
+                "affected_subsystems": affected_subsystems,
             },
         )
 
