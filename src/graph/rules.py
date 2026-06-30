@@ -281,6 +281,7 @@ RULES_BY_KIND = {
     "Vulnerability": [check_vulnerability_has_concept],
     "Fix": [],
     "Proposal": [check_proposal_has_concept],
+    "Trend": [],
 }
 
 

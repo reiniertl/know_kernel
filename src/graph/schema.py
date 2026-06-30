@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -40,6 +40,7 @@ EDGE_KINDS = (
     "contradicted-by",
     "resulted-in",
     "motivated-by",
+    "trend-about",
 )
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
@@ -75,6 +76,7 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "contradicted-by": ("Observation", "Observation"),
     "resulted-in": [("Discussion", "Proposal"), ("Discussion", "Rejection")],
     "motivated-by": ("Benchmark", "Problem"),
+    "trend-about": ("Trend", "Concept"),
 }
 
 REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
@@ -100,9 +102,10 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "Vulnerability": ("cve_id", "title", "description", "severity", "cvss_score", "affected_versions", "status", "source_date", "artifact_class"),
     "Fix": ("title", "commit_hash", "fix_type", "source_date", "artifact_class"),
     "Proposal": ("name", "description", "status", "source_date", "artifact_class"),
+    "Trend": ("title", "description", "strength", "window_start", "window_end", "artifact_class"),
 }
 
-DATE_ATTRS = frozenset({"source_date"})
+DATE_ATTRS = frozenset({"source_date", "window_start", "window_end"})
 
 ID_PREFIXES = {
     "Concept": "concept-",
@@ -127,6 +130,7 @@ ID_PREFIXES = {
     "Vulnerability": "vuln-",
     "Fix": "fix-",
     "Proposal": "prop-",
+    "Trend": "trend-",
 }
 
 SCHEMA_SQL = """\

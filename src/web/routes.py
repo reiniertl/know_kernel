@@ -58,6 +58,7 @@ _DISPLAY_FIELDS: dict[str, tuple[str, int | None]] = {
     "Vulnerability": ("cve_id", None),
     "Fix": ("title", 60),
     "Proposal": ("name", None),
+    "Trend": ("title", None),
 }
 
 
