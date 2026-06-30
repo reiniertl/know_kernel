@@ -282,6 +282,7 @@ RULES_BY_KIND = {
     "Fix": [],
     "Proposal": [check_proposal_has_concept],
     "Trend": [],
+    "Opportunity": [],
 }
 
 

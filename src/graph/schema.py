@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -41,6 +41,8 @@ EDGE_KINDS = (
     "resulted-in",
     "motivated-by",
     "trend-about",
+    "opportunity-for",
+    "supported-by",
 )
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
@@ -77,6 +79,8 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "resulted-in": [("Discussion", "Proposal"), ("Discussion", "Rejection")],
     "motivated-by": ("Benchmark", "Problem"),
     "trend-about": ("Trend", "Concept"),
+    "opportunity-for": ("Opportunity", "Concept"),
+    "supported-by": [("Opportunity", "Problem"), ("Opportunity", "Observation"), ("Opportunity", "Discussion"), ("Opportunity", "Benchmark")],
 }
 
 REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
@@ -103,6 +107,7 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "Fix": ("title", "commit_hash", "fix_type", "source_date", "artifact_class"),
     "Proposal": ("name", "description", "status", "source_date", "artifact_class"),
     "Trend": ("title", "description", "strength", "window_start", "window_end", "artifact_class"),
+    "Opportunity": ("title", "description", "confidence", "frontier_score", "artifact_class"),
 }
 
 DATE_ATTRS = frozenset({"source_date", "window_start", "window_end"})
@@ -131,6 +136,7 @@ ID_PREFIXES = {
     "Fix": "fix-",
     "Proposal": "prop-",
     "Trend": "trend-",
+    "Opportunity": "opp-",
 }
 
 SCHEMA_SQL = """\

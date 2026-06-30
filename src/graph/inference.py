@@ -1,7 +1,8 @@
-"""Inference engine — detects patterns from graph topology (ALG-KK-INFER-TREND).
+"""Inference engine — detects patterns from graph topology.
 
-Trend nodes are computed, never extracted from text. They represent
-convergence of independent evidence on a concept within a time window.
+ALG-KK-INFER-TREND: Trend nodes from evidence convergence.
+ALG-KK-INFER-OPPORTUNITY: Opportunity nodes from high-frontier concepts.
+ALG-KK-IDEA-FEED: Top-level orchestrator combining trends + opportunities.
 """
 
 from __future__ import annotations
@@ -11,7 +12,8 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Any
 
-from graph.engine import add_edge, add_node, get_node
+from graph.engine import add_edge, add_node, get_node, list_nodes
+from graph.scoring import compute_all_scores, frontier_score
 
 
 _EVIDENCE_EDGE_KINDS = (
@@ -127,3 +129,137 @@ def detect_trends(
         })
 
     return created_trends
+
+
+_SUPPORTED_EVIDENCE_KINDS = ("Problem", "Observation", "Discussion", "Benchmark")
+_EVIDENCE_EDGE_MAP = {
+    "Problem": "identifies-problem",
+    "Observation": "observes",
+    "Discussion": "discusses",
+    "Benchmark": "benchmarks",
+}
+
+
+def detect_opportunities(
+    conn: sqlite3.Connection,
+    min_frontier: float = 8.0,
+    window_days: int = 90,
+) -> list[dict[str, Any]]:
+    """Detect high-frontier research opportunities (ALG-KK-INFER-OPPORTUNITY).
+
+    INV-KK-OPP-FRONTIER-GATE: only concepts with frontier >= min_frontier.
+    INV-KK-OPP-SUPPORTED: every Opportunity has >= 1 supported-by edge.
+    INV-KK-OPP-CONFIDENCE: confidence = evidence_count / (evidence_count + 5).
+    INV-KK-OPP-CLASS-B: artifact_class always "B".
+    """
+    concepts = list_nodes(conn, kind="Concept")
+    now_str = datetime.now(tz=None).strftime("%Y-%m-%dT%H:%M:%S")
+    created: list[dict[str, Any]] = []
+
+    for concept in concepts:
+        cid = concept["id"]
+        fs = frontier_score(conn, cid, window_days=window_days)
+        if fs < min_frontier:
+            continue
+
+        evidence_ids: list[str] = []
+        evidence_summaries: list[str] = []
+        for kind in _SUPPORTED_EVIDENCE_KINDS:
+            edge_kind = _EVIDENCE_EDGE_MAP[kind]
+            rows = conn.execute(
+                "SELECT n.id, n.attrs FROM nodes n "
+                "JOIN edges e ON e.source_id = n.id "
+                "WHERE e.kind = ? AND e.target_id = ? AND n.kind = ?",
+                (edge_kind, cid, kind),
+            ).fetchall()
+            for row in rows:
+                evidence_ids.append(row[0])
+                attrs = json.loads(row[1])
+                if kind == "Problem":
+                    evidence_summaries.append(f"Problem: {attrs.get('title', '')}")
+                elif kind == "Observation":
+                    evidence_summaries.append(f"Observation: {attrs.get('claim', '')}")
+                elif kind == "Discussion":
+                    evidence_summaries.append(f"Discussion: {attrs.get('title', '')}")
+                elif kind == "Benchmark":
+                    evidence_summaries.append(f"Benchmark: {attrs.get('metric', '')}")
+
+        if not evidence_ids:
+            continue
+
+        concept_name = concept["attrs"].get("name", cid)
+        evidence_count = len(evidence_ids)
+        confidence = evidence_count / (evidence_count + 5)
+
+        desc_parts = [f"High-frontier opportunity for {concept_name} (frontier_score={fs:.1f})."]
+        if evidence_summaries:
+            desc_parts.append("Supporting evidence: " + "; ".join(evidence_summaries[:5]))
+
+        opp_id = f"opp-{cid}-{now_str.replace(':', '').replace('-', '')}"
+        opp_attrs = {
+            "title": f"Investigate {concept_name}",
+            "description": " ".join(desc_parts),
+            "confidence": round(confidence, 4),
+            "frontier_score": round(fs, 4),
+            "artifact_class": "B",
+        }
+        add_node(conn, opp_id, "Opportunity", opp_attrs)
+        add_edge(conn, "opportunity-for", opp_id, cid)
+
+        for ev_id in evidence_ids:
+            add_edge(conn, "supported-by", opp_id, ev_id)
+
+        created.append({
+            "opportunity_id": opp_id,
+            "concept_id": cid,
+            "frontier_score": round(fs, 4),
+            "confidence": round(confidence, 4),
+            "evidence_count": evidence_count,
+        })
+
+    return created
+
+
+def generate_idea_feed(
+    conn: sqlite3.Connection,
+    min_frontier: float = 8.0,
+    window_days: int = 90,
+) -> list[dict[str, Any]]:
+    """Top-level idea feed combining trends + opportunities (ALG-KK-IDEA-FEED).
+
+    INV-KK-IDEA-FEED-RANKED: results sorted by frontier_score descending.
+    """
+    trends = detect_trends(conn, window_days=window_days)
+    opportunities = detect_opportunities(conn, min_frontier=min_frontier, window_days=window_days)
+
+    feed: list[dict[str, Any]] = []
+
+    for opp in opportunities:
+        cid = opp["concept_id"]
+        scores = compute_all_scores(conn, cid, window_days=window_days)
+        feed.append({
+            "type": "opportunity",
+            "id": opp["opportunity_id"],
+            "concept_id": cid,
+            "frontier_score": opp["frontier_score"],
+            "confidence": opp["confidence"],
+            "evidence_count": opp["evidence_count"],
+            "scores": scores,
+        })
+
+    for trend in trends:
+        cid = trend["concept_id"]
+        scores = compute_all_scores(conn, cid, window_days=window_days)
+        feed.append({
+            "type": "trend",
+            "id": trend["trend_id"],
+            "concept_id": cid,
+            "frontier_score": scores["frontier"],
+            "strength": trend["strength"],
+            "window_start": trend["window_start"],
+            "window_end": trend["window_end"],
+            "scores": scores,
+        })
+
+    feed.sort(key=lambda x: x["frontier_score"], reverse=True)
+    return feed
