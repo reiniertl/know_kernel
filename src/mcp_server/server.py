@@ -1,11 +1,15 @@
 """MCP server -- exposes Class B concepts to opencode via MCP protocol.
 
-ALG-KK-MCP-QUERY: query the Class B-only snapshot DB (11 tools).
+ALG-KK-MCP-QUERY: query the Class B-only snapshot DB (15 tools).
 INV-KK-MCP-SNAPSHOT-ONLY: only the snapshot path is opened; master DB never accessed.
 INV-KK-MCP-NO-WRITE: snapshot DB opened read-only (uri mode=ro).
-INV-KK-MCP-TOOLS-EXPOSED: exactly 11 tools; no Evidence/Source/Advisory in results.
+INV-KK-MCP-TOOLS-EXPOSED: exactly 15 tools; no Evidence/Source/Advisory in results.
 INV-KK-MCP-EXPLORE-DEPTH-CAP: explore_subgraph caps depth at 3.
 INV-KK-MCP-SEARCH-ALL-KINDS: search_concepts uses dynamic ALLOWED_KINDS from exporter.
+INV-KK-MCP-IDEA-FEED-RANKED: get_idea_feed returns ideas sorted by frontier desc.
+INV-KK-MCP-SCORES-COMPLETE: get_concept_scores returns all 5 score types.
+INV-KK-MCP-HOT-AREAS-SUBSYSTEM: get_hot_areas aggregates heat per subsystem.
+INV-KK-MCP-PROBLEMS-SEVERITY: get_problems_for_concept returns problems sorted by severity.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from mcp.server.fastmcp import FastMCP
 from export.exporter import ALLOWED_KINDS
 from graph.engine import (
     compare_neighborhoods,
+    get_node,
     match_scenarios,
     path_exists,
     query_edges_by_attrs,
@@ -26,6 +31,7 @@ from graph.engine import (
     subgraph_around,
     transitive_impact,
 )
+from graph.scoring import compute_all_scores, heat_score
 
 mcp = FastMCP("know_kernel")
 
@@ -246,6 +252,163 @@ def query_edges(kind: str, filters: dict[str, str] | None = None) -> list[dict[s
         and node_kinds.get(e["target_id"], "") in allowed
     ]
     return filtered[:50]
+
+
+_SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+
+@mcp.tool()
+def get_idea_feed(
+    subsystem: str | None = None, top_k: int = 10, window_days: int = 90,
+) -> list[dict[str, Any]]:
+    """Get ranked idea feed (opportunities + trends) sorted by frontier_score desc.
+
+    INV-KK-MCP-IDEA-FEED-RANKED: sorted by frontier_score descending.
+    Optional subsystem filter restricts to ideas linked to concepts in that subsystem.
+    Reads existing Opportunity/Trend nodes from snapshot (INV-KK-MCP-SNAPSHOT-ONLY).
+    """
+    conn = _get_conn()
+    ideas: list[dict[str, Any]] = []
+    for row in conn.execute(
+        "SELECT id, kind, attrs FROM nodes WHERE kind = 'Opportunity' ORDER BY id"
+    ).fetchall():
+        node = _row_to_dict(row)
+        attrs = node.get("attrs") or {}
+        fs = attrs.get("frontier_score", 0)
+        if isinstance(fs, str):
+            try:
+                fs = float(fs)
+            except ValueError:
+                fs = 0
+        concept_id = None
+        concept_name = None
+        opp_edge = conn.execute(
+            "SELECT target_id FROM edges WHERE kind = 'opportunity-for' AND source_id = ?",
+            (node["id"],),
+        ).fetchone()
+        if opp_edge:
+            concept_id = opp_edge[0]
+            cn = get_node(conn, concept_id)
+            if cn:
+                concept_name = (cn["attrs"] or {}).get("name", concept_id)
+        ideas.append({
+            "type": "opportunity",
+            "id": node["id"],
+            "concept_id": concept_id,
+            "concept_name": concept_name,
+            "title": attrs.get("title", node["id"]),
+            "frontier_score": fs,
+            "confidence": attrs.get("confidence"),
+        })
+    for row in conn.execute(
+        "SELECT id, kind, attrs FROM nodes WHERE kind = 'Trend' ORDER BY id"
+    ).fetchall():
+        node = _row_to_dict(row)
+        attrs = node.get("attrs") or {}
+        concept_id = None
+        concept_name = None
+        trend_edge = conn.execute(
+            "SELECT target_id FROM edges WHERE kind = 'trend-about' AND source_id = ?",
+            (node["id"],),
+        ).fetchone()
+        if trend_edge:
+            concept_id = trend_edge[0]
+            cn = get_node(conn, concept_id)
+            if cn:
+                concept_name = (cn["attrs"] or {}).get("name", concept_id)
+        scores = compute_all_scores(conn, concept_id, window_days=window_days) if concept_id else {}
+        fs = scores.get("frontier", 0)
+        ideas.append({
+            "type": "trend",
+            "id": node["id"],
+            "concept_id": concept_id,
+            "concept_name": concept_name,
+            "title": attrs.get("title", node["id"]),
+            "frontier_score": fs,
+            "strength": attrs.get("strength"),
+        })
+    ideas.sort(key=lambda x: x["frontier_score"], reverse=True)
+    if subsystem:
+        ideas = [
+            i for i in ideas
+            if i.get("concept_id") and conn.execute(
+                "SELECT 1 FROM edges WHERE kind = 'belongs-to' AND source_id = ? AND target_id = ?",
+                (i["concept_id"], subsystem),
+            ).fetchone()
+        ]
+    return ideas[:top_k]
+
+
+@mcp.tool()
+def get_concept_scores(concept_id: str) -> dict[str, Any]:
+    """Get all 5 scores for a concept: heat, pain, impact, leverage, frontier.
+
+    INV-KK-MCP-SCORES-COMPLETE: returns all 5 score types.
+    Returns empty dict if concept not found.
+    """
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id FROM nodes WHERE id = ? AND kind = 'Concept'", (concept_id,)
+    ).fetchone()
+    if row is None:
+        return {}
+    return compute_all_scores(conn, concept_id)
+
+
+@mcp.tool()
+def get_hot_areas(top_k: int = 10, window_days: int = 30) -> list[dict[str, Any]]:
+    """Get subsystems ranked by aggregate heat score.
+
+    INV-KK-MCP-HOT-AREAS-SUBSYSTEM: aggregates heat per subsystem via belongs-to edges.
+    """
+    conn = _get_conn()
+    sub_rows = conn.execute(
+        "SELECT id, kind, attrs FROM nodes WHERE kind = 'Subsystem' ORDER BY id"
+    ).fetchall()
+    results: list[dict[str, Any]] = []
+    for sr in sub_rows:
+        sub = _row_to_dict(sr)
+        sub_id = sub["id"]
+        concept_rows = conn.execute(
+            "SELECT e.source_id FROM edges e "
+            "JOIN nodes n ON e.source_id = n.id AND n.kind = 'Concept' "
+            "WHERE e.kind = 'belongs-to' AND e.target_id = ?",
+            (sub_id,),
+        ).fetchall()
+        concept_ids = [r[0] for r in concept_rows]
+        if not concept_ids:
+            continue
+        total_heat = sum(heat_score(conn, cid, window_days=window_days) for cid in concept_ids)
+        attrs = sub.get("attrs") or {}
+        results.append({
+            "subsystem_id": sub_id,
+            "name": attrs.get("name", sub_id),
+            "concept_count": len(concept_ids),
+            "heat": total_heat,
+        })
+    results.sort(key=lambda x: x["heat"], reverse=True)
+    return results[:top_k]
+
+
+@mcp.tool()
+def get_problems_for_concept(concept_id: str) -> list[dict[str, Any]]:
+    """Get open problems for a concept, sorted by severity descending.
+
+    INV-KK-MCP-PROBLEMS-SEVERITY: sorted by severity (critical > high > medium > low).
+    """
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT n.id, n.kind, n.attrs FROM nodes n "
+        "JOIN edges e ON e.source_id = n.id "
+        "WHERE e.kind = 'identifies-problem' AND e.target_id = ? AND n.kind = 'Problem'",
+        (concept_id,),
+    ).fetchall()
+    problems = [_row_to_dict(r) for r in rows]
+    problems.sort(
+        key=lambda p: _SEVERITY_RANK.get((p.get("attrs") or {}).get("severity", ""), 0),
+        reverse=True,
+    )
+    return problems
 
 
 def main() -> None:

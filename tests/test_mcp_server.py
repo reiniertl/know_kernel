@@ -443,3 +443,181 @@ def test_search_returns_evidence_kinds(evidence_snapshot_path):
     results = srv.search_concepts("zero overhead")
     kinds_found = {r["kind"] for r in results}
     assert "Observation" in kinds_found, f"Observation not found, got kinds: {kinds_found}"
+
+
+# --- MCP Idea Tools Part 1 (Stage 17) ---
+
+
+@pytest.fixture
+def idea_snapshot_path(tmp_path):
+    """Snapshot with ideas, scores, and problems for idea tool tests."""
+    master_path = tmp_path / "master_idea.db"
+    snap_path = tmp_path / "snapshot_idea.db"
+
+    conn = init_db(master_path)
+    add_node(conn, "src-1", "Source", {
+        "url": "https://example.com/paper.pdf",
+        "source_type": "paper",
+        "license": "MIT",
+    })
+    add_node(conn, "ev-1", "Evidence", {"artifact_class": "A", "contamination_level": "weak-copyleft"})
+    add_node(conn, "ev-2", "Evidence", {"artifact_class": "A", "contamination_level": "weak-copyleft"})
+    add_edge(conn, "sourced-from", "ev-1", "src-1")
+    add_edge(conn, "sourced-from", "ev-2", "src-1")
+    add_node(conn, "adv-1", "Advisory", {"assessment": "Cleared.", "contamination_confirmed": "none"})
+    add_edge(conn, "assessed-by", "src-1", "adv-1")
+
+    add_node(conn, "sub-sched", "Subsystem", {"name": "Scheduler"})
+    add_node(conn, "sub-mm", "Subsystem", {"name": "Memory Management"})
+    add_node(conn, "concept-rcu", "Concept", {
+        "name": "RCU", "description": "Read-Copy-Update", "artifact_class": "B",
+        "key_properties": ["lock-free reads"], "tradeoffs": ["grace period"],
+        "design_rationale": "Read optimization.",
+    })
+    add_node(conn, "concept-slab", "Concept", {
+        "name": "SLAB", "description": "Slab allocator", "artifact_class": "B",
+        "key_properties": ["cache-friendly"], "tradeoffs": ["fragmentation"],
+        "design_rationale": "Kernel memory allocation.",
+    })
+    add_edge(conn, "extracted-from", "concept-rcu", "ev-1")
+    add_edge(conn, "extracted-from", "concept-slab", "ev-2")
+    add_edge(conn, "belongs-to", "concept-rcu", "sub-sched")
+    add_edge(conn, "belongs-to", "concept-slab", "sub-mm")
+
+    add_node(conn, "prob-1", "Problem", {
+        "title": "Grace period stall", "description": "Stalls under load",
+        "severity": "critical", "status": "open",
+        "source_date": "2026-06-15", "artifact_class": "B",
+    })
+    add_node(conn, "prob-2", "Problem", {
+        "title": "Minor scheduling delay", "description": "Small delay",
+        "severity": "low", "status": "open",
+        "source_date": "2026-06-10", "artifact_class": "B",
+    })
+    add_node(conn, "prob-3", "Problem", {
+        "title": "Priority inversion", "description": "Priority issue",
+        "severity": "high", "status": "open",
+        "source_date": "2026-06-12", "artifact_class": "B",
+    })
+    add_edge(conn, "identifies-problem", "prob-1", "concept-rcu")
+    add_edge(conn, "identifies-problem", "prob-2", "concept-rcu")
+    add_edge(conn, "identifies-problem", "prob-3", "concept-rcu")
+
+    add_node(conn, "opp-rcu", "Opportunity", {
+        "title": "Investigate RCU latency", "description": "High-frontier opportunity",
+        "confidence": 0.5, "frontier_score": 15.0, "artifact_class": "B",
+    })
+    add_edge(conn, "opportunity-for", "opp-rcu", "concept-rcu")
+    add_edge(conn, "supported-by", "opp-rcu", "prob-1")
+
+    add_node(conn, "trend-slab", "Trend", {
+        "title": "SLAB convergence", "description": "Trend for slab",
+        "strength": 3, "window_start": "2026-06-01", "window_end": "2026-06-20",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "trend-about", "trend-slab", "concept-slab")
+
+    conn.commit()
+    conn.close()
+
+    export_class_b_snapshot(master_path, snap_path)
+    srv.init_snapshot(str(snap_path))
+    yield snap_path
+
+    if srv._conn is not None:
+        srv._conn.close()
+        srv._conn = None
+
+
+def test_get_idea_feed_returns_list(idea_snapshot_path):
+    result = srv.get_idea_feed()
+    assert isinstance(result, list)
+    assert len(result) >= 1
+
+
+def test_get_idea_feed_ranked_by_frontier(idea_snapshot_path):
+    """INV-KK-MCP-IDEA-FEED-RANKED: sorted by frontier_score desc."""
+    result = srv.get_idea_feed()
+    for i in range(len(result) - 1):
+        assert result[i]["frontier_score"] >= result[i + 1]["frontier_score"]
+
+
+def test_get_idea_feed_top_k(idea_snapshot_path):
+    result = srv.get_idea_feed(top_k=1)
+    assert len(result) <= 1
+
+
+def test_get_idea_feed_subsystem_filter(idea_snapshot_path):
+    result = srv.get_idea_feed(subsystem="sub-sched")
+    for item in result:
+        assert item.get("concept_id") is not None
+
+
+def test_get_idea_feed_empty_on_nonexistent_subsystem(idea_snapshot_path):
+    result = srv.get_idea_feed(subsystem="sub-nonexistent")
+    assert len(result) == 0
+
+
+def test_get_concept_scores_returns_all_5(idea_snapshot_path):
+    """INV-KK-MCP-SCORES-COMPLETE: returns all 5 score types."""
+    result = srv.get_concept_scores("concept-rcu")
+    assert isinstance(result, dict)
+    assert set(result.keys()) == {"heat", "pain", "impact", "leverage", "frontier"}
+    for v in result.values():
+        assert isinstance(v, (int, float))
+
+
+def test_get_concept_scores_empty_for_missing(idea_snapshot_path):
+    result = srv.get_concept_scores("concept-nonexistent")
+    assert result == {}
+
+
+def test_get_concept_scores_empty_for_non_concept(idea_snapshot_path):
+    result = srv.get_concept_scores("sub-sched")
+    assert result == {}
+
+
+def test_get_hot_areas_returns_subsystems(idea_snapshot_path):
+    """INV-KK-MCP-HOT-AREAS-SUBSYSTEM: aggregates heat per subsystem."""
+    result = srv.get_hot_areas()
+    assert isinstance(result, list)
+    assert len(result) >= 1
+    for item in result:
+        assert "subsystem_id" in item
+        assert "name" in item
+        assert "heat" in item
+        assert "concept_count" in item
+
+
+def test_get_hot_areas_sorted_by_heat(idea_snapshot_path):
+    result = srv.get_hot_areas()
+    for i in range(len(result) - 1):
+        assert result[i]["heat"] >= result[i + 1]["heat"]
+
+
+def test_get_hot_areas_top_k(idea_snapshot_path):
+    result = srv.get_hot_areas(top_k=1)
+    assert len(result) <= 1
+
+
+def test_get_problems_for_concept_returns_problems(idea_snapshot_path):
+    result = srv.get_problems_for_concept("concept-rcu")
+    assert isinstance(result, list)
+    assert len(result) == 3
+
+
+def test_get_problems_sorted_by_severity(idea_snapshot_path):
+    """INV-KK-MCP-PROBLEMS-SEVERITY: sorted by severity desc."""
+    result = srv.get_problems_for_concept("concept-rcu")
+    severities = [(r.get("attrs") or {}).get("severity", "") for r in result]
+    assert severities == ["critical", "high", "low"]
+
+
+def test_get_problems_empty_for_no_problems(idea_snapshot_path):
+    result = srv.get_problems_for_concept("concept-slab")
+    assert result == []
+
+
+def test_get_problems_empty_for_missing_concept(idea_snapshot_path):
+    result = srv.get_problems_for_concept("concept-nonexistent")
+    assert result == []
