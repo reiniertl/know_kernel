@@ -127,6 +127,7 @@ def cmd_poll(args: argparse.Namespace, configs: list[FeedConfig]) -> int:
     elif args.extract:
         print("[extract] No new sources to extract from.")
 
+    conn.commit()
     print(f"\nTotal: {total} new item(s) ingested.")
     return 0
 

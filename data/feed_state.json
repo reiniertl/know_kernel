@@ -1,0 +1,86 @@
+{
+  "lwn": {
+    "seen_urls": [
+      "https://lwn.net/Articles/1077619/",
+      "https://lwn.net/Articles/1078696/",
+      "https://lwn.net/Articles/1079596/",
+      "https://lwn.net/Articles/1076210/",
+      "https://lwn.net/Articles/1078767/",
+      "https://lwn.net/Articles/1074291/",
+      "https://lwn.net/Articles/1077767/",
+      "https://lwn.net/Articles/1078068/",
+      "https://lwn.net/Articles/1078526/",
+      "https://lwn.net/Articles/1078964/",
+      "https://lwn.net/Articles/1077759/",
+      "https://lwn.net/Articles/1079385/",
+      "https://lwn.net/Articles/1078380/",
+      "https://lwn.net/Articles/1078697/",
+      "https://lwn.net/Articles/1078367/",
+      "https://lwn.net/Articles/1077739/",
+      "https://lwn.net/Articles/1077740/",
+      "https://lwn.net/Articles/1078539/",
+      "https://lwn.net/Articles/1077459/",
+      "https://lwn.net/Articles/1078699/"
+    ],
+    "last_fetched_timestamp": "2026-06-17",
+    "last_fetched_url": "https://lwn.net/Articles/1077767/"
+  },
+  "hackernews": {
+    "seen_urls": [
+      "https://arxiv.org/abs/2606.22283",
+      "https://chrismorgan.info/font-family",
+      "https://fergusfinn.com/blog/what-happens-when-you-run-a-gpu-kernel/",
+      "https://fil-c.org/context_switches",
+      "https://arstechnica.com/ai/2026/06/south-korea-to-spend-1t-on-more-memory-chip-production-and-humanoid-robots/",
+      "https://github.com/SMJAI/open-memory-protocol",
+      "https://edera.dev/stories/numa-part-1-cores-memory-and-the-distance-between-them",
+      "https://en.sedaily.com/international/2026/06/29/samsung-sk-hynix-micron-sued-in-us-over-memory-price-fixing",
+      "https://netflixtechblog.com/how-netflix-simplified-batch-compute-with-kueue-87860682629c",
+      "https://publicdomainreview.org/collection/venice-bridge-fights/"
+    ],
+    "last_fetched_timestamp": "2026-06-24",
+    "last_fetched_url": "https://edera.dev/stories/numa-part-1-cores-memory-and-the-distance-between-them"
+  },
+  "lkml": {
+    "seen_urls": [],
+    "last_fetched_timestamp": ""
+  },
+  "phoronix": {
+    "seen_urls": [
+      "https://www.phoronix.com/news/OpenAPV-0.3",
+      "https://www.phoronix.com/news/CachyOS-June-2026-Released",
+      "https://www.phoronix.com/news/Red-Hat-ARM-Engineer-Back-Ryzen",
+      "https://www.phoronix.com/news/Infinity-Scheduler",
+      "https://www.phoronix.com/news/Linux-MD-RAID5-Scalability-Work",
+      "https://www.phoronix.com/news/Intel-HDR-Over-DP-MST",
+      "https://www.phoronix.com/news/Wine-11.12-Released",
+      "https://www.phoronix.com/news/Linux-7.2-rc1-Released",
+      "https://www.phoronix.com/news/Linux-7.2-x86-Platform-Drivers",
+      "https://www.phoronix.com/news/Linux-7.3-DRM-Color-Format",
+      "https://www.phoronix.com/news/Shotcut-26.6-Released",
+      "https://www.phoronix.com/news/ZLUDA-6-Released",
+      "https://www.phoronix.com/news/Reserved-THP-Linux",
+      "https://www.phoronix.com/news/Linux-7.2-43-Million-Lines",
+      "https://www.phoronix.com/news/Bcachefs-1.38.7-Rust-Kernel",
+      "https://www.phoronix.com/review/nvidia-vera-gb10",
+      "https://www.phoronix.com/news/Intel-Linux-Q2-2026",
+      "https://www.phoronix.com/news/RADV-Descriptor-Heap-Default",
+      "https://www.phoronix.com/review/linux-72-threadripper",
+      "https://www.phoronix.com/news/Git-2.55-Released",
+      "https://www.phoronix.com/news/Linux-Kernel-Q2-2026",
+      "https://www.phoronix.com/news/Microsoft-Preview-WSL-WSLC",
+      "https://www.phoronix.com/news/Nourish-Wayland-Compositor",
+      "https://www.phoronix.com/news/COSMIC-System-Monitor",
+      "https://www.phoronix.com/news/PoC-Per-Background-GNOME",
+      "https://www.phoronix.com/news/KDE-Plasma-This-Week-Crashes",
+      "https://www.phoronix.com/news/Mageia-10-Released",
+      "https://www.phoronix.com/news/GNOME-Newelle-Image-Gen",
+      "https://www.phoronix.com/news/AMD-Low-Power-CPU-Core-Linux",
+      "https://www.phoronix.com/news/Arch-Linux-Archinstall-4.4",
+      "https://www.phoronix.com/news/Vim-GTK3-Wayland-Faster",
+      "https://www.phoronix.com/news/TLAC-Open-Source-Anti-Cheat"
+    ],
+    "last_fetched_timestamp": "2026-06-26",
+    "last_fetched_url": "https://www.phoronix.com/news/PoC-Per-Background-GNOME"
+  }
+}
