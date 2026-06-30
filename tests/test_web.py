@@ -808,6 +808,40 @@ def ideas_client(tmp_path):
         "artifact_class": "B",
     })
     add_edge(conn, "trend-about", "trend-rcu-1", "concept-rcu")
+    # Subsystem for concept
+    add_node(conn, "sub-sync", "Subsystem", {"name": "Synchronization"})
+    add_edge(conn, "belongs-to", "concept-rcu", "sub-sync")
+    # KernelInvariant
+    add_node(conn, "kinv-rcu-1", "KernelInvariant", {
+        "predicate": "RCU callbacks must complete within grace period",
+        "strength": "strong",
+        "scope": "all RCU domains",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "governed-by", "kinv-rcu-1", "concept-rcu")
+    # Vulnerability
+    add_node(conn, "vuln-rcu-1", "Vulnerability", {
+        "cve_id": "CVE-2026-9999",
+        "title": "RCU use-after-free",
+        "description": "Use-after-free via stale RCU pointer",
+        "severity": "high",
+        "cvss_score": "7.8",
+        "affected_versions": "6.1-6.5",
+        "status": "open",
+        "source_date": "2026-06-12",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "exploits", "vuln-rcu-1", "concept-rcu")
+    # Prerequisite concept
+    add_node(conn, "concept-preempt", "Concept", {
+        "name": "Preemption",
+        "description": "Preemptive scheduling",
+        "artifact_class": "B",
+        "key_properties": ["latency"],
+        "tradeoffs": ["throughput vs latency"],
+        "design_rationale": "Lower latency.",
+    })
+    add_edge(conn, "prerequisite", "concept-preempt", "concept-rcu")
     conn.commit()
     conn.close()
     app = create_app(str(db_path))
@@ -873,14 +907,14 @@ def test_ideas_detail_shows_evidence(ideas_client):
 
 
 def test_ideas_detail_evidence_ordered_by_date(ideas_client):
-    """INV-KK-WEB-IDEAS-EVIDENCE-CHAIN: evidence ordered by source_date."""
+    """INV-KK-WEB-IDEAS-EVIDENCE-CHAIN: evidence ordered by source_date desc."""
     response = ideas_client.get("/ideas/opp-rcu-1")
     text = response.text
     obs_pos = text.find("2026-06-10")
     prob_pos = text.find("2026-06-15")
     assert obs_pos > 0
     assert prob_pos > 0
-    assert obs_pos < prob_pos
+    assert prob_pos < obs_pos
 
 
 def test_ideas_detail_trend_200(ideas_client):
@@ -905,6 +939,45 @@ def test_ideas_detail_shows_related(ideas_client):
     assert response.status_code == 200
     assert "Related Ideas" in response.text
     assert "Convergence on RCU" in response.text
+
+
+def test_ideas_detail_shows_scores(ideas_client):
+    """INV-KK-WEB-IDEA-BRIEF-DEPTH: scores table rendered."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "Scores" in response.text
+    assert "Heat" in response.text
+    assert "Pain" in response.text
+
+
+def test_ideas_detail_shows_evidence_verbatim(ideas_client):
+    """INV-KK-WEB-IDEA-BRIEF-VERBATIM: evidence text matches node attr."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "RCU grace period too long" in response.text
+    assert "RCU latency spikes on NUMA" in response.text
+
+
+def test_ideas_detail_shows_vuln_section(ideas_client):
+    """INV-KK-WEB-IDEA-BRIEF-DEPTH: vulnerability section rendered."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "CVE-2026-9999" in response.text
+    assert "7.8" in response.text
+
+
+def test_ideas_detail_shows_invariants(ideas_client):
+    """INV-KK-WEB-IDEA-BRIEF-DEPTH: invariant predicate text appears."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "RCU callbacks must complete within grace period" in response.text
+
+
+def test_ideas_detail_shows_prerequisites(ideas_client):
+    """INV-KK-WEB-IDEA-BRIEF-DEPTH: dependent concept names appear."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "Preemption" in response.text
 
 
 def test_dashboard_links_to_ideas(ideas_client):

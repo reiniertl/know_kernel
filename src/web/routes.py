@@ -21,6 +21,7 @@ from graph.engine import (
     ranked_recommendations,
     transitive_impact,
 )
+from graph.briefing import build_concept_brief
 from graph.scoring import compute_all_scores, heat_score, pain_score, vulnerability_propagation
 
 
@@ -562,9 +563,11 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
 
     @app.get("/ideas/{idea_id}", response_class=HTMLResponse)
     async def idea_detail(request: Request, idea_id: str):
-        """Idea detail with evidence chain (ALG-KK-WEB-IDEAS-DETAIL).
+        """Idea research brief (ALG-KK-WEB-IDEAS-DETAIL).
 
-        INV-KK-WEB-IDEAS-EVIDENCE-CHAIN: shows all linked evidence, ordered by source_date.
+        INV-KK-WEB-IDEAS-EVIDENCE-CHAIN: verbatim evidence, date-ordered.
+        INV-KK-WEB-IDEA-BRIEF-VERBATIM: evidence text unmodified.
+        INV-KK-WEB-IDEA-BRIEF-DEPTH: full graph depth per concept.
         """
         conn = request.app.state.conn
         row = conn.execute(
@@ -576,73 +579,67 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         if node["kind"] not in ("Opportunity", "Trend"):
             raise HTTPException(status_code=404, detail="Not an idea node")
 
-        concepts: list[dict] = []
-        evidence: list[dict] = []
-        concept_scores: dict[str, float] = {}
-
         if node["kind"] == "Opportunity":
-            opp_edges = conn.execute(
-                "SELECT target_id FROM edges WHERE kind = 'opportunity-for' AND source_id = ?",
-                (idea_id,),
-            ).fetchall()
-            for oe in opp_edges:
-                cn = get_node(conn, oe[0])
-                if cn:
-                    cn["display_name"] = display_name_for_node(cn["kind"], cn.get("attrs") or {}, cn["id"])
-                    concepts.append(cn)
-                    concept_scores = compute_all_scores(conn, cn["id"])
+            edge_kind = "opportunity-for"
+        else:
+            edge_kind = "trend-about"
+        concept_edges = conn.execute(
+            "SELECT target_id FROM edges WHERE kind = ? AND source_id = ?",
+            (edge_kind, idea_id),
+        ).fetchall()
+        concept_ids = [e[0] for e in concept_edges]
 
-            sup_edges = conn.execute(
-                "SELECT target_id FROM edges WHERE kind = 'supported-by' AND source_id = ?",
-                (idea_id,),
-            ).fetchall()
-            for se in sup_edges:
-                ev_node = get_node(conn, se[0])
-                if ev_node:
-                    attrs = ev_node.get("attrs") or {}
-                    ev_node["source_date"] = attrs.get("source_date", "")
-                    ev_node["display_name"] = display_name_for_node(
-                        ev_node["kind"], attrs, ev_node["id"]
-                    )
-                    evidence.append(ev_node)
+        briefs = []
+        for cid in concept_ids:
+            brief = build_concept_brief(conn, cid)
+            briefs.append(brief)
 
-        elif node["kind"] == "Trend":
-            trend_edges = conn.execute(
-                "SELECT target_id FROM edges WHERE kind = 'trend-about' AND source_id = ?",
-                (idea_id,),
-            ).fetchall()
-            for te in trend_edges:
-                cn = get_node(conn, te[0])
-                if cn:
-                    cn["display_name"] = display_name_for_node(cn["kind"], cn.get("attrs") or {}, cn["id"])
-                    concepts.append(cn)
-                    concept_scores = compute_all_scores(conn, cn["id"])
+        all_evidence: list[dict] = []
+        seen_evidence_ids: set[str] = set()
+        for b in briefs:
+            for ev in b["timeline"]:
+                if ev["id"] not in seen_evidence_ids:
+                    seen_evidence_ids.add(ev["id"])
+                    all_evidence.append(ev)
+        all_evidence.sort(key=lambda x: x.get("source_date") or "", reverse=True)
 
-        evidence.sort(key=lambda x: x.get("source_date") or "")
+        total_vulns = sum(len(b["vulnerabilities"]) for b in briefs)
+        total_problems = sum(len(b["problems"]) for b in briefs)
+        total_dependents = sum(len(b["prerequisites"]["depended_on_by"]) for b in briefs)
+        critical_vulns = sum(
+            1 for b in briefs for v in b["vulnerabilities"]
+            if v.get("severity") == "critical"
+        )
+        high_vulns = sum(
+            1 for b in briefs for v in b["vulnerabilities"]
+            if v.get("severity") == "high"
+        )
 
         related_ideas: list[dict] = []
-        concept_ids = {c["id"] for c in concepts}
-        if concept_ids:
-            for cid in concept_ids:
-                rel_rows = conn.execute(
-                    "SELECT n.id, n.kind, n.attrs FROM nodes n "
-                    "JOIN edges e ON e.source_id = n.id "
-                    "WHERE (e.kind = 'opportunity-for' OR e.kind = 'trend-about') "
-                    "AND e.target_id = ? AND n.id != ?",
-                    (cid, idea_id),
-                ).fetchall()
-                for rr in _rows_to_dicts(rel_rows):
-                    if not any(ri["id"] == rr["id"] for ri in related_ideas):
-                        related_ideas.append(rr)
+        for cid in concept_ids:
+            rel_rows = conn.execute(
+                "SELECT n.id, n.kind, n.attrs FROM nodes n "
+                "JOIN edges e ON e.source_id = n.id "
+                "WHERE (e.kind = 'opportunity-for' OR e.kind = 'trend-about') "
+                "AND e.target_id = ? AND n.id != ?",
+                (cid, idea_id),
+            ).fetchall()
+            for rr in _rows_to_dicts(rel_rows):
+                if not any(ri["id"] == rr["id"] for ri in related_ideas):
+                    related_ideas.append(rr)
 
         return templates.TemplateResponse(
             request,
             "idea_detail.html",
             {
                 "node": node,
-                "concepts": concepts,
-                "evidence": evidence,
-                "concept_scores": concept_scores,
+                "briefs": briefs,
+                "all_evidence": all_evidence,
+                "total_vulns": total_vulns,
+                "total_problems": total_problems,
+                "total_dependents": total_dependents,
+                "critical_vulns": critical_vulns,
+                "high_vulns": high_vulns,
                 "related_ideas": related_ideas,
             },
         )
