@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Kernel Idea Feed</h1>
+<p>{{ ideas|length }} ideas{% if min_score > 0 %} (min score: {{ min_score }}){% endif %} — {{ window_days }}-day window</p>
+
+<form method="get" action="/ideas" style="margin-bottom:1rem;">
+  <label>Min score: <input type="number" name="min_score" value="{{ min_score }}" step="0.1" min="0" style="width:5rem;font-family:monospace;"></label>
+  <label style="margin-left:1rem;">Window (days): <input type="number" name="window_days" value="{{ window_days }}" min="1" max="365" style="width:5rem;font-family:monospace;"></label>
+  <button type="submit" style="margin-left:1rem;">Filter</button>
+</form>
+
+{% for idea in ideas %}
+<div class="card" style="margin-bottom:1rem;">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;">
+    <h3 style="margin:0;"><a href="/ideas/{{ idea.id }}">{{ idea.title }}</a></h3>
+    <span class="badge" style="background:{% if idea.type == 'opportunity' %}#2980b9{% else %}#00897b{% endif %};">{{ idea.type }}</span>
+  </div>
+  <div style="margin:0.4rem 0;font-size:0.9em;">
+    Frontier: <strong>{{ "%.1f"|format(idea.frontier_score) }}</strong>
+    {% if idea.scores %}
+    &nbsp;|&nbsp; Heat: {{ "%.1f"|format(idea.scores.heat) }}
+    &nbsp;|&nbsp; Pain: {{ "%.1f"|format(idea.scores.pain) }}
+    &nbsp;|&nbsp; Leverage: {{ "%.1f"|format(idea.scores.leverage) }}
+    {% endif %}
+    {% if idea.confidence is not none %}
+    &nbsp;|&nbsp; Confidence: {{ "%.0f"|format(idea.confidence * 100) }}%
+    {% endif %}
+  </div>
+  {% if idea.concept_name %}
+  <div style="font-size:0.85em;color:#555;">
+    Concept: <a href="/concepts/{{ idea.concept_id }}">{{ idea.concept_name }}</a>
+  </div>
+  {% endif %}
+  {% if idea.evidence_count %}
+  <div style="font-size:0.85em;color:#555;">Evidence: {{ idea.evidence_count }} supporting nodes</div>
+  {% endif %}
+  {% if idea.strength %}
+  <div style="font-size:0.85em;color:#555;">Strength: {{ idea.strength }} independent sources ({{ idea.window_start }} to {{ idea.window_end }})</div>
+  {% endif %}
+</div>
+{% else %}
+<p>No ideas found. Run feed ingestion and scoring to generate opportunities.</p>
+{% endfor %}
+
+<div class="pagination" style="margin-top:1rem;">
+  {% if page > 1 %}<a href="/ideas?page={{ page - 1 }}&per_page={{ per_page }}&min_score={{ min_score }}&window_days={{ window_days }}">← Previous</a>{% endif %}
+  <span style="margin:0 0.5rem;">Page {{ page }}</span>
+  {% if has_next %}<a href="/ideas?page={{ page + 1 }}&per_page={{ per_page }}&min_score={{ min_score }}&window_days={{ window_days }}">Next →</a>{% endif %}
+</div>
+{% endblock %}

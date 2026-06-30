@@ -16,10 +16,12 @@ from graph.diagnostics import diagnose_graph
 from graph.engine import (
     compare_neighborhoods,
     get_node,
+    list_nodes,
     match_scenarios,
     ranked_recommendations,
     transitive_impact,
 )
+from graph.scoring import compute_all_scores
 
 
 def _rows_to_dicts(rows) -> list[dict]:
@@ -444,6 +446,205 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 )
         return templates.TemplateResponse(
             request, "impact.html", {"node": node, "impact": impact},
+        )
+
+    @app.get("/ideas", response_class=HTMLResponse)
+    async def ideas_list(
+        request: Request,
+        min_score: float = Query(0.0, ge=0),
+        window_days: int = Query(90, ge=1, le=365),
+        page: int = Query(1, ge=1),
+        per_page: int = Query(20, ge=5, le=100),
+    ):
+        """Ranked idea feed (ALG-KK-WEB-IDEAS-LIST).
+
+        INV-KK-WEB-IDEAS-RANKED: sorted by frontier_score desc.
+        INV-KK-WEB-IDEAS-FILTER: min_score + window_days filtering.
+        """
+        conn = request.app.state.conn
+
+        opp_rows = conn.execute(
+            "SELECT id, kind, attrs FROM nodes WHERE kind = 'Opportunity' ORDER BY id"
+        ).fetchall()
+        trend_rows = conn.execute(
+            "SELECT id, kind, attrs FROM nodes WHERE kind = 'Trend' ORDER BY id"
+        ).fetchall()
+
+        ideas: list[dict] = []
+        for row in _rows_to_dicts(opp_rows):
+            attrs = row.get("attrs") or {}
+            fs = attrs.get("frontier_score", 0)
+            if isinstance(fs, str):
+                try:
+                    fs = float(fs)
+                except ValueError:
+                    fs = 0
+            if fs < min_score:
+                continue
+            concept_id = None
+            concept_name = None
+            opp_edge = conn.execute(
+                "SELECT target_id FROM edges WHERE kind = 'opportunity-for' AND source_id = ?",
+                (row["id"],),
+            ).fetchone()
+            if opp_edge:
+                concept_id = opp_edge[0]
+                cn = get_node(conn, concept_id)
+                if cn:
+                    concept_name = (cn["attrs"] or {}).get("name", concept_id)
+            ev_count = conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE kind = 'supported-by' AND source_id = ?",
+                (row["id"],),
+            ).fetchone()[0]
+            scores = compute_all_scores(conn, concept_id, window_days=window_days) if concept_id else {}
+            ideas.append({
+                "id": row["id"],
+                "type": "opportunity",
+                "title": attrs.get("title", row["id"]),
+                "frontier_score": fs,
+                "confidence": attrs.get("confidence"),
+                "concept_id": concept_id,
+                "concept_name": concept_name,
+                "evidence_count": ev_count,
+                "scores": scores,
+            })
+
+        for row in _rows_to_dicts(trend_rows):
+            attrs = row.get("attrs") or {}
+            concept_id = None
+            concept_name = None
+            trend_edge = conn.execute(
+                "SELECT target_id FROM edges WHERE kind = 'trend-about' AND source_id = ?",
+                (row["id"],),
+            ).fetchone()
+            if trend_edge:
+                concept_id = trend_edge[0]
+                cn = get_node(conn, concept_id)
+                if cn:
+                    concept_name = (cn["attrs"] or {}).get("name", concept_id)
+            scores = compute_all_scores(conn, concept_id, window_days=window_days) if concept_id else {}
+            fs = scores.get("frontier", 0)
+            if fs < min_score:
+                continue
+            ideas.append({
+                "id": row["id"],
+                "type": "trend",
+                "title": attrs.get("title", row["id"]),
+                "frontier_score": fs,
+                "confidence": None,
+                "concept_id": concept_id,
+                "concept_name": concept_name,
+                "strength": attrs.get("strength"),
+                "window_start": attrs.get("window_start"),
+                "window_end": attrs.get("window_end"),
+                "scores": scores,
+            })
+
+        ideas.sort(key=lambda x: x["frontier_score"], reverse=True)
+
+        offset = (page - 1) * per_page
+        page_ideas = ideas[offset:offset + per_page + 1]
+        has_next = len(page_ideas) > per_page
+        page_ideas = page_ideas[:per_page]
+
+        return templates.TemplateResponse(
+            request,
+            "ideas.html",
+            {
+                "ideas": page_ideas,
+                "min_score": min_score,
+                "window_days": window_days,
+                "page": page,
+                "per_page": per_page,
+                "has_next": has_next,
+            },
+        )
+
+    @app.get("/ideas/{idea_id}", response_class=HTMLResponse)
+    async def idea_detail(request: Request, idea_id: str):
+        """Idea detail with evidence chain (ALG-KK-WEB-IDEAS-DETAIL).
+
+        INV-KK-WEB-IDEAS-EVIDENCE-CHAIN: shows all linked evidence, ordered by source_date.
+        """
+        conn = request.app.state.conn
+        row = conn.execute(
+            "SELECT id, kind, attrs FROM nodes WHERE id = ?", (idea_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Idea not found")
+        node = _rows_to_dicts([row])[0]
+        if node["kind"] not in ("Opportunity", "Trend"):
+            raise HTTPException(status_code=404, detail="Not an idea node")
+
+        concepts: list[dict] = []
+        evidence: list[dict] = []
+        concept_scores: dict[str, float] = {}
+
+        if node["kind"] == "Opportunity":
+            opp_edges = conn.execute(
+                "SELECT target_id FROM edges WHERE kind = 'opportunity-for' AND source_id = ?",
+                (idea_id,),
+            ).fetchall()
+            for oe in opp_edges:
+                cn = get_node(conn, oe[0])
+                if cn:
+                    cn["display_name"] = display_name_for_node(cn["kind"], cn.get("attrs") or {}, cn["id"])
+                    concepts.append(cn)
+                    concept_scores = compute_all_scores(conn, cn["id"])
+
+            sup_edges = conn.execute(
+                "SELECT target_id FROM edges WHERE kind = 'supported-by' AND source_id = ?",
+                (idea_id,),
+            ).fetchall()
+            for se in sup_edges:
+                ev_node = get_node(conn, se[0])
+                if ev_node:
+                    attrs = ev_node.get("attrs") or {}
+                    ev_node["source_date"] = attrs.get("source_date", "")
+                    ev_node["display_name"] = display_name_for_node(
+                        ev_node["kind"], attrs, ev_node["id"]
+                    )
+                    evidence.append(ev_node)
+
+        elif node["kind"] == "Trend":
+            trend_edges = conn.execute(
+                "SELECT target_id FROM edges WHERE kind = 'trend-about' AND source_id = ?",
+                (idea_id,),
+            ).fetchall()
+            for te in trend_edges:
+                cn = get_node(conn, te[0])
+                if cn:
+                    cn["display_name"] = display_name_for_node(cn["kind"], cn.get("attrs") or {}, cn["id"])
+                    concepts.append(cn)
+                    concept_scores = compute_all_scores(conn, cn["id"])
+
+        evidence.sort(key=lambda x: x.get("source_date") or "")
+
+        related_ideas: list[dict] = []
+        concept_ids = {c["id"] for c in concepts}
+        if concept_ids:
+            for cid in concept_ids:
+                rel_rows = conn.execute(
+                    "SELECT n.id, n.kind, n.attrs FROM nodes n "
+                    "JOIN edges e ON e.source_id = n.id "
+                    "WHERE (e.kind = 'opportunity-for' OR e.kind = 'trend-about') "
+                    "AND e.target_id = ? AND n.id != ?",
+                    (cid, idea_id),
+                ).fetchall()
+                for rr in _rows_to_dicts(rel_rows):
+                    if not any(ri["id"] == rr["id"] for ri in related_ideas):
+                        related_ideas.append(rr)
+
+        return templates.TemplateResponse(
+            request,
+            "idea_detail.html",
+            {
+                "node": node,
+                "concepts": concepts,
+                "evidence": evidence,
+                "concept_scores": concept_scores,
+                "related_ideas": related_ideas,
+            },
         )
 
     @app.get("/viz", response_class=HTMLResponse)

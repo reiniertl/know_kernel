@@ -758,6 +758,167 @@ def test_health_page_links_to_node_details(rich_client):
     assert 'href="/concepts/' in response.text
 
 
+# --- ALG-KK-WEB-IDEAS-LIST / ALG-KK-WEB-IDEAS-DETAIL tests ---
+
+
+@pytest.fixture
+def ideas_client(tmp_path):
+    db_path = tmp_path / "ideas_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-rcu", "Concept", {
+        "name": "RCU",
+        "description": "Read-Copy-Update",
+        "artifact_class": "B",
+        "key_properties": ["lock-free reads"],
+        "tradeoffs": ["write overhead"],
+        "design_rationale": "Eliminates read-side locks.",
+    })
+    add_node(conn, "prob-rcu-1", "Problem", {
+        "title": "RCU grace period too long",
+        "description": "Grace periods stall under load",
+        "severity": "high",
+        "status": "open",
+        "source_date": "2026-06-15",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "identifies-problem", "prob-rcu-1", "concept-rcu")
+    add_node(conn, "obs-rcu-1", "Observation", {
+        "claim": "RCU latency spikes on NUMA",
+        "confidence": 0.8,
+        "source_date": "2026-06-10",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "observes", "obs-rcu-1", "concept-rcu")
+    add_node(conn, "opp-rcu-1", "Opportunity", {
+        "title": "Investigate RCU grace periods",
+        "description": "High-frontier opportunity for RCU",
+        "confidence": 0.5,
+        "frontier_score": 12.5,
+        "artifact_class": "B",
+    })
+    add_edge(conn, "opportunity-for", "opp-rcu-1", "concept-rcu")
+    add_edge(conn, "supported-by", "opp-rcu-1", "prob-rcu-1")
+    add_edge(conn, "supported-by", "opp-rcu-1", "obs-rcu-1")
+    add_node(conn, "trend-rcu-1", "Trend", {
+        "title": "Convergence on RCU",
+        "description": "3 sources discussing RCU",
+        "strength": 3,
+        "window_start": "2026-06-01",
+        "window_end": "2026-06-20",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "trend-about", "trend-rcu-1", "concept-rcu")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        yield c
+
+
+def test_ideas_list_returns_200(ideas_client):
+    response = ideas_client.get("/ideas")
+    assert response.status_code == 200
+    assert "Idea Feed" in response.text
+
+
+def test_ideas_list_shows_opportunities(ideas_client):
+    response = ideas_client.get("/ideas")
+    assert response.status_code == 200
+    assert "Investigate RCU" in response.text
+
+
+def test_ideas_list_shows_trends(ideas_client):
+    response = ideas_client.get("/ideas")
+    assert response.status_code == 200
+    assert "Convergence on RCU" in response.text
+
+
+def test_ideas_list_ranked_by_frontier(ideas_client):
+    """INV-KK-WEB-IDEAS-RANKED: ideas sorted by frontier_score desc."""
+    response = ideas_client.get("/ideas")
+    assert response.status_code == 200
+    text = response.text
+    opp_pos = text.find("Investigate RCU")
+    trend_pos = text.find("Convergence on RCU")
+    assert opp_pos > 0
+    assert trend_pos > 0
+    assert opp_pos < trend_pos
+
+
+def test_ideas_list_min_score_filter(ideas_client):
+    """INV-KK-WEB-IDEAS-FILTER: min_score filters out low-scoring ideas."""
+    response = ideas_client.get("/ideas?min_score=100")
+    assert response.status_code == 200
+    assert "Investigate RCU" not in response.text
+
+
+def test_ideas_list_window_days_param(ideas_client):
+    response = ideas_client.get("/ideas?window_days=30")
+    assert response.status_code == 200
+
+
+def test_ideas_detail_opportunity_200(ideas_client):
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "Investigate RCU" in response.text
+    assert "RCU" in response.text
+
+
+def test_ideas_detail_shows_evidence(ideas_client):
+    """INV-KK-WEB-IDEAS-EVIDENCE-CHAIN: detail shows linked evidence."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "Evidence Timeline" in response.text
+    assert "RCU grace period" in response.text
+
+
+def test_ideas_detail_evidence_ordered_by_date(ideas_client):
+    """INV-KK-WEB-IDEAS-EVIDENCE-CHAIN: evidence ordered by source_date."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    text = response.text
+    obs_pos = text.find("2026-06-10")
+    prob_pos = text.find("2026-06-15")
+    assert obs_pos > 0
+    assert prob_pos > 0
+    assert obs_pos < prob_pos
+
+
+def test_ideas_detail_trend_200(ideas_client):
+    response = ideas_client.get("/ideas/trend-rcu-1")
+    assert response.status_code == 200
+    assert "Convergence on RCU" in response.text
+
+
+def test_ideas_detail_404_for_missing(ideas_client):
+    response = ideas_client.get("/ideas/nonexistent-id")
+    assert response.status_code == 404
+
+
+def test_ideas_detail_404_for_non_idea(ideas_client):
+    response = ideas_client.get("/ideas/concept-rcu")
+    assert response.status_code == 404
+
+
+def test_ideas_detail_shows_related(ideas_client):
+    """Detail page shows related ideas for same concept."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "Related Ideas" in response.text
+    assert "Convergence on RCU" in response.text
+
+
+def test_dashboard_links_to_ideas(ideas_client):
+    response = ideas_client.get("/")
+    assert response.status_code == 200
+    assert 'href="/ideas"' in response.text
+
+
+def test_nav_has_ideas_link(ideas_client):
+    response = ideas_client.get("/")
+    assert response.status_code == 200
+    assert '>Ideas</a>' in response.text
+
+
 def test_dashboard_links_to_health(client):
     """INV-KK-WEB-HEALTH-LINKED: dashboard contains link to /health."""
     response = client.get("/")
