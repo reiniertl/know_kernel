@@ -1379,3 +1379,241 @@ def test_display_name_fix():
     long_title = "B" * 80
     result = display_name_for_node("Fix", {"title": long_title}, "fix-123")
     assert result == "B" * 60 + "..."
+
+
+# --- Radar, Vulns, API endpoints (Stage 16) ---
+
+
+@pytest.fixture
+def radar_vuln_client(tmp_path):
+    """Client with subsystems, concepts, vulns, fixes, and opportunities for radar/vuln testing."""
+    db_path = tmp_path / "radar_vuln.db"
+    conn = init_db(db_path)
+    add_node(conn, "sub-sched", "Subsystem", {"name": "Scheduler"})
+    add_node(conn, "sub-mm", "Subsystem", {"name": "Memory Management"})
+    add_node(conn, "sub-empty", "Subsystem", {"name": "Empty Subsystem"})
+    add_node(conn, "concept-rcu", "Concept", {
+        "name": "RCU", "description": "Read-Copy-Update", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+    })
+    add_node(conn, "concept-slab", "Concept", {
+        "name": "SLAB Allocator", "description": "Slab allocation", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+    })
+    add_edge(conn, "belongs-to", "concept-rcu", "sub-sched")
+    add_edge(conn, "belongs-to", "concept-slab", "sub-mm")
+    add_node(conn, "vuln-1", "Vulnerability", {
+        "cve_id": "CVE-2026-0001", "title": "Use-after-free in RCU",
+        "cvss_score": 9.8, "severity": "critical",
+        "description": "A critical use-after-free vulnerability in RCU subsystem.",
+        "affected_versions": "6.1-6.5", "status": "open", "source_date": "2026-06-15",
+        "artifact_class": "B",
+    })
+    add_node(conn, "vuln-2", "Vulnerability", {
+        "cve_id": "CVE-2026-0002", "title": "Info leak in slab",
+        "cvss_score": 5.5, "severity": "medium",
+        "description": "Information disclosure in SLAB allocator.",
+        "affected_versions": "6.3-6.5", "status": "open", "source_date": "2026-06-10",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "exploits", "vuln-1", "concept-rcu")
+    add_edge(conn, "exploits", "vuln-2", "concept-slab")
+    add_node(conn, "fix-1", "Fix", {
+        "title": "Fix RCU grace period", "commit_hash": "abc123",
+        "fix_type": "patch", "source_date": "2026-06-18", "artifact_class": "B",
+    })
+    add_edge(conn, "patches", "fix-1", "concept-rcu")
+    add_node(conn, "opp-rcu", "Opportunity", {
+        "title": "Investigate RCU latency",
+        "description": "High-frontier opportunity",
+        "confidence": 0.5, "frontier_score": 15.0,
+        "artifact_class": "B",
+    })
+    add_edge(conn, "opportunity-for", "opp-rcu", "concept-rcu")
+    add_node(conn, "prob-rcu-1", "Problem", {
+        "title": "RCU grace period stalls", "description": "Grace periods stall under load",
+        "severity": "high", "status": "open", "source_date": "2026-06-15", "artifact_class": "B",
+    })
+    add_edge(conn, "supported-by", "opp-rcu", "prob-rcu-1")
+    add_node(conn, "concept-dep", "Concept", {
+        "name": "CFS", "description": "Completely Fair Scheduler", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+    })
+    add_edge(conn, "prerequisite", "concept-dep", "concept-rcu")
+    add_node(conn, "trend-slab", "Trend", {
+        "title": "SLAB convergence", "description": "Trend for slab",
+        "strength": 3, "window_start": "2026-06-01", "window_end": "2026-06-20",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "trend-about", "trend-slab", "concept-slab")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        yield c
+
+
+def test_radar_returns_200(radar_vuln_client):
+    response = radar_vuln_client.get("/radar")
+    assert response.status_code == 200
+    assert "Subsystem Radar" in response.text
+
+
+def test_radar_shows_subsystems_with_concepts(radar_vuln_client):
+    """INV-KK-WEB-RADAR-SUBSYSTEM: shows subsystems with >= 1 concept."""
+    response = radar_vuln_client.get("/radar")
+    assert response.status_code == 200
+    text = response.text
+    assert "Scheduler" in text
+    assert "Memory Management" in text
+    assert "Empty Subsystem" not in text
+
+
+def test_radar_shows_vuln_and_fix_counts(radar_vuln_client):
+    response = radar_vuln_client.get("/radar")
+    text = response.text
+    sched_row = text[text.find("Scheduler"):text.find("Memory")]
+    assert "1" in sched_row
+
+
+def test_radar_shows_top_idea(radar_vuln_client):
+    response = radar_vuln_client.get("/radar")
+    assert "Investigate RCU latency" in response.text
+
+
+def test_vulns_list_returns_200(radar_vuln_client):
+    response = radar_vuln_client.get("/vulns")
+    assert response.status_code == 200
+    assert "Vulnerabilities" in response.text
+
+
+def test_vulns_list_shows_cve_ids(radar_vuln_client):
+    response = radar_vuln_client.get("/vulns")
+    text = response.text
+    assert "CVE-2026-0001" in text
+    assert "CVE-2026-0002" in text
+
+
+def test_vulns_list_sorted_by_cvss(radar_vuln_client):
+    """INV-KK-WEB-VULN-SEVERITY: sorted by CVSS score desc."""
+    response = radar_vuln_client.get("/vulns")
+    text = response.text
+    pos_critical = text.find("CVE-2026-0001")
+    pos_medium = text.find("CVE-2026-0002")
+    assert pos_critical < pos_medium
+
+
+def test_vulns_list_shows_severity_badges(radar_vuln_client):
+    response = radar_vuln_client.get("/vulns")
+    text = response.text
+    assert "badge-severity-critical" in text
+    assert "badge-severity-medium" in text
+
+
+def test_vuln_detail_returns_200(radar_vuln_client):
+    response = radar_vuln_client.get("/vulns/vuln-1")
+    assert response.status_code == 200
+    assert "CVE-2026-0001" in response.text
+
+
+def test_vuln_detail_shows_severity(radar_vuln_client):
+    response = radar_vuln_client.get("/vulns/vuln-1")
+    assert "badge-severity-critical" in response.text
+    assert "9.8" in response.text
+
+
+def test_vuln_detail_shows_direct_concepts(radar_vuln_client):
+    response = radar_vuln_client.get("/vulns/vuln-1")
+    assert "RCU" in response.text
+    assert "Directly Exploited" in response.text
+
+
+def test_vuln_detail_shows_propagated(radar_vuln_client):
+    """INV-KK-WEB-VULN-PROPAGATION: shows propagated at-risk concepts."""
+    response = radar_vuln_client.get("/vulns/vuln-1")
+    text = response.text
+    assert "Propagated" in text
+    assert "CFS" in text
+    assert "Dependents" in text
+
+
+def test_vuln_detail_404_for_missing(radar_vuln_client):
+    response = radar_vuln_client.get("/vulns/vuln-nonexistent")
+    assert response.status_code == 404
+
+
+def test_vuln_detail_404_for_non_vuln(radar_vuln_client):
+    response = radar_vuln_client.get("/vulns/concept-rcu")
+    assert response.status_code == 404
+
+
+def test_api_ideas_json_returns_array(radar_vuln_client):
+    """INV-KK-WEB-API-IDEAS-JSON: returns array with required keys."""
+    response = radar_vuln_client.get("/api/ideas")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) >= 1
+    for item in data:
+        assert "id" in item
+        assert "type" in item
+        assert "title" in item
+        assert "frontier_score" in item
+
+
+def test_api_ideas_json_has_opportunity(radar_vuln_client):
+    response = radar_vuln_client.get("/api/ideas")
+    data = response.json()
+    opp = [d for d in data if d["type"] == "opportunity"]
+    assert len(opp) >= 1
+    assert opp[0]["title"] == "Investigate RCU latency"
+
+
+def test_api_ideas_json_min_score_filter(radar_vuln_client):
+    response = radar_vuln_client.get("/api/ideas?min_score=100")
+    data = response.json()
+    assert len(data) == 0
+
+
+def test_api_vuln_impact_returns_propagation(radar_vuln_client):
+    """INV-KK-WEB-API-VULN-JSON: returns {direct, propagated}."""
+    response = radar_vuln_client.get("/api/vuln-impact/vuln-1")
+    assert response.status_code == 200
+    data = response.json()
+    assert "direct" in data
+    assert "propagated" in data
+    assert "concept-rcu" in data["direct"]
+    assert "concept-rcu" in data["propagated"]
+    assert "dependents" in data["propagated"]["concept-rcu"]
+
+
+def test_api_vuln_impact_404_for_missing(radar_vuln_client):
+    response = radar_vuln_client.get("/api/vuln-impact/vuln-nonexistent")
+    assert response.status_code == 404
+
+
+def test_api_vuln_impact_404_for_non_vuln(radar_vuln_client):
+    response = radar_vuln_client.get("/api/vuln-impact/concept-rcu")
+    assert response.status_code == 404
+
+
+def test_dashboard_links_to_radar(radar_vuln_client):
+    response = radar_vuln_client.get("/")
+    assert 'href="/radar"' in response.text
+
+
+def test_dashboard_links_to_vulns(radar_vuln_client):
+    response = radar_vuln_client.get("/")
+    assert 'href="/vulns"' in response.text
+
+
+def test_nav_has_radar_link(radar_vuln_client):
+    response = radar_vuln_client.get("/")
+    assert 'href="/radar"' in response.text
+    assert ">Radar<" in response.text
+
+
+def test_nav_has_vulns_link(radar_vuln_client):
+    response = radar_vuln_client.get("/")
+    assert 'href="/vulns"' in response.text
+    assert ">Vulns<" in response.text

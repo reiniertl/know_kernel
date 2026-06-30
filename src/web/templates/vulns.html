@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Vulnerabilities</h1>
+<p>{{ vulns|length }} vulnerabilities on this page</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>CVE</th>
+      <th>Severity</th>
+      <th>CVSS</th>
+      <th>Impact</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for v in vulns %}
+    <tr>
+      <td><a href="/vulns/{{ v.id }}">{{ v.cve_id }}</a></td>
+      <td><span class="badge badge-severity-{{ v.severity }}">{{ v.severity }}</span></td>
+      <td>{{ "%.1f"|format(v.cvss_score) }}</td>
+      <td>{{ v.impact_count }} concepts</td>
+      <td>{{ v.description[:80] }}{% if v.description|length > 80 %}...{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">No vulnerabilities found.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<div class="pagination" style="margin-top:1rem;">
+  {% if page > 1 %}<a href="/vulns?page={{ page - 1 }}&per_page={{ per_page }}">← Previous</a>{% endif %}
+  <span style="margin:0 0.5rem;">Page {{ page }}</span>
+  {% if has_next %}<a href="/vulns?page={{ page + 1 }}&per_page={{ per_page }}">Next →</a>{% endif %}
+</div>
+{% endblock %}

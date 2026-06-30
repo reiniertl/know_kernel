@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+{% set attrs = node.attrs or {} %}
+<h1>{{ attrs.get("cve_id", node.id) }}</h1>
+<p><code>{{ node.id }}</code> &nbsp; <span class="badge badge-severity-{{ severity }}">{{ severity }}</span> &nbsp; CVSS: {{ "%.1f"|format(cvss_score) }}</p>
+
+{% if attrs.get("title") %}
+<h2>{{ attrs.title }}</h2>
+{% endif %}
+
+{% if attrs.get("description") %}
+<p>{{ attrs.description }}</p>
+{% endif %}
+
+<h2>Directly Exploited Concepts ({{ direct_concepts|length }})</h2>
+{% if direct_concepts %}
+<ul>
+{% for c in direct_concepts %}
+  <li><a href="/concepts/{{ c.id }}">{{ c.display_name }}</a> ({{ c.kind }})</li>
+{% endfor %}
+</ul>
+{% else %}
+<p>No directly exploited concepts.</p>
+{% endif %}
+
+<h2>Propagated At-Risk Concepts</h2>
+{% set has_propagated = propagated.dependents|length + propagated.composed_with|length + propagated.shared_invariant|length %}
+{% if has_propagated %}
+  {% if propagated.dependents %}
+  <h3>Dependents (prerequisite coupling)</h3>
+  <ul>
+  {% for p in propagated.dependents %}
+    <li><a href="/concepts/{{ p.id }}">{{ p.display_name }}</a> ({{ p.kind }})</li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if propagated.composed_with %}
+  <h3>Composed With (protocol coupling)</h3>
+  <ul>
+  {% for p in propagated.composed_with %}
+    <li><a href="/concepts/{{ p.id }}">{{ p.display_name }}</a> ({{ p.kind }})</li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if propagated.shared_invariant %}
+  <h3>Shared Invariant (governance coupling)</h3>
+  <ul>
+  {% for p in propagated.shared_invariant %}
+    <li><a href="/concepts/{{ p.id }}">{{ p.display_name }}</a> ({{ p.kind }})</li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+{% else %}
+<p>No propagated at-risk concepts.</p>
+{% endif %}
+{% endblock %}

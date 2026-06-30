@@ -21,7 +21,7 @@ from graph.engine import (
     ranked_recommendations,
     transitive_impact,
 )
-from graph.scoring import compute_all_scores
+from graph.scoring import compute_all_scores, heat_score, pain_score, vulnerability_propagation
 
 
 def _rows_to_dicts(rows) -> list[dict]:
@@ -646,6 +646,295 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "related_ideas": related_ideas,
             },
         )
+
+    @app.get("/radar", response_class=HTMLResponse)
+    async def radar(request: Request):
+        """Subsystem radar dashboard (ALG-KK-WEB-RADAR).
+
+        INV-KK-WEB-RADAR-SUBSYSTEM: shows all subsystems with >= 1 concept.
+        """
+        conn = request.app.state.conn
+        sub_rows = conn.execute(
+            "SELECT id, kind, attrs FROM nodes WHERE kind = 'Subsystem' ORDER BY id"
+        ).fetchall()
+
+        subsystems: list[dict] = []
+        for sr in _rows_to_dicts(sub_rows):
+            sub_id = sr["id"]
+            attrs = sr.get("attrs") or {}
+            concept_rows = conn.execute(
+                "SELECT e.source_id FROM edges e "
+                "JOIN nodes n ON e.source_id = n.id AND n.kind = 'Concept' "
+                "WHERE e.kind = 'belongs-to' AND e.target_id = ?",
+                (sub_id,),
+            ).fetchall()
+            concept_ids = [r[0] for r in concept_rows]
+            if not concept_ids:
+                continue
+            total_heat = 0.0
+            total_pain = 0.0
+            for cid in concept_ids:
+                total_heat += heat_score(conn, cid)
+                total_pain += pain_score(conn, cid)
+            vuln_count = 0
+            fix_count = 0
+            for cid in concept_ids:
+                vuln_count += conn.execute(
+                    "SELECT COUNT(*) FROM edges WHERE kind = 'exploits' AND target_id = ?",
+                    (cid,),
+                ).fetchone()[0]
+                fix_count += conn.execute(
+                    "SELECT COUNT(*) FROM edges e "
+                    "JOIN nodes n ON e.source_id = n.id AND n.kind = 'Fix' "
+                    "WHERE e.kind = 'patches' AND e.target_id = ?",
+                    (cid,),
+                ).fetchone()[0]
+            top_idea = None
+            for cid in concept_ids:
+                opp_rows = conn.execute(
+                    "SELECT n.id, n.attrs FROM nodes n "
+                    "JOIN edges e ON e.source_id = n.id "
+                    "WHERE e.kind = 'opportunity-for' AND e.target_id = ? AND n.kind = 'Opportunity'",
+                    (cid,),
+                ).fetchall()
+                for orow in opp_rows:
+                    oattrs = json.loads(orow[1]) if isinstance(orow[1], str) else (orow[1] or {})
+                    fs = oattrs.get("frontier_score", 0)
+                    if isinstance(fs, str):
+                        try:
+                            fs = float(fs)
+                        except ValueError:
+                            fs = 0
+                    if top_idea is None or fs > top_idea["frontier_score"]:
+                        top_idea = {"id": orow[0], "title": oattrs.get("title", orow[0]), "frontier_score": fs}
+            subsystems.append({
+                "id": sub_id,
+                "name": attrs.get("name", sub_id),
+                "concept_count": len(concept_ids),
+                "heat": total_heat,
+                "pain": total_pain,
+                "vuln_count": vuln_count,
+                "fix_count": fix_count,
+                "top_idea": top_idea,
+            })
+        subsystems.sort(key=lambda x: x["pain"], reverse=True)
+        return templates.TemplateResponse(
+            request, "radar.html", {"subsystems": subsystems},
+        )
+
+    @app.get("/vulns", response_class=HTMLResponse)
+    async def vulns_list(
+        request: Request,
+        page: int = Query(1, ge=1),
+        per_page: int = Query(50, ge=10, le=200),
+    ):
+        """Vulnerability list (ALG-KK-WEB-VULNS-LIST).
+
+        INV-KK-WEB-VULN-SEVERITY: sorted by cvss_score descending.
+        """
+        conn = request.app.state.conn
+        rows = conn.execute(
+            "SELECT id, kind, attrs FROM nodes WHERE kind = 'Vulnerability' ORDER BY id"
+        ).fetchall()
+        vulns: list[dict] = []
+        for row in _rows_to_dicts(rows):
+            attrs = row.get("attrs") or {}
+            cvss = attrs.get("cvss_score", 0)
+            if isinstance(cvss, str):
+                try:
+                    cvss = float(cvss)
+                except ValueError:
+                    cvss = 0
+            severity = "low"
+            if cvss >= 9.0:
+                severity = "critical"
+            elif cvss >= 7.0:
+                severity = "high"
+            elif cvss >= 4.0:
+                severity = "medium"
+            prop = vulnerability_propagation(conn, row["id"])
+            impact_count = len(prop["direct"])
+            for v in prop["propagated"].values():
+                impact_count += len(v.get("dependents", []))
+                impact_count += len(v.get("composed_with", []))
+                impact_count += len(v.get("shared_invariant", []))
+            vulns.append({
+                "id": row["id"],
+                "cve_id": attrs.get("cve_id", row["id"]),
+                "title": attrs.get("title", attrs.get("cve_id", row["id"])),
+                "cvss_score": cvss,
+                "severity": severity,
+                "impact_count": impact_count,
+                "description": attrs.get("description", ""),
+            })
+        vulns.sort(key=lambda x: x["cvss_score"], reverse=True)
+        offset = (page - 1) * per_page
+        page_vulns = vulns[offset:offset + per_page + 1]
+        has_next = len(page_vulns) > per_page
+        page_vulns = page_vulns[:per_page]
+        return templates.TemplateResponse(
+            request, "vulns.html",
+            {"vulns": page_vulns, "page": page, "per_page": per_page, "has_next": has_next},
+        )
+
+    @app.get("/vulns/{vuln_id}", response_class=HTMLResponse)
+    async def vuln_detail(request: Request, vuln_id: str):
+        """Vulnerability detail with propagation (ALG-KK-WEB-VULNS-DETAIL).
+
+        INV-KK-WEB-VULN-PROPAGATION: shows propagated at-risk concepts.
+        """
+        conn = request.app.state.conn
+        row = conn.execute(
+            "SELECT id, kind, attrs FROM nodes WHERE id = ?", (vuln_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Vulnerability not found")
+        node = _rows_to_dicts([row])[0]
+        if node["kind"] != "Vulnerability":
+            raise HTTPException(status_code=404, detail="Not a vulnerability node")
+        attrs = node.get("attrs") or {}
+        cvss = attrs.get("cvss_score", 0)
+        if isinstance(cvss, str):
+            try:
+                cvss = float(cvss)
+            except ValueError:
+                cvss = 0
+        severity = "low"
+        if cvss >= 9.0:
+            severity = "critical"
+        elif cvss >= 7.0:
+            severity = "high"
+        elif cvss >= 4.0:
+            severity = "medium"
+        prop = vulnerability_propagation(conn, vuln_id)
+        direct_concepts: list[dict] = []
+        for cid in prop["direct"]:
+            cn = get_node(conn, cid)
+            if cn:
+                cn["display_name"] = display_name_for_node(cn["kind"], cn.get("attrs") or {}, cn["id"])
+                direct_concepts.append(cn)
+        propagated_groups: dict[str, list[dict]] = {
+            "dependents": [], "composed_with": [], "shared_invariant": [],
+        }
+        seen_ids: set[str] = set(prop["direct"])
+        for _cid, coupling in prop["propagated"].items():
+            for group_key in ("dependents", "composed_with", "shared_invariant"):
+                for pid in coupling.get(group_key, []):
+                    if pid not in seen_ids:
+                        seen_ids.add(pid)
+                        pn = get_node(conn, pid)
+                        if pn:
+                            pn["display_name"] = display_name_for_node(
+                                pn["kind"], pn.get("attrs") or {}, pn["id"]
+                            )
+                            propagated_groups[group_key].append(pn)
+        return templates.TemplateResponse(
+            request, "vuln_detail.html",
+            {
+                "node": node,
+                "cvss_score": cvss,
+                "severity": severity,
+                "direct_concepts": direct_concepts,
+                "propagated": propagated_groups,
+            },
+        )
+
+    @app.get("/api/ideas")
+    async def api_ideas_json(
+        request: Request,
+        min_score: float = Query(0.0, ge=0),
+        window_days: int = Query(90, ge=1, le=365),
+    ):
+        """JSON idea feed (ALG-KK-WEB-API-IDEAS-JSON).
+
+        INV-KK-WEB-API-IDEAS-JSON: each entry has id, type, title, frontier_score.
+        """
+        conn = request.app.state.conn
+        opp_rows = conn.execute(
+            "SELECT id, kind, attrs FROM nodes WHERE kind = 'Opportunity' ORDER BY id"
+        ).fetchall()
+        trend_rows = conn.execute(
+            "SELECT id, kind, attrs FROM nodes WHERE kind = 'Trend' ORDER BY id"
+        ).fetchall()
+        ideas: list[dict] = []
+        for row in _rows_to_dicts(opp_rows):
+            attrs = row.get("attrs") or {}
+            fs = attrs.get("frontier_score", 0)
+            if isinstance(fs, str):
+                try:
+                    fs = float(fs)
+                except ValueError:
+                    fs = 0
+            if fs < min_score:
+                continue
+            concept_id = None
+            concept_name = None
+            opp_edge = conn.execute(
+                "SELECT target_id FROM edges WHERE kind = 'opportunity-for' AND source_id = ?",
+                (row["id"],),
+            ).fetchone()
+            if opp_edge:
+                concept_id = opp_edge[0]
+                cn = get_node(conn, concept_id)
+                if cn:
+                    concept_name = (cn["attrs"] or {}).get("name", concept_id)
+            ev_count = conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE kind = 'supported-by' AND source_id = ?",
+                (row["id"],),
+            ).fetchone()[0]
+            ideas.append({
+                "id": row["id"],
+                "type": "opportunity",
+                "title": attrs.get("title", row["id"]),
+                "frontier_score": fs,
+                "confidence": attrs.get("confidence"),
+                "concept_id": concept_id,
+                "concept_name": concept_name,
+                "evidence_count": ev_count,
+            })
+        for row in _rows_to_dicts(trend_rows):
+            attrs = row.get("attrs") or {}
+            concept_id = None
+            concept_name = None
+            trend_edge = conn.execute(
+                "SELECT target_id FROM edges WHERE kind = 'trend-about' AND source_id = ?",
+                (row["id"],),
+            ).fetchone()
+            if trend_edge:
+                concept_id = trend_edge[0]
+                cn = get_node(conn, concept_id)
+                if cn:
+                    concept_name = (cn["attrs"] or {}).get("name", concept_id)
+            scores = compute_all_scores(conn, concept_id, window_days=window_days) if concept_id else {}
+            fs = scores.get("frontier", 0)
+            if fs < min_score:
+                continue
+            ideas.append({
+                "id": row["id"],
+                "type": "trend",
+                "title": attrs.get("title", row["id"]),
+                "frontier_score": fs,
+                "confidence": None,
+                "concept_id": concept_id,
+                "concept_name": concept_name,
+                "evidence_count": 0,
+            })
+        ideas.sort(key=lambda x: x["frontier_score"], reverse=True)
+        return JSONResponse(ideas)
+
+    @app.get("/api/vuln-impact/{vuln_id}")
+    async def api_vuln_impact(request: Request, vuln_id: str):
+        """JSON vulnerability propagation (ALG-KK-WEB-API-VULN-IMPACT).
+
+        INV-KK-WEB-API-VULN-JSON: returns {direct, propagated}.
+        """
+        conn = request.app.state.conn
+        row = conn.execute(
+            "SELECT id, kind FROM nodes WHERE id = ?", (vuln_id,)
+        ).fetchone()
+        if row is None or row["kind"] != "Vulnerability":
+            return JSONResponse({"error": "Vulnerability not found"}, status_code=404)
+        return JSONResponse(vulnerability_propagation(conn, vuln_id))
 
     @app.get("/viz", response_class=HTMLResponse)
     async def viz(request: Request):

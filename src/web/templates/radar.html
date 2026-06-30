@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Subsystem Radar</h1>
+<p>{{ subsystems|length }} subsystems with linked concepts</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Subsystem</th>
+      <th>Concepts</th>
+      <th>Heat</th>
+      <th>Pain</th>
+      <th>Vulns</th>
+      <th>Fixes</th>
+      <th>Top Idea</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for sub in subsystems %}
+    <tr>
+      <td><a href="/concepts/{{ sub.id }}">{{ sub.name }}</a></td>
+      <td>{{ sub.concept_count }}</td>
+      <td>{{ "%.1f"|format(sub.heat) }}</td>
+      <td>{{ "%.1f"|format(sub.pain) }}</td>
+      <td>{{ sub.vuln_count }}</td>
+      <td>{{ sub.fix_count }}</td>
+      <td>
+        {% if sub.top_idea %}
+          <a href="/ideas/{{ sub.top_idea.id }}">{{ sub.top_idea.title }}</a>
+          ({{ "%.1f"|format(sub.top_idea.frontier_score) }})
+        {% else %}
+          —
+        {% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7">No subsystems with concepts found.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
