@@ -222,3 +222,72 @@ def refresh_scores(
             "_scores_computed_at": now,
         })
     return len(concept_ids)
+
+
+def vulnerability_propagation(
+    conn: sqlite3.Connection,
+    vuln_id: str,
+) -> dict[str, Any]:
+    """Find all concepts at risk from a vulnerability (ALG-KK-VULN-PROPAGATE).
+
+    INV-KK-VULN-PROP-DIRECT: direct concepts via exploits edge.
+    INV-KK-VULN-PROP-PREREQ: dependents via reverse prerequisite.
+    INV-KK-VULN-PROP-COMPOSE: composed_with via shared constrains-composition.
+    INV-KK-VULN-PROP-INVARIANT: shared_invariant via shared governed-by.
+    INV-KK-VULN-PROP-NO-SELF: no self-references in propagated lists.
+    """
+    direct_rows = conn.execute(
+        "SELECT e.target_id FROM edges e "
+        "JOIN nodes n ON e.target_id = n.id "
+        "WHERE e.kind = 'exploits' AND e.source_id = ? AND n.kind = 'Concept'",
+        (vuln_id,),
+    ).fetchall()
+    direct = [r[0] for r in direct_rows]
+
+    propagated: dict[str, dict[str, list[str]]] = {}
+    for cid in direct:
+        dep_rows = conn.execute(
+            "SELECT source_id FROM edges WHERE kind = 'prerequisite' AND target_id = ?",
+            (cid,),
+        ).fetchall()
+        dependents = [r[0] for r in dep_rows if r[0] != cid]
+
+        protocol_rows = conn.execute(
+            "SELECT source_id FROM edges WHERE kind = 'constrains-composition' AND target_id = ?",
+            (cid,),
+        ).fetchall()
+        composed_with: list[str] = []
+        for prow in protocol_rows:
+            proto_id = prow[0]
+            other_rows = conn.execute(
+                "SELECT target_id FROM edges "
+                "WHERE kind = 'constrains-composition' AND source_id = ? AND target_id != ?",
+                (proto_id, cid),
+            ).fetchall()
+            for orow in other_rows:
+                if orow[0] not in composed_with:
+                    composed_with.append(orow[0])
+
+        inv_rows = conn.execute(
+            "SELECT source_id FROM edges WHERE kind = 'governed-by' AND target_id = ?",
+            (cid,),
+        ).fetchall()
+        shared_invariant: list[str] = []
+        for irow in inv_rows:
+            inv_id = irow[0]
+            other_rows = conn.execute(
+                "SELECT target_id FROM edges "
+                "WHERE kind = 'governed-by' AND source_id = ? AND target_id != ?",
+                (inv_id, cid),
+            ).fetchall()
+            for orow in other_rows:
+                if orow[0] not in shared_invariant:
+                    shared_invariant.append(orow[0])
+
+        propagated[cid] = {
+            "dependents": dependents,
+            "composed_with": composed_with,
+            "shared_invariant": shared_invariant,
+        }
+
+    return {"direct": direct, "propagated": propagated}

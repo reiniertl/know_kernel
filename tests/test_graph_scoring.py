@@ -23,6 +23,7 @@ from graph.scoring import (
     leverage_score,
     pain_score,
     refresh_scores,
+    vulnerability_propagation,
 )
 
 
@@ -591,3 +592,168 @@ class TestRefreshScores:
         row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
         scores2 = json.loads(json.loads(row[0])["_scores"])
         assert scores2["heat"] == 1.0
+
+
+# ── Vulnerability propagation tests (ALG-KK-VULN-PROPAGATE) ──
+
+
+def _add_interaction_protocol(conn: sqlite3.Connection, concept_ids: list[str], tag: str = "p") -> str:
+    pid = f"ip-{tag}"
+    add_node(conn, pid, "InteractionProtocol", {
+        "rule": f"protocol {tag}",
+        "ordering": "total",
+        "violation_mode": "fault",
+        "artifact_class": "abstracted-mechanism",
+    })
+    for cid in concept_ids:
+        add_edge(conn, "constrains-composition", pid, cid)
+    return pid
+
+
+class TestVulnerabilityPropagation:
+    def test_full_topology(self, conn):
+        """Full test: vuln exploits A, B prereqs A, protocol links A+C, invariant links A+D."""
+        cid_a = _add_concept(conn, "Slab", "concept-slab-prop")
+        cid_b = _add_concept(conn, "PageCache", "concept-pagecache")
+        cid_c = _add_concept(conn, "RCU", "concept-rcu-prop")
+        cid_d = _add_concept(conn, "VFS", "concept-vfs-prop")
+
+        vid = _add_vulnerability(conn, cid_a, cvss="9.0", cve_id="CVE-2026-PROP-1")
+
+        add_edge(conn, "prerequisite", cid_b, cid_a)
+
+        _add_interaction_protocol(conn, [cid_a, cid_c], "proto1")
+
+        kinv_id = f"kinv-shared-prop"
+        add_node(conn, kinv_id, "KernelInvariant", {
+            "predicate": "shared invariant",
+            "strength": "safety",
+            "scope": "per-operation",
+            "artifact_class": "abstracted-mechanism",
+        })
+        add_edge(conn, "governed-by", kinv_id, cid_a)
+        add_edge(conn, "governed-by", kinv_id, cid_d)
+
+        result = vulnerability_propagation(conn, vid)
+
+        assert result["direct"] == [cid_a]
+        assert cid_a in result["propagated"]
+        prop = result["propagated"][cid_a]
+        assert cid_b in prop["dependents"]
+        assert cid_c in prop["composed_with"]
+        assert cid_d in prop["shared_invariant"]
+
+    def test_no_exploits(self, conn):
+        """Vuln with no exploits edge → empty results."""
+        vid = "vuln-orphan"
+        add_node(conn, vid, "Vulnerability", {
+            "cve_id": "CVE-2026-ORPHAN",
+            "title": "Orphan vuln",
+            "description": "no exploits",
+            "severity": "low",
+            "cvss_score": "2.0",
+            "affected_versions": "6.0",
+            "status": "unfixed",
+            "source_date": "2026-06-01",
+            "artifact_class": "B",
+        })
+        result = vulnerability_propagation(conn, vid)
+        assert result["direct"] == []
+        assert result["propagated"] == {}
+
+    def test_no_coupling(self, conn):
+        """Concept with no coupling edges → empty propagation lists."""
+        cid = _add_concept(conn, "Isolated", "concept-isolated-prop")
+        vid = _add_vulnerability(conn, cid, cvss="7.0", cve_id="CVE-2026-ISOL")
+        result = vulnerability_propagation(conn, vid)
+        assert result["direct"] == [cid]
+        prop = result["propagated"][cid]
+        assert prop["dependents"] == []
+        assert prop["composed_with"] == []
+        assert prop["shared_invariant"] == []
+
+    def test_no_self_reference(self, conn):
+        """INV-KK-VULN-PROP-NO-SELF: concept not in its own propagated lists."""
+        cid_a = _add_concept(conn, "SelfTest", "concept-self-test")
+        cid_b = _add_concept(conn, "Other", "concept-other-self")
+        vid = _add_vulnerability(conn, cid_a, cvss="8.0", cve_id="CVE-2026-SELF")
+
+        _add_interaction_protocol(conn, [cid_a, cid_b], "proto-self")
+
+        result = vulnerability_propagation(conn, vid)
+        prop = result["propagated"][cid_a]
+        assert cid_a not in prop["dependents"]
+        assert cid_a not in prop["composed_with"]
+        assert cid_a not in prop["shared_invariant"]
+
+    def test_multiple_exploited_concepts(self, conn):
+        """Vuln exploiting multiple concepts."""
+        cid_a = _add_concept(conn, "MultiA", "concept-multi-a")
+        cid_b = _add_concept(conn, "MultiB", "concept-multi-b")
+
+        vid = "vuln-multi"
+        add_node(conn, vid, "Vulnerability", {
+            "cve_id": "CVE-2026-MULTI",
+            "title": "Multi vuln",
+            "description": "hits two concepts",
+            "severity": "high",
+            "cvss_score": "8.0",
+            "affected_versions": "6.0",
+            "status": "unfixed",
+            "source_date": "2026-06-01",
+            "artifact_class": "B",
+        })
+        add_edge(conn, "exploits", vid, cid_a)
+        add_edge(conn, "exploits", vid, cid_b)
+
+        result = vulnerability_propagation(conn, vid)
+        assert set(result["direct"]) == {cid_a, cid_b}
+        assert cid_a in result["propagated"]
+        assert cid_b in result["propagated"]
+
+    def test_nonexistent_vuln(self, conn):
+        """Nonexistent vuln ID → empty."""
+        result = vulnerability_propagation(conn, "vuln-ghost")
+        assert result["direct"] == []
+        assert result["propagated"] == {}
+
+    def test_multiple_shared_invariants(self, conn):
+        """Multiple invariants each shared with different concepts."""
+        cid_a = _add_concept(conn, "Core", "concept-core-shinv")
+        cid_b = _add_concept(conn, "ExtB", "concept-ext-b")
+        cid_c = _add_concept(conn, "ExtC", "concept-ext-c")
+        vid = _add_vulnerability(conn, cid_a, cvss="9.0", cve_id="CVE-2026-SHINV")
+
+        kinv1 = "kinv-sh1"
+        add_node(conn, kinv1, "KernelInvariant", {
+            "predicate": "inv 1", "strength": "safety",
+            "scope": "per-operation", "artifact_class": "abstracted-mechanism",
+        })
+        add_edge(conn, "governed-by", kinv1, cid_a)
+        add_edge(conn, "governed-by", kinv1, cid_b)
+
+        kinv2 = "kinv-sh2"
+        add_node(conn, kinv2, "KernelInvariant", {
+            "predicate": "inv 2", "strength": "safety",
+            "scope": "per-operation", "artifact_class": "abstracted-mechanism",
+        })
+        add_edge(conn, "governed-by", kinv2, cid_a)
+        add_edge(conn, "governed-by", kinv2, cid_c)
+
+        result = vulnerability_propagation(conn, vid)
+        shared = result["propagated"][cid_a]["shared_invariant"]
+        assert cid_b in shared
+        assert cid_c in shared
+
+    def test_no_duplicate_composed(self, conn):
+        """Multiple protocols between same concepts don't produce duplicates."""
+        cid_a = _add_concept(conn, "DupA", "concept-dup-a")
+        cid_b = _add_concept(conn, "DupB", "concept-dup-b")
+        vid = _add_vulnerability(conn, cid_a, cvss="7.0", cve_id="CVE-2026-DUP")
+
+        _add_interaction_protocol(conn, [cid_a, cid_b], "proto-dup1")
+        _add_interaction_protocol(conn, [cid_a, cid_b], "proto-dup2")
+
+        result = vulnerability_propagation(conn, vid)
+        composed = result["propagated"][cid_a]["composed_with"]
+        assert composed.count(cid_b) == 1
