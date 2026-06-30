@@ -1,21 +1,26 @@
 """MCP server -- exposes Class B concepts to opencode via MCP protocol.
 
-ALG-KK-MCP-QUERY: query the Class B-only snapshot DB (15 tools).
+ALG-KK-MCP-QUERY: query the Class B-only snapshot DB (19 tools).
 INV-KK-MCP-SNAPSHOT-ONLY: only the snapshot path is opened; master DB never accessed.
 INV-KK-MCP-NO-WRITE: snapshot DB opened read-only (uri mode=ro).
-INV-KK-MCP-TOOLS-EXPOSED: exactly 15 tools; no Evidence/Source/Advisory in results.
+INV-KK-MCP-TOOLS-EXPOSED: exactly 19 tools; no Evidence/Source/Advisory in results.
 INV-KK-MCP-EXPLORE-DEPTH-CAP: explore_subgraph caps depth at 3.
 INV-KK-MCP-SEARCH-ALL-KINDS: search_concepts uses dynamic ALLOWED_KINDS from exporter.
 INV-KK-MCP-IDEA-FEED-RANKED: get_idea_feed returns ideas sorted by frontier desc.
 INV-KK-MCP-SCORES-COMPLETE: get_concept_scores returns all 5 score types.
 INV-KK-MCP-HOT-AREAS-SUBSYSTEM: get_hot_areas aggregates heat per subsystem.
 INV-KK-MCP-PROBLEMS-SEVERITY: get_problems_for_concept returns problems sorted by severity.
+INV-KK-MCP-CONVERGENCE-INDEPENDENT: get_convergence counts distinct source URLs.
+INV-KK-MCP-VULN-IMPACT-PROPAGATE: get_vulnerability_impact delegates to vulnerability_propagation.
+INV-KK-MCP-RECENT-VULNS-WINDOW: get_recent_vulns filters by source_date window.
+INV-KK-MCP-RECENT-FIXES-WINDOW: get_recent_fixes filters by source_date window.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -31,7 +36,7 @@ from graph.engine import (
     subgraph_around,
     transitive_impact,
 )
-from graph.scoring import compute_all_scores, heat_score
+from graph.scoring import compute_all_scores, heat_score, vulnerability_propagation
 
 mcp = FastMCP("know_kernel")
 
@@ -409,6 +414,265 @@ def get_problems_for_concept(concept_id: str) -> list[dict[str, Any]]:
         reverse=True,
     )
     return problems
+
+
+@mcp.tool()
+def get_convergence(concept_ids: list[str]) -> dict[str, Any]:
+    """Check if concepts see converging independent evidence.
+
+    INV-KK-MCP-CONVERGENCE-INDEPENDENT: counts distinct evidence nodes
+    (observations, problems, discussions, etc.) linked to the given concepts.
+    Since Source/Evidence nodes are stripped from the Class B snapshot,
+    convergence is measured by counting distinct evidence-layer nodes
+    linked via identifies-problem, observes, discusses, benchmarks,
+    rejected-for, grounded-in edges.
+    """
+    conn = _get_conn()
+    if not concept_ids:
+        return {"concept_ids": [], "evidence_per_concept": {}, "shared_evidence": [], "common_problems": [], "convergence_score": 0}
+
+    evidence_edge_kinds = ("identifies-problem", "observes", "discusses", "benchmarks", "rejected-for", "grounded-in")
+    concept_evidence: dict[str, set[str]] = {}
+    concept_problems: dict[str, set[str]] = {}
+
+    for cid in concept_ids:
+        evidence: set[str] = set()
+        problems: set[str] = set()
+        for ek in evidence_edge_kinds:
+            ev_rows = conn.execute(
+                "SELECT source_id FROM edges WHERE kind = ? AND target_id = ?",
+                (ek, cid),
+            ).fetchall()
+            for ev_row in ev_rows:
+                ev_id = ev_row[0]
+                evidence.add(ev_id)
+                ev_node = conn.execute("SELECT kind FROM nodes WHERE id = ?", (ev_id,)).fetchone()
+                if ev_node and ev_node[0] == "Problem":
+                    problems.add(ev_id)
+        concept_evidence[cid] = evidence
+        concept_problems[cid] = problems
+
+    all_evidence_sets = [e for e in concept_evidence.values() if e]
+    shared_evidence: list[str] = []
+    if len(all_evidence_sets) >= 2:
+        shared = all_evidence_sets[0]
+        for e in all_evidence_sets[1:]:
+            shared = shared & e
+        shared_evidence = sorted(shared)
+
+    all_problem_sets = [p for p in concept_problems.values() if p]
+    common_problems: list[str] = []
+    if len(all_problem_sets) >= 2:
+        common = all_problem_sets[0]
+        for p in all_problem_sets[1:]:
+            common = common & p
+        common_problems = sorted(common)
+
+    all_evidence_ids: set[str] = set()
+    for e in concept_evidence.values():
+        all_evidence_ids |= e
+    convergence_score = len(all_evidence_ids)
+
+    evidence_per_concept = {cid: len(concept_evidence.get(cid, set())) for cid in concept_ids}
+
+    return {
+        "concept_ids": concept_ids,
+        "evidence_per_concept": evidence_per_concept,
+        "shared_evidence": shared_evidence,
+        "common_problems": common_problems,
+        "convergence_score": convergence_score,
+    }
+
+
+@mcp.tool()
+def get_vulnerability_impact(vuln_id: str) -> dict[str, Any]:
+    """Get cross-module impact of a vulnerability.
+
+    INV-KK-MCP-VULN-IMPACT-PROPAGATE: delegates to vulnerability_propagation()
+    from ALG-KK-VULN-PROPAGATE and enriches with affected subsystem names.
+    """
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id FROM nodes WHERE id = ? AND kind = 'Vulnerability'", (vuln_id,)
+    ).fetchone()
+    if row is None:
+        return {"error": "not_found", "vuln_id": vuln_id}
+
+    result = vulnerability_propagation(conn, vuln_id)
+
+    all_concept_ids: set[str] = set(result["direct"])
+    for cid, coupling in result["propagated"].items():
+        all_concept_ids.add(cid)
+        for lst in coupling.values():
+            all_concept_ids.update(lst)
+
+    affected_subsystems: list[dict[str, str]] = []
+    seen_subs: set[str] = set()
+    for cid in all_concept_ids:
+        sub_rows = conn.execute(
+            "SELECT e.target_id, json_extract(n.attrs, '$.name') "
+            "FROM edges e JOIN nodes n ON e.target_id = n.id "
+            "WHERE e.kind = 'belongs-to' AND e.source_id = ? AND n.kind = 'Subsystem'",
+            (cid,),
+        ).fetchall()
+        for sr in sub_rows:
+            if sr[0] not in seen_subs:
+                seen_subs.add(sr[0])
+                affected_subsystems.append({"id": sr[0], "name": sr[1] or sr[0]})
+
+    return {
+        "vuln_id": vuln_id,
+        "direct": result["direct"],
+        "propagated": result["propagated"],
+        "affected_subsystems": affected_subsystems,
+    }
+
+
+@mcp.tool()
+def get_recent_vulns(
+    subsystem: str | None = None,
+    window_days: int = 30,
+    min_severity: str = "medium",
+) -> list[dict[str, Any]]:
+    """Get recent vulnerabilities filtered by source_date window.
+
+    INV-KK-MCP-RECENT-VULNS-WINDOW: filters by source_date, not ingestion time.
+    Sorted by CVSS score descending.
+    """
+    conn = _get_conn()
+    since = (datetime.now(UTC) - timedelta(days=window_days)).strftime("%Y-%m-%d")
+    severity_min_rank = _SEVERITY_RANK.get(min_severity, 2)
+
+    rows = conn.execute(
+        "SELECT id, kind, attrs FROM nodes WHERE kind = 'Vulnerability' "
+        "AND json_extract(attrs, '$.source_date') >= ? ORDER BY id",
+        (since,),
+    ).fetchall()
+
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        node = _row_to_dict(row)
+        attrs = node.get("attrs") or {}
+        sev = attrs.get("severity", "low")
+        if _SEVERITY_RANK.get(sev, 0) < severity_min_rank:
+            continue
+
+        if subsystem:
+            exploited_rows = conn.execute(
+                "SELECT target_id FROM edges WHERE kind = 'exploits' AND source_id = ?",
+                (node["id"],),
+            ).fetchall()
+            in_subsystem = False
+            for er in exploited_rows:
+                sub_check = conn.execute(
+                    "SELECT 1 FROM edges WHERE kind = 'belongs-to' AND source_id = ? AND target_id = ?",
+                    (er[0], subsystem),
+                ).fetchone()
+                if sub_check:
+                    in_subsystem = True
+                    break
+            if not in_subsystem:
+                continue
+
+        propagation = vulnerability_propagation(conn, node["id"])
+        prop_count = sum(
+            len(v.get("dependents", [])) + len(v.get("composed_with", [])) + len(v.get("shared_invariant", []))
+            for v in propagation.get("propagated", {}).values()
+        )
+        results.append({
+            "id": node["id"],
+            "cve_id": attrs.get("cve_id", ""),
+            "title": attrs.get("title", node["id"]),
+            "severity": sev,
+            "cvss_score": attrs.get("cvss_score", ""),
+            "source_date": attrs.get("source_date", ""),
+            "status": attrs.get("status", ""),
+            "direct_concepts": len(propagation.get("direct", [])),
+            "propagated_concepts": prop_count,
+        })
+
+    results.sort(
+        key=lambda v: float(v.get("cvss_score", 0) or 0),
+        reverse=True,
+    )
+    return results
+
+
+@mcp.tool()
+def get_recent_fixes(
+    subsystem: str | None = None,
+    window_days: int = 30,
+    fix_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """Get recent fixes filtered by source_date window.
+
+    INV-KK-MCP-RECENT-FIXES-WINDOW: filters by source_date, not ingestion time.
+    Sorted by source_date descending (most recent first).
+    """
+    conn = _get_conn()
+    since = (datetime.now(UTC) - timedelta(days=window_days)).strftime("%Y-%m-%d")
+
+    rows = conn.execute(
+        "SELECT id, kind, attrs FROM nodes WHERE kind = 'Fix' "
+        "AND json_extract(attrs, '$.source_date') >= ? ORDER BY id",
+        (since,),
+    ).fetchall()
+
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        node = _row_to_dict(row)
+        attrs = node.get("attrs") or {}
+
+        if fix_type and attrs.get("fix_type", "") != fix_type:
+            continue
+
+        if subsystem:
+            patch_rows = conn.execute(
+                "SELECT target_id FROM edges WHERE kind = 'patches' AND source_id = ?",
+                (node["id"],),
+            ).fetchall()
+            in_subsystem = False
+            for pr in patch_rows:
+                sub_check = conn.execute(
+                    "SELECT 1 FROM edges WHERE kind = 'belongs-to' AND source_id = ? AND target_id = ?",
+                    (pr[0], subsystem),
+                ).fetchone()
+                if sub_check:
+                    in_subsystem = True
+                    break
+            if not in_subsystem:
+                continue
+
+        fix_rows = conn.execute(
+            "SELECT target_id FROM edges WHERE kind = 'fixes' AND source_id = ?",
+            (node["id"],),
+        ).fetchall()
+        resolves: list[dict[str, str]] = []
+        for fr in fix_rows:
+            target_node = conn.execute(
+                "SELECT id, kind, json_extract(attrs, '$.title') as title, "
+                "json_extract(attrs, '$.cve_id') as cve_id FROM nodes WHERE id = ?",
+                (fr[0],),
+            ).fetchone()
+            if target_node:
+                entry: dict[str, str] = {"id": target_node[0], "kind": target_node[1]}
+                if target_node[2]:
+                    entry["title"] = target_node[2]
+                if target_node[3]:
+                    entry["cve_id"] = target_node[3]
+                resolves.append(entry)
+
+        results.append({
+            "id": node["id"],
+            "title": attrs.get("title", node["id"]),
+            "commit_hash": attrs.get("commit_hash", ""),
+            "fix_type": attrs.get("fix_type", ""),
+            "source_date": attrs.get("source_date", ""),
+            "resolves": resolves,
+        })
+
+    results.sort(key=lambda f: f.get("source_date", ""), reverse=True)
+    return results
 
 
 def main() -> None:

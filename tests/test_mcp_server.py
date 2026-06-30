@@ -621,3 +621,290 @@ def test_get_problems_empty_for_no_problems(idea_snapshot_path):
 def test_get_problems_empty_for_missing_concept(idea_snapshot_path):
     result = srv.get_problems_for_concept("concept-nonexistent")
     assert result == []
+
+
+# --- MCP Vuln/Fix Tools (Stage 18) ---
+
+
+@pytest.fixture
+def vuln_fix_snapshot_path(tmp_path):
+    """Snapshot with vulns, fixes, convergence data for vuln/fix tool tests."""
+    master_path = tmp_path / "master_vf.db"
+    snap_path = tmp_path / "snapshot_vf.db"
+
+    conn = init_db(master_path)
+    add_node(conn, "src-1", "Source", {
+        "url": "https://example.com/paper.pdf",
+        "source_type": "paper",
+        "license": "MIT",
+    })
+    add_node(conn, "src-2", "Source", {
+        "url": "https://example.com/article.html",
+        "source_type": "discourse",
+        "license": "CC-BY",
+    })
+    add_node(conn, "ev-1", "Evidence", {"artifact_class": "A", "contamination_level": "weak-copyleft"})
+    add_node(conn, "ev-2", "Evidence", {"artifact_class": "A", "contamination_level": "weak-copyleft"})
+    add_node(conn, "ev-3", "Evidence", {"artifact_class": "A", "contamination_level": "weak-copyleft"})
+    add_edge(conn, "sourced-from", "ev-1", "src-1")
+    add_edge(conn, "sourced-from", "ev-2", "src-1")
+    add_edge(conn, "sourced-from", "ev-3", "src-2")
+    add_node(conn, "adv-1", "Advisory", {"assessment": "Cleared.", "contamination_confirmed": "none"})
+    add_edge(conn, "assessed-by", "src-1", "adv-1")
+    add_edge(conn, "assessed-by", "src-2", "adv-1")
+
+    add_node(conn, "sub-mm", "Subsystem", {"name": "Memory Management"})
+    add_node(conn, "sub-sched", "Subsystem", {"name": "Scheduler"})
+
+    add_node(conn, "c-slab", "Concept", {
+        "name": "Slab Allocator", "description": "Kernel slab allocator",
+        "artifact_class": "B", "key_properties": ["cache-friendly"],
+        "tradeoffs": ["fragmentation"], "design_rationale": "Fast allocation.",
+    })
+    add_node(conn, "c-rcu", "Concept", {
+        "name": "RCU", "description": "Read-Copy-Update",
+        "artifact_class": "B", "key_properties": ["lock-free reads"],
+        "tradeoffs": ["grace period"], "design_rationale": "Read optimization.",
+    })
+    add_node(conn, "c-pagecache", "Concept", {
+        "name": "Page Cache", "description": "Page cache subsystem",
+        "artifact_class": "B", "key_properties": ["caching"],
+        "tradeoffs": ["memory pressure"], "design_rationale": "Disk I/O optimization.",
+    })
+    add_edge(conn, "extracted-from", "c-slab", "ev-1")
+    add_edge(conn, "extracted-from", "c-rcu", "ev-2")
+    add_edge(conn, "extracted-from", "c-pagecache", "ev-3")
+    add_edge(conn, "belongs-to", "c-slab", "sub-mm")
+    add_edge(conn, "belongs-to", "c-rcu", "sub-sched")
+    add_edge(conn, "belongs-to", "c-pagecache", "sub-mm")
+    add_edge(conn, "prerequisite", "c-pagecache", "c-slab")
+
+    # Observations linked to concepts for convergence testing
+    add_node(conn, "obs-1", "Observation", {
+        "claim": "SLAB fragmentation under NUMA", "confidence": "high",
+        "source_date": "2026-06-10", "artifact_class": "B",
+    })
+    add_node(conn, "obs-2", "Observation", {
+        "claim": "Page cache pressure on NUMA", "confidence": "medium",
+        "source_date": "2026-06-12", "artifact_class": "B",
+    })
+    add_edge(conn, "observes", "obs-1", "c-slab")
+    add_edge(conn, "observes", "obs-2", "c-pagecache")
+    add_edge(conn, "extracted-from", "obs-1", "ev-1")
+    add_edge(conn, "extracted-from", "obs-2", "ev-3")
+
+    # Vulnerability
+    add_node(conn, "vuln-1", "Vulnerability", {
+        "cve_id": "CVE-2026-1111", "title": "Use-after-free in SLUB",
+        "description": "UAF in slab allocator.", "severity": "critical",
+        "cvss_score": "9.8", "affected_versions": "6.1-6.10",
+        "status": "unfixed", "source_date": "2026-06-20", "artifact_class": "B",
+    })
+    add_node(conn, "vuln-2", "Vulnerability", {
+        "cve_id": "CVE-2026-2222", "title": "Minor info leak",
+        "description": "Low severity info leak.", "severity": "low",
+        "cvss_score": "2.0", "affected_versions": "6.5",
+        "status": "fixed", "source_date": "2026-06-18", "artifact_class": "B",
+    })
+    add_node(conn, "vuln-old", "Vulnerability", {
+        "cve_id": "CVE-2025-0001", "title": "Old vulnerability",
+        "description": "Very old vuln.", "severity": "high",
+        "cvss_score": "7.5", "affected_versions": "5.10",
+        "status": "fixed", "source_date": "2025-01-01", "artifact_class": "B",
+    })
+    add_edge(conn, "exploits", "vuln-1", "c-slab")
+    add_edge(conn, "exploits", "vuln-2", "c-rcu")
+    add_edge(conn, "exploits", "vuln-old", "c-rcu")
+
+    # Fix nodes
+    add_node(conn, "fix-1", "Fix", {
+        "title": "Fix SLUB use-after-free", "commit_hash": "abc123",
+        "fix_type": "security-fix", "source_date": "2026-06-22", "artifact_class": "B",
+    })
+    add_node(conn, "fix-2", "Fix", {
+        "title": "Fix scheduler regression", "commit_hash": "def456",
+        "fix_type": "regression-fix", "source_date": "2026-06-15", "artifact_class": "B",
+    })
+    add_node(conn, "fix-old", "Fix", {
+        "title": "Old bugfix", "commit_hash": "000aaa",
+        "fix_type": "bugfix", "source_date": "2025-01-15", "artifact_class": "B",
+    })
+    add_edge(conn, "fixes", "fix-1", "vuln-1")
+    add_edge(conn, "patches", "fix-1", "c-slab")
+    add_edge(conn, "patches", "fix-2", "c-rcu")
+
+    conn.commit()
+    conn.close()
+
+    export_class_b_snapshot(master_path, snap_path)
+    srv.init_snapshot(str(snap_path))
+    yield snap_path
+
+    if srv._conn is not None:
+        srv._conn.close()
+        srv._conn = None
+
+
+# --- get_convergence tests ---
+
+def test_get_convergence_returns_structure(vuln_fix_snapshot_path):
+    result = srv.get_convergence(["c-slab", "c-pagecache"])
+    assert "concept_ids" in result
+    assert "evidence_per_concept" in result
+    assert "shared_evidence" in result
+    assert "common_problems" in result
+    assert "convergence_score" in result
+
+
+def test_get_convergence_counts_distinct_evidence(vuln_fix_snapshot_path):
+    """INV-KK-MCP-CONVERGENCE-INDEPENDENT: counts distinct evidence nodes."""
+    result = srv.get_convergence(["c-slab", "c-pagecache"])
+    assert result["convergence_score"] >= 1
+
+
+def test_get_convergence_shared_evidence(vuln_fix_snapshot_path):
+    result = srv.get_convergence(["c-slab", "c-rcu"])
+    assert isinstance(result["shared_evidence"], list)
+
+
+def test_get_convergence_empty_concepts(vuln_fix_snapshot_path):
+    result = srv.get_convergence([])
+    assert result["convergence_score"] == 0
+    assert result["shared_evidence"] == []
+
+
+def test_get_convergence_single_concept(vuln_fix_snapshot_path):
+    result = srv.get_convergence(["c-slab"])
+    assert result["convergence_score"] >= 0
+    assert result["shared_evidence"] == []
+
+
+def test_get_convergence_nonexistent_concept(vuln_fix_snapshot_path):
+    result = srv.get_convergence(["nonexistent-concept"])
+    assert result["convergence_score"] == 0
+
+
+# --- get_vulnerability_impact tests ---
+
+def test_get_vulnerability_impact_returns_propagation(vuln_fix_snapshot_path):
+    """INV-KK-MCP-VULN-IMPACT-PROPAGATE: delegates to vulnerability_propagation."""
+    result = srv.get_vulnerability_impact("vuln-1")
+    assert "direct" in result
+    assert "propagated" in result
+    assert "affected_subsystems" in result
+    assert "c-slab" in result["direct"]
+
+
+def test_get_vulnerability_impact_affected_subsystems(vuln_fix_snapshot_path):
+    result = srv.get_vulnerability_impact("vuln-1")
+    sub_ids = [s["id"] for s in result["affected_subsystems"]]
+    assert "sub-mm" in sub_ids
+
+
+def test_get_vulnerability_impact_propagated_dependents(vuln_fix_snapshot_path):
+    result = srv.get_vulnerability_impact("vuln-1")
+    assert "c-slab" in result["propagated"]
+    slab_prop = result["propagated"]["c-slab"]
+    assert "c-pagecache" in slab_prop.get("dependents", [])
+
+
+def test_get_vulnerability_impact_not_found(vuln_fix_snapshot_path):
+    result = srv.get_vulnerability_impact("nonexistent")
+    assert result.get("error") == "not_found"
+
+
+def test_get_vulnerability_impact_vuln_old_has_propagation(vuln_fix_snapshot_path):
+    result = srv.get_vulnerability_impact("vuln-old")
+    assert "c-rcu" in result["direct"]
+    assert "affected_subsystems" in result
+
+
+# --- get_recent_vulns tests ---
+
+def test_get_recent_vulns_returns_list(vuln_fix_snapshot_path):
+    result = srv.get_recent_vulns(window_days=365 * 5)
+    assert isinstance(result, list)
+    assert len(result) >= 1
+
+
+def test_get_recent_vulns_window_filter(vuln_fix_snapshot_path):
+    """INV-KK-MCP-RECENT-VULNS-WINDOW: filters by source_date."""
+    result = srv.get_recent_vulns(window_days=30, min_severity="low")
+    dates = [v["source_date"] for v in result]
+    assert "2025-01-01" not in dates
+
+
+def test_get_recent_vulns_severity_filter(vuln_fix_snapshot_path):
+    result = srv.get_recent_vulns(window_days=365 * 5, min_severity="critical")
+    for v in result:
+        assert v["severity"] == "critical"
+
+
+def test_get_recent_vulns_subsystem_filter(vuln_fix_snapshot_path):
+    result = srv.get_recent_vulns(subsystem="sub-mm", window_days=365 * 5, min_severity="low")
+    for v in result:
+        assert v["cve_id"] != "CVE-2026-2222"
+
+
+def test_get_recent_vulns_sorted_by_cvss(vuln_fix_snapshot_path):
+    result = srv.get_recent_vulns(window_days=365 * 5, min_severity="low")
+    for i in range(len(result) - 1):
+        assert float(result[i].get("cvss_score", 0) or 0) >= float(result[i + 1].get("cvss_score", 0) or 0)
+
+
+def test_get_recent_vulns_includes_propagation_count(vuln_fix_snapshot_path):
+    result = srv.get_recent_vulns(window_days=365 * 5, min_severity="low")
+    for v in result:
+        assert "direct_concepts" in v
+        assert "propagated_concepts" in v
+
+
+def test_get_recent_vulns_empty_for_future_window(vuln_fix_snapshot_path):
+    result = srv.get_recent_vulns(window_days=0, min_severity="low")
+    assert result == [] or all(v["source_date"] >= "2026-06-29" for v in result)
+
+
+# --- get_recent_fixes tests ---
+
+def test_get_recent_fixes_returns_list(vuln_fix_snapshot_path):
+    result = srv.get_recent_fixes(window_days=365 * 5)
+    assert isinstance(result, list)
+    assert len(result) >= 1
+
+
+def test_get_recent_fixes_window_filter(vuln_fix_snapshot_path):
+    """INV-KK-MCP-RECENT-FIXES-WINDOW: filters by source_date."""
+    result = srv.get_recent_fixes(window_days=30)
+    dates = [f["source_date"] for f in result]
+    assert "2025-01-15" not in dates
+
+
+def test_get_recent_fixes_fix_type_filter(vuln_fix_snapshot_path):
+    result = srv.get_recent_fixes(window_days=365 * 5, fix_type="security-fix")
+    for f in result:
+        assert f["fix_type"] == "security-fix"
+
+
+def test_get_recent_fixes_subsystem_filter(vuln_fix_snapshot_path):
+    result = srv.get_recent_fixes(subsystem="sub-mm", window_days=365 * 5)
+    for f in result:
+        assert f["id"] == "fix-1"
+
+
+def test_get_recent_fixes_sorted_by_date_desc(vuln_fix_snapshot_path):
+    result = srv.get_recent_fixes(window_days=365 * 5)
+    for i in range(len(result) - 1):
+        assert result[i]["source_date"] >= result[i + 1]["source_date"]
+
+
+def test_get_recent_fixes_includes_resolves(vuln_fix_snapshot_path):
+    result = srv.get_recent_fixes(window_days=365 * 5)
+    fix1 = [f for f in result if f["id"] == "fix-1"]
+    assert len(fix1) == 1
+    assert len(fix1[0]["resolves"]) >= 1
+    assert fix1[0]["resolves"][0]["kind"] == "Vulnerability"
+
+
+def test_get_recent_fixes_empty_result(vuln_fix_snapshot_path):
+    result = srv.get_recent_fixes(window_days=365 * 5, fix_type="nonexistent-type")
+    assert result == []
