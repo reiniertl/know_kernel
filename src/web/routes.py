@@ -833,6 +833,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         direct_briefs = []
         for cid in prop["direct"]:
             brief = build_concept_brief(conn, cid)
+            brief["motivations"] = classify_motivations(brief)
             direct_briefs.append(brief)
 
         propagated_details: list[dict] = []

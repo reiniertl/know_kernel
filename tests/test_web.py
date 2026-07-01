@@ -1757,6 +1757,71 @@ def test_idea_detail_shows_argument(ideas_client):
     assert "The Case" in response.text
 
 
+def test_vuln_detail_shows_concept_motivations(tmp_path):
+    """INV-KK-WEB-VULN-MOTIVATION-CONTEXT: exploited concept shows non-security motivations."""
+    from graph.engine import add_edge, add_node
+    from graph.schema import init_db
+    from web.app import create_app
+    db_path = tmp_path / "vuln_motiv.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-1", "Concept", {
+        "name": "TestConcept", "description": "test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+    })
+    add_node(conn, "vuln-1", "Vulnerability", {
+        "cve_id": "CVE-2026-0001", "title": "Test vuln", "cvss_score": 9.0,
+        "severity": "critical", "description": "A test vulnerability.",
+        "affected_versions": "6.1", "status": "open", "source_date": "2026-06-15",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "exploits", "vuln-1", "c-1")
+    add_node(conn, "fm-1", "FailureMode", {
+        "symptom": "Kernel panic on null deref", "blast_radius": "kernel-wide",
+        "recoverability": "requires-restart", "artifact_class": "B",
+    })
+    add_node(conn, "kinv-1", "KernelInvariant", {
+        "predicate": "test invariant", "strength": "strong",
+        "scope": "global", "artifact_class": "B",
+    })
+    add_edge(conn, "governed-by", "kinv-1", "c-1")
+    add_edge(conn, "triggered-by", "fm-1", "kinv-1")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/vulns/vuln-1")
+    assert response.status_code == 200
+    assert "STABILITY" in response.text
+
+
+def test_vuln_detail_omits_security_motivation(tmp_path):
+    """INV-KK-WEB-VULN-MOTIVATION-NO-SECURITY: security motivation not shown on vuln page."""
+    from graph.engine import add_edge, add_node
+    from graph.schema import init_db
+    from web.app import create_app
+    db_path = tmp_path / "vuln_nosec.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-1", "Concept", {
+        "name": "TestConcept", "description": "test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+    })
+    add_node(conn, "vuln-1", "Vulnerability", {
+        "cve_id": "CVE-2026-0001", "title": "Test vuln", "cvss_score": 9.0,
+        "severity": "critical", "description": "A test vulnerability.",
+        "affected_versions": "6.1", "status": "open", "source_date": "2026-06-15",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "exploits", "vuln-1", "c-1")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/vulns/vuln-1")
+    assert response.status_code == 200
+    exploited_section = response.text.split("Directly Exploited")[1].split("Blast Radius")[0] if "Blast Radius" in response.text else response.text.split("Directly Exploited")[1]
+    assert "SECURITY" not in exploited_section
+
+
 def test_idea_detail_no_empty_motivations(tmp_path):
     """INV-KK-WEB-IDEA-MOTIVATIONS: no motivation section when no triggering data."""
     from graph.engine import add_edge, add_node

@@ -46,6 +46,16 @@
     <p>{{ brief.concept.description }}</p>
     {% endif %}
 
+    {% if brief.motivations %}
+    <div style="margin:0.5em 0;">
+      {% for m in brief.motivations %}
+        {% if m.category != 'security' %}
+        <span style="margin-right:0.5em;">{{ m.icon }} <strong>{{ m.label }}</strong>: {{ m.headline }}</span>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+
     {% if brief.invariants %}
     <h4>Invariants at Risk</h4>
     {% for inv in brief.invariants %}
