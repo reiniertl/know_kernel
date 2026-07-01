@@ -363,3 +363,359 @@ def _empty_brief(concept_id: str) -> dict[str, Any]:
         "timeline": [],
         "code_examples": [],
     }
+
+
+# ---------------------------------------------------------------------------
+# Motivation classification (ALG-KK-GRAPH-CLASSIFY-MOTIVATIONS)
+# ---------------------------------------------------------------------------
+
+_PERFORMANCE_KEYWORDS = frozenset({
+    "latency", "throughput", "overhead", "bottleneck", "faster", "slower",
+    "regression", "improvement", "speedup", "bandwidth", "iops", "cycles",
+    "cache miss", "tlb miss", "context switch",
+})
+
+_SCALABILITY_KEYWORDS = frozenset({
+    "numa", "core count", "128 cores", "256 cores", "512 cores",
+    "scalab", "contention", "lock contention", "per-cpu", "per-node",
+    "cache line bouncing", "false sharing", "thundering herd",
+    "multi-socket", "cross-node", "numa node", "memory node",
+})
+
+_EFFICIENCY_KEYWORDS = frozenset({
+    "memory overhead", "memory footprint", "power consumption", "energy",
+    "cpu utilization", "wasted", "footprint", "bloat", "fragmentation",
+    "internal fragmentation", "external fragmentation", "metadata overhead",
+    "housekeeping", "idle power", "thermal",
+})
+
+_HARDWARE_KEYWORDS = frozenset({
+    "hardware", "instruction", "cxl", "pcie", "nvme", "accelerat",
+    "fpga", "gpu", "dpu", "amx", "sve", "sme", "tdx", "sev",
+    "persistent memory", "pmem", "ddr5", "hbm", "cxl.mem",
+    "device class", "new device", "hardware capability",
+})
+
+_HARDWARE_SUBSYSTEMS = frozenset({
+    "Device Drivers", "Virtualization", "Storage Stack",
+    "Firmware Interface", "Cryptography",
+})
+
+_MOTIVATION_ICONS: dict[str, str] = {
+    "security": "\U0001f534",
+    "stability": "⚠️",
+    "performance": "⚡",
+    "scalability": "\U0001f4c8",
+    "efficiency": "\U0001f4a1",
+    "hardware_enablement": "\U0001f527",
+    "maintainability": "\U0001f504",
+}
+
+_MOTIVATION_LABELS: dict[str, str] = {
+    "security": "SECURITY",
+    "stability": "STABILITY",
+    "performance": "PERFORMANCE",
+    "scalability": "SCALABILITY",
+    "efficiency": "EFFICIENCY",
+    "hardware_enablement": "HARDWARE ENABLEMENT",
+    "maintainability": "MAINTAINABILITY",
+}
+
+
+def _text_has_keywords(text: str, keywords: frozenset[str]) -> bool:
+    """Check if *text* contains any keyword (case-insensitive)."""
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in keywords)
+
+
+def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
+    """Classify a concept brief into 1-7 orthogonal motivation categories.
+
+    Returns a list of dicts, each with:
+      category, icon, label, headline, evidence
+
+    Only triggered categories are returned, in priority order.
+    """
+    motivations: list[dict[str, Any]] = []
+
+    # --- SECURITY ---
+    vulns = brief["vulnerabilities"]
+    if vulns:
+        severity_counts: dict[str, int] = {}
+        for v in vulns:
+            s = v.get("severity", "medium")
+            severity_counts[s] = severity_counts.get(s, 0) + 1
+        severity_parts = []
+        for s in ("critical", "high", "medium", "low"):
+            if severity_counts.get(s):
+                severity_parts.append(f"{severity_counts[s]} {s}")
+        dep_count = len(brief["prerequisites"]["depended_on_by"])
+        headline = (
+            f"{len(vulns)} active vulnerabilit"
+            f"{'y' if len(vulns) == 1 else 'ies'}"
+            f" ({', '.join(severity_parts)})"
+        )
+        if dep_count > 0:
+            headline += (
+                f". {dep_count} additional component"
+                f"{'s' if dep_count != 1 else ''}"
+                " at risk through coupling"
+            )
+        evidence = [
+            {
+                "type": "vulnerability",
+                "text": f"{v['cve_id']}: {v['description']}",
+                "severity": v.get("severity", "medium"),
+                "cvss": v.get("cvss_score", 0.0),
+            }
+            for v in vulns
+        ]
+        motivations.append({
+            "category": "security",
+            "icon": _MOTIVATION_ICONS["security"],
+            "label": _MOTIVATION_LABELS["security"],
+            "headline": headline,
+            "evidence": evidence,
+        })
+
+    # --- STABILITY ---
+    failure_modes = brief["failure_modes"]
+    critical_problems = [
+        p for p in brief["problems"]
+        if p.get("severity") in ("critical", "high")
+    ]
+    if failure_modes or critical_problems:
+        parts: list[str] = []
+        fm_evidence: list[dict[str, Any]] = []
+        if failure_modes:
+            top_fm = failure_modes[0]
+            parts.append(
+                f"Known failure mode: \"{top_fm['symptom']}\""
+                f" (blast radius: {top_fm['blast_radius']},"
+                f" {top_fm['recoverability']})"
+            )
+            fm_evidence.extend(
+                {
+                    "type": "failure_mode",
+                    "text": fm["symptom"],
+                    "blast_radius": fm["blast_radius"],
+                }
+                for fm in failure_modes
+            )
+        if brief["invariants"]:
+            top_inv = brief["invariants"][0]
+            parts.append(f"Invariant at risk: \"{top_inv['predicate']}\"")
+            fm_evidence.extend(
+                {"type": "invariant", "text": inv["predicate"]}
+                for inv in brief["invariants"]
+            )
+        if critical_problems:
+            parts.append(
+                f"{len(critical_problems)} open"
+                f" {critical_problems[0]['severity']}"
+                f" problem{'s' if len(critical_problems) != 1 else ''}"
+            )
+            fm_evidence.extend(
+                {
+                    "type": "problem",
+                    "text": p["title"],
+                    "severity": p["severity"],
+                }
+                for p in critical_problems
+            )
+        motivations.append({
+            "category": "stability",
+            "icon": _MOTIVATION_ICONS["stability"],
+            "label": _MOTIVATION_LABELS["stability"],
+            "headline": ". ".join(parts),
+            "evidence": fm_evidence,
+        })
+
+    # --- PERFORMANCE ---
+    profiles = brief["profiles"]
+    benchmarks = brief["benchmarks"]
+    perf_observations = [
+        o for o in brief["observations"]
+        if _text_has_keywords(o["claim"], _PERFORMANCE_KEYWORDS)
+    ]
+    if profiles or benchmarks or perf_observations:
+        parts = []
+        perf_evidence: list[dict[str, Any]] = []
+        if profiles:
+            top_prof = profiles[0]
+            parts.append(
+                f"{top_prof['metric']}: {top_prof['best_case']}"
+                f" best → {top_prof['worst_case']} worst"
+            )
+            perf_evidence.extend(
+                {
+                    "type": "profile",
+                    "text": (
+                        f"{p['metric']}: {p['best_case']}"
+                        f" → {p['worst_case']}"
+                        f" ({p['conditions']})"
+                    ),
+                }
+                for p in profiles
+            )
+        if benchmarks:
+            perf_evidence.extend(
+                {"type": "benchmark", "text": b["result_summary"]}
+                for b in benchmarks
+            )
+        if perf_observations:
+            for o in perf_observations:
+                parts.append(f"\"{o['claim']}\"")
+            perf_evidence.extend(
+                {"type": "observation", "text": o["claim"]}
+                for o in perf_observations
+            )
+        motivations.append({
+            "category": "performance",
+            "icon": _MOTIVATION_ICONS["performance"],
+            "label": _MOTIVATION_LABELS["performance"],
+            "headline": (
+                ". ".join(parts) if parts else "Performance data available"
+            ),
+            "evidence": perf_evidence,
+        })
+
+    # --- SCALABILITY ---
+    all_text_fields = (
+        [p["description"] for p in brief["problems"]]
+        + [o["claim"] for o in brief["observations"]]
+        + [d["title"] for d in brief["discussions"]]
+    )
+    scaling_hits = [
+        t for t in all_text_fields
+        if _text_has_keywords(t, _SCALABILITY_KEYWORDS)
+    ]
+    if scaling_hits:
+        motivations.append({
+            "category": "scalability",
+            "icon": _MOTIVATION_ICONS["scalability"],
+            "label": _MOTIVATION_LABELS["scalability"],
+            "headline": scaling_hits[0],
+            "evidence": [
+                {"type": "text_match", "text": t} for t in scaling_hits
+            ],
+        })
+
+    # --- EFFICIENCY ---
+    efficiency_hits = (
+        [
+            f"{p['metric']}: {p['worst_case']}"
+            for p in profiles
+            if _text_has_keywords(p["metric"], _EFFICIENCY_KEYWORDS)
+        ]
+        + [
+            o["claim"]
+            for o in brief["observations"]
+            if _text_has_keywords(o["claim"], _EFFICIENCY_KEYWORDS)
+        ]
+        + [
+            p["description"]
+            for p in brief["problems"]
+            if _text_has_keywords(p["description"], _EFFICIENCY_KEYWORDS)
+        ]
+    )
+    if efficiency_hits:
+        motivations.append({
+            "category": "efficiency",
+            "icon": _MOTIVATION_ICONS["efficiency"],
+            "label": _MOTIVATION_LABELS["efficiency"],
+            "headline": efficiency_hits[0],
+            "evidence": [
+                {"type": "text_match", "text": t} for t in efficiency_hits
+            ],
+        })
+
+    # --- HARDWARE ENABLEMENT ---
+    hw_hits = (
+        [
+            d["title"]
+            for d in brief["discussions"]
+            if _text_has_keywords(d["title"], _HARDWARE_KEYWORDS)
+        ]
+        + [
+            o["claim"]
+            for o in brief["observations"]
+            if _text_has_keywords(o["claim"], _HARDWARE_KEYWORDS)
+        ]
+    )
+    hw_from_description = _text_has_keywords(
+        brief["concept"]["description"], _HARDWARE_KEYWORDS
+    )
+    hw_from_subsystem = (
+        brief["subsystem"] is not None
+        and brief["subsystem"]["name"] in _HARDWARE_SUBSYSTEMS
+        and brief["scores"]["heat"] > brief["scores"]["pain"]
+    )
+    if hw_hits or hw_from_description or hw_from_subsystem:
+        parts = []
+        hw_evidence: list[dict[str, Any]] = [
+            {"type": "text_match", "text": t} for t in hw_hits
+        ]
+        if hw_from_description:
+            parts.append(
+                f"{brief['concept']['name']} interfaces"
+                " with hardware capabilities"
+            )
+            hw_evidence.append({
+                "type": "concept_description",
+                "text": brief["concept"]["description"][:200],
+            })
+        if hw_from_subsystem:
+            parts.append(
+                f"Active area in {brief['subsystem']['name']}"
+                " subsystem (heat > pain)"
+            )
+        if hw_hits:
+            parts.append(hw_hits[0])
+        motivations.append({
+            "category": "hardware_enablement",
+            "icon": _MOTIVATION_ICONS["hardware_enablement"],
+            "label": _MOTIVATION_LABELS["hardware_enablement"],
+            "headline": (
+                ". ".join(parts)
+                if parts
+                else "Hardware-related activity"
+            ),
+            "evidence": hw_evidence,
+        })
+
+    # --- MAINTAINABILITY ---
+    fixes = brief["fixes"]
+    regression_fixes = [
+        f for f in fixes if f.get("fix_type") == "regression-fix"
+    ]
+    if len(fixes) >= 3 or regression_fixes:
+        parts = [
+            f"{len(fixes)} patch"
+            f"{'es' if len(fixes) != 1 else ''}"
+            " in recent window"
+        ]
+        if regression_fixes:
+            parts.append(
+                f"{len(regression_fixes)} regression fix"
+                f"{'es' if len(regression_fixes) != 1 else ''}"
+            )
+        motivations.append({
+            "category": "maintainability",
+            "icon": _MOTIVATION_ICONS["maintainability"],
+            "label": _MOTIVATION_LABELS["maintainability"],
+            "headline": (
+                ", including ".join(parts) if len(parts) > 1 else parts[0]
+            ),
+            "evidence": [
+                {
+                    "type": "fix",
+                    "text": f["title"],
+                    "fix_type": f.get("fix_type", "unknown"),
+                    "commit": f.get("commit_hash", ""),
+                }
+                for f in fixes
+            ],
+        })
+
+    return motivations

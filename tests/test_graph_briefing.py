@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from graph.briefing import build_concept_brief
+from graph.briefing import build_concept_brief, classify_motivations, _empty_brief
 from graph.engine import add_edge, add_node
 from graph.schema import init_db
 
@@ -407,3 +407,147 @@ def test_brief_nonexistent_concept(brief_db):
     assert set(brief.keys()) == EXPECTED_KEYS
     assert brief["concept"]["name"] == ""
     assert brief["subsystem"] is None
+
+
+# --- classify_motivations tests (ALG-KK-GRAPH-CLASSIFY-MOTIVATIONS) ---
+
+def _make_brief(**overrides):
+    """Build an _empty_brief with selective field overrides."""
+    brief = _empty_brief("test-concept")
+    for k, v in overrides.items():
+        if isinstance(v, dict) and isinstance(brief.get(k), dict):
+            brief[k].update(v)
+        else:
+            brief[k] = v
+    return brief
+
+
+def test_classify_security_triggered():
+    brief = _make_brief(vulnerabilities=[
+        {"cve_id": "CVE-2026-0001", "description": "Buffer overflow", "severity": "high", "cvss_score": 8.0},
+    ])
+    result = classify_motivations(brief)
+    cats = [m["category"] for m in result]
+    assert "security" in cats
+
+
+def test_classify_security_not_triggered():
+    brief = _make_brief()
+    result = classify_motivations(brief)
+    cats = [m["category"] for m in result]
+    assert "security" not in cats
+
+
+def test_classify_security_headline_has_count():
+    brief = _make_brief(vulnerabilities=[
+        {"cve_id": "CVE-2026-0001", "description": "Overflow A", "severity": "high", "cvss_score": 8.0},
+        {"cve_id": "CVE-2026-0002", "description": "Overflow B", "severity": "critical", "cvss_score": 9.0},
+    ])
+    result = classify_motivations(brief)
+    sec = [m for m in result if m["category"] == "security"][0]
+    assert "2 active vulnerabilities" in sec["headline"]
+
+
+def test_classify_stability_from_failure_modes():
+    brief = _make_brief(failure_modes=[
+        {"symptom": "kernel panic on OOM", "blast_radius": "kernel-wide", "recoverability": "unrecoverable"},
+    ])
+    result = classify_motivations(brief)
+    cats = [m["category"] for m in result]
+    assert "stability" in cats
+
+
+def test_classify_stability_from_critical_problems():
+    brief = _make_brief(problems=[
+        {"title": "Data corruption", "description": "Silent data corruption under load", "severity": "critical", "status": "open"},
+    ])
+    result = classify_motivations(brief)
+    cats = [m["category"] for m in result]
+    assert "stability" in cats
+
+
+def test_classify_stability_not_triggered():
+    brief = _make_brief(problems=[
+        {"title": "Minor issue", "description": "Low severity issue", "severity": "low", "status": "open"},
+    ])
+    result = classify_motivations(brief)
+    cats = [m["category"] for m in result]
+    assert "stability" not in cats
+
+
+def test_classify_performance_from_profiles():
+    brief = _make_brief(profiles=[
+        {"metric": "allocation latency", "best_case": "50ns", "worst_case": "10us", "conditions": "per-cpu hit"},
+    ])
+    result = classify_motivations(brief)
+    cats = [m["category"] for m in result]
+    assert "performance" in cats
+
+
+def test_classify_performance_from_observation_keyword():
+    brief = _make_brief(observations=[
+        {"claim": "Latency increased 30% after migration"},
+    ])
+    result = classify_motivations(brief)
+    cats = [m["category"] for m in result]
+    assert "performance" in cats
+
+
+def test_classify_scalability_from_keyword():
+    brief = _make_brief(problems=[
+        {"title": "Lock issue", "description": "NUMA contention causes 40% throughput drop", "severity": "medium", "status": "open"},
+    ])
+    result = classify_motivations(brief)
+    cats = [m["category"] for m in result]
+    assert "scalability" in cats
+
+
+def test_classify_scalability_not_triggered():
+    brief = _make_brief(problems=[
+        {"title": "Bug fix", "description": "Simple null check missing", "severity": "medium", "status": "open"},
+    ])
+    result = classify_motivations(brief)
+    cats = [m["category"] for m in result]
+    assert "scalability" not in cats
+
+
+def test_classify_hardware_from_subsystem_heuristic():
+    brief = _make_brief(
+        concept={"id": "test", "name": "VFIO", "description": "Virtual Function I/O", "key_properties": [], "tradeoffs": [], "design_rationale": ""},
+        subsystem={"name": "Virtualization", "description": ""},
+        scores={"heat": 5.0, "pain": 2.0, "impact": 0.0, "leverage": 0.0, "frontier": 0.0},
+    )
+    result = classify_motivations(brief)
+    cats = [m["category"] for m in result]
+    assert "hardware_enablement" in cats
+
+
+def test_classify_maintainability_from_regression_fix():
+    brief = _make_brief(fixes=[
+        {"title": "Revert optimization", "fix_type": "regression-fix", "commit_hash": "abc123"},
+    ])
+    result = classify_motivations(brief)
+    cats = [m["category"] for m in result]
+    assert "maintainability" in cats
+
+
+def test_classify_maintainability_from_high_churn():
+    brief = _make_brief(fixes=[
+        {"title": "Fix A", "fix_type": "bugfix", "commit_hash": "a1"},
+        {"title": "Fix B", "fix_type": "bugfix", "commit_hash": "b2"},
+        {"title": "Fix C", "fix_type": "bugfix", "commit_hash": "c3"},
+    ])
+    result = classify_motivations(brief)
+    cats = [m["category"] for m in result]
+    assert "maintainability" in cats
+
+
+def test_classify_returns_only_triggered():
+    brief = _make_brief()
+    result = classify_motivations(brief)
+    assert isinstance(result, list)
+    for m in result:
+        assert m["category"] in (
+            "security", "stability", "performance", "scalability",
+            "efficiency", "hardware_enablement", "maintainability",
+        )
