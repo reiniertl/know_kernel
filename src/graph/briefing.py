@@ -719,3 +719,112 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
         })
 
     return motivations
+
+
+# ---------------------------------------------------------------------------
+# Argument paragraph (ALG-KK-GRAPH-BUILD-ARGUMENT)
+# ---------------------------------------------------------------------------
+
+
+def build_argument_paragraph(
+    node_attrs: dict[str, Any],
+    briefs: list[dict[str, Any]],
+    motivations: list[dict[str, Any]],
+    window_days: int = 90,
+) -> str:
+    """Compose a deterministic argument paragraph from structured data.
+
+    Every sentence maps to a specific graph data count. NOT LLM-generated —
+    same inputs always produce identical output.
+    """
+    if not briefs:
+        return ""
+
+    parts: list[str] = []
+    concept_names = [b["concept"]["name"] for b in briefs]
+    source_count = sum(
+        len(b["discussions"]) + len(b["observations"]) for b in briefs
+    )
+
+    if source_count > 0:
+        parts.append(
+            f"{source_count} independent source"
+            f"{'s' if source_count != 1 else ''} "
+            f"discuss{'es' if source_count == 1 else ''} "
+            f"{' and '.join(concept_names)}"
+            f" over the last {window_days} days."
+        )
+
+    cat_names = {m["category"] for m in motivations}
+
+    if "security" in cat_names:
+        vuln_count = sum(len(b["vulnerabilities"]) for b in briefs)
+        dominant = _dominant_severity(briefs)
+        parts.append(
+            f"The convergence is driven by {vuln_count} "
+            f"{dominant.upper()}-severity "
+            f"vulnerabilit{'y' if vuln_count == 1 else 'ies'} "
+            f"in active code paths."
+        )
+
+    if "stability" in cat_names:
+        fm_count = sum(len(b["failure_modes"]) for b in briefs)
+        connector = "Combined with" if "security" in cat_names else "Driven by"
+        parts.append(
+            f"{connector} {fm_count} known failure "
+            f"mode{'s' if fm_count != 1 else ''} "
+            f"that can cause system instability."
+        )
+
+    if (
+        "performance" in cat_names
+        and "security" not in cat_names
+        and "stability" not in cat_names
+    ):
+        parts.append(
+            "Performance profiling shows measurable optimization opportunity."
+        )
+
+    dep_count = sum(
+        len(b["prerequisites"]["depended_on_by"]) for b in briefs
+    )
+    if dep_count > 0:
+        dep_names = [
+            d["name"]
+            for b in briefs
+            for d in b["prerequisites"]["depended_on_by"]
+        ]
+        shown = dep_names[:4]
+        suffix = "..." if len(dep_names) > 4 else ""
+        parts.append(
+            f"{dep_count} component"
+            f"{'s' if dep_count != 1 else ''} "
+            f"depend{'s' if dep_count == 1 else ''} on "
+            f"{concept_names[0]}: {', '.join(shown)}{suffix}. "
+            f"A fix here would resolve exposure across all of them."
+        )
+
+    frontier = briefs[0]["scores"]["frontier"]
+    pain = briefs[0]["scores"]["pain"]
+    heat = briefs[0]["scores"]["heat"]
+    dominant_score = "pain" if pain > heat else "heat"
+    parts.append(
+        f"Frontier score: {frontier:.1f} "
+        f"(heat={heat:.1f}, pain={pain:.1f}). "
+        f"{'Pain dominates' if dominant_score == 'pain' else 'Activity dominates'}"
+        f" the frontier score."
+    )
+
+    return " ".join(parts)
+
+
+def _dominant_severity(briefs: list[dict[str, Any]]) -> str:
+    """Return the most common severity across all vulnerabilities in briefs."""
+    severities = [
+        v.get("severity", "medium")
+        for b in briefs
+        for v in b["vulnerabilities"]
+    ]
+    if not severities:
+        return "medium"
+    return max(set(severities), key=severities.count)

@@ -11,7 +11,12 @@ import json
 
 import pytest
 
-from graph.briefing import build_concept_brief, classify_motivations, _empty_brief
+from graph.briefing import (
+    build_concept_brief,
+    classify_motivations,
+    build_argument_paragraph,
+    _empty_brief,
+)
 from graph.engine import add_edge, add_node
 from graph.schema import init_db
 
@@ -551,3 +556,59 @@ def test_classify_returns_only_triggered():
             "security", "stability", "performance", "scalability",
             "efficiency", "hardware_enablement", "maintainability",
         )
+
+
+# --- build_argument_paragraph tests (ALG-KK-GRAPH-BUILD-ARGUMENT) ---
+
+def _make_briefs_with_data():
+    """Build a briefs list with enough data for argument paragraph testing."""
+    brief = _make_brief(
+        concept={"id": "c1", "name": "SLUB Allocator", "description": "Slab allocator", "key_properties": [], "tradeoffs": [], "design_rationale": ""},
+        scores={"heat": 4.0, "pain": 6.0, "impact": 3.0, "leverage": 2.0, "frontier": 5.0},
+        discussions=[
+            {"title": "SLUB rework", "forum": "LKML", "source_date": "2024-01-01"},
+            {"title": "SLUB freelist", "forum": "LKML", "source_date": "2024-02-01"},
+        ],
+        observations=[
+            {"claim": "SLUB shows 30% fewer cache misses"},
+        ],
+        vulnerabilities=[
+            {"cve_id": "CVE-2026-0001", "description": "Overflow", "severity": "high", "cvss_score": 8.0},
+        ],
+        prerequisites={"depends_on": [], "depended_on_by": [
+            {"name": "Buddy Allocator", "id": "c2"},
+            {"name": "Page Cache", "id": "c3"},
+        ]},
+    )
+    return [brief]
+
+
+def test_argument_paragraph_returns_string():
+    briefs = _make_briefs_with_data()
+    motivations = classify_motivations(briefs[0])
+    result = build_argument_paragraph({}, briefs, motivations)
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+def test_argument_paragraph_mentions_source_count():
+    briefs = _make_briefs_with_data()
+    motivations = classify_motivations(briefs[0])
+    result = build_argument_paragraph({}, briefs, motivations)
+    assert "3 independent sources" in result
+
+
+def test_argument_paragraph_mentions_dependencies():
+    briefs = _make_briefs_with_data()
+    motivations = classify_motivations(briefs[0])
+    result = build_argument_paragraph({}, briefs, motivations)
+    assert "Buddy Allocator" in result
+    assert "Page Cache" in result
+
+
+def test_argument_paragraph_deterministic():
+    briefs = _make_briefs_with_data()
+    motivations = classify_motivations(briefs[0])
+    r1 = build_argument_paragraph({}, briefs, motivations, window_days=90)
+    r2 = build_argument_paragraph({}, briefs, motivations, window_days=90)
+    assert r1 == r2
