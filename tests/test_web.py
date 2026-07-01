@@ -1730,3 +1730,53 @@ def test_nav_has_vulns_link(radar_vuln_client):
     response = radar_vuln_client.get("/")
     assert 'href="/vulns"' in response.text
     assert ">Vulns<" in response.text
+
+
+# --- INV-KK-WEB-IDEA-MOTIVATIONS / INV-KK-WEB-IDEA-ARGUMENT tests ---
+
+
+def test_idea_detail_shows_motivations(ideas_client):
+    """INV-KK-WEB-IDEA-MOTIVATIONS: motivation section rendered."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "Why Pursue This" in response.text
+
+
+def test_idea_detail_shows_security_motivation(ideas_client):
+    """INV-KK-WEB-IDEA-MOTIVATIONS: security category shown when concept has vulns."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "SECURITY" in response.text
+    assert "CVE-2026-9999" in response.text
+
+
+def test_idea_detail_shows_argument(ideas_client):
+    """INV-KK-WEB-IDEA-ARGUMENT: argument paragraph rendered."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "The Case" in response.text
+
+
+def test_idea_detail_no_empty_motivations(tmp_path):
+    """INV-KK-WEB-IDEA-MOTIVATIONS: no motivation section when no triggering data."""
+    from graph.engine import add_edge, add_node
+    from graph.schema import init_db
+    from web.app import create_app
+    db_path = tmp_path / "empty_motiv.db"
+    conn = init_db(db_path)
+    add_node(conn, "c-bare", "Concept", {
+        "name": "Bare", "description": "No evidence", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "test",
+    })
+    add_node(conn, "opp-bare", "Opportunity", {
+        "title": "Bare Opportunity", "description": "Nothing here",
+        "confidence": 0.5, "frontier_score": 1.0, "artifact_class": "B",
+    })
+    add_edge(conn, "opportunity-for", "opp-bare", "c-bare")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/ideas/opp-bare")
+    assert response.status_code == 200
+    assert "Why Pursue This" not in response.text

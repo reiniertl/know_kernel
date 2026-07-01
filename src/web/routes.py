@@ -21,7 +21,7 @@ from graph.engine import (
     ranked_recommendations,
     transitive_impact,
 )
-from graph.briefing import build_concept_brief
+from graph.briefing import build_argument_paragraph, build_concept_brief, classify_motivations
 from graph.scoring import compute_all_scores, heat_score, pain_score, vulnerability_propagation
 
 
@@ -615,6 +615,27 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             if v.get("severity") == "high"
         )
 
+        all_motivations = []
+        for brief in briefs:
+            all_motivations.extend(classify_motivations(brief))
+        seen_categories: set[str] = set()
+        merged_motivations: list[dict] = []
+        for m in all_motivations:
+            if m["category"] not in seen_categories:
+                seen_categories.add(m["category"])
+                merged_motivations.append(m)
+            else:
+                for existing in merged_motivations:
+                    if existing["category"] == m["category"]:
+                        existing["evidence"].extend(m["evidence"])
+                        break
+
+        argument = build_argument_paragraph(
+            node.get("attrs") or {},
+            briefs,
+            merged_motivations,
+        )
+
         related_ideas: list[dict] = []
         for cid in concept_ids:
             rel_rows = conn.execute(
@@ -634,6 +655,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             {
                 "node": node,
                 "briefs": briefs,
+                "motivations": merged_motivations,
+                "argument": argument,
                 "all_evidence": all_evidence,
                 "total_vulns": total_vulns,
                 "total_problems": total_problems,
