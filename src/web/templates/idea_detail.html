@@ -15,149 +15,50 @@
 <p style="margin-top:0.5em;">{{ node.attrs.description }}</p>
 {% endif %}
 
+{# --- WHY PURSUE THIS (motivation categories) --- #}
+{% if motivations %}
+<div class="attrs-section">
+  <h3>Why Pursue This</h3>
+  {% for m in motivations %}
+  <div style="margin-bottom:1em; padding:0.8em; border-left:3px solid
+    {% if m.category == 'security' %}#c0392b
+    {% elif m.category == 'stability' %}#e67e22
+    {% elif m.category == 'performance' %}#2980b9
+    {% elif m.category == 'scalability' %}#8e44ad
+    {% elif m.category == 'efficiency' %}#27ae60
+    {% elif m.category == 'hardware_enablement' %}#2c3e50
+    {% elif m.category == 'maintainability' %}#7f8c8d
+    {% endif %}; background:rgba(0,0,0,0.02);">
+    <strong>{{ m.icon }} {{ m.label }}</strong>
+    <p style="margin:0.3em 0;">{{ m.headline }}</p>
+    {% for ev in m.evidence[:3] %}
+      <div style="margin-left:1em; font-size:0.9em; color:#555;">
+        {% if ev.type == 'vulnerability' %}
+          <span class="badge" style="background:{% if ev.severity == 'critical' %}#c0392b{% elif ev.severity == 'high' %}#e67e22{% elif ev.severity == 'medium' %}#f1c40f;color:#333{% else %}#95a5a6{% endif %};">{{ ev.severity }}</span>
+          {{ ev.text }}{% if ev.cvss %} (CVSS {{ ev.cvss }}){% endif %}
+        {% elif ev.type == 'failure_mode' %}
+          &ldquo;{{ ev.text }}&rdquo; (blast radius: {{ ev.blast_radius }})
+        {% elif ev.type == 'profile' %}
+          {{ ev.text }}
+        {% else %}
+          &ldquo;{{ ev.text }}&rdquo;
+        {% endif %}
+      </div>
+    {% endfor %}
+    {% if m.evidence|length > 3 %}
+      <small style="margin-left:1em;">...and {{ m.evidence|length - 3 }} more</small>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 {# --- THE CASE (argument paragraph) --- #}
 {% if argument %}
 <div class="attrs-section">
   <h3>The Case</h3>
   <p>{{ argument }}</p>
 </div>
-{% endif %}
-
-{# --- MOTIVATION CATEGORIES (full data within each) --- #}
-{% if motivations %}
-{% for m in motivations %}
-<div class="attrs-section" style="border-left:4px solid
-  {% if m.category == 'security' %}#c0392b
-  {% elif m.category == 'stability' %}#e67e22
-  {% elif m.category == 'performance' %}#2980b9
-  {% elif m.category == 'scalability' %}#8e44ad
-  {% elif m.category == 'efficiency' %}#27ae60
-  {% elif m.category == 'hardware_enablement' %}#2c3e50
-  {% elif m.category == 'maintainability' %}#7f8c8d
-  {% endif %};">
-  <h3>{{ m.icon }} {{ m.label }}</h3>
-  <p>{{ m.headline }}</p>
-
-  {# --- SECURITY: full vulnerability cards from briefs --- #}
-  {% if m.category == 'security' %}
-  {% for brief in briefs %}
-  {% if brief.vulnerabilities %}
-  {% for v in brief.vulnerabilities %}
-  <div class="card" style="margin-bottom:0.5em;">
-    <span class="badge" style="background:{% if v.severity == 'critical' %}#c0392b{% elif v.severity == 'high' %}#e67e22{% elif v.severity == 'medium' %}#f1c40f;color:#333{% else %}#95a5a6{% endif %};">{{ v.severity }}</span>
-    <strong>{{ v.cve_id }}</strong> (CVSS {{ v.cvss_score }})
-    {% if v.title %}<br>{{ v.title }}{% endif %}
-    <p style="margin:0.3em 0;">{{ v.description }}</p>
-    {% if v.affected_versions %}<small>Affected: {{ v.affected_versions }}</small>{% endif %}
-    {% if v.status %}<small> &middot; Status: {{ v.status }}</small>{% endif %}
-  </div>
-  {% endfor %}
-  {% endif %}
-  {% endfor %}
-  {% endif %}
-
-  {# --- STABILITY: failure modes, invariants at risk, critical problems --- #}
-  {% if m.category == 'stability' %}
-  {% for brief in briefs %}
-  {% if brief.failure_modes %}
-  <h4>Failure Modes &mdash; {{ brief.concept.name }}</h4>
-  {% for fm in brief.failure_modes %}
-  <div class="card" style="margin-bottom:0.3em;">
-    {{ fm.symptom }}
-    {% if fm.blast_radius %}<small> &middot; Blast radius: {{ fm.blast_radius }}</small>{% endif %}
-    {% if fm.recoverability %}<small> &middot; {{ fm.recoverability }}</small>{% endif %}
-  </div>
-  {% endfor %}
-  {% endif %}
-  {% if brief.invariants %}
-  <h4>Invariants at Risk &mdash; {{ brief.concept.name }}</h4>
-  {% for inv in brief.invariants %}
-  <div class="card" style="margin-bottom:0.3em;">
-    <code>{{ inv.predicate }}</code>
-    {% if inv.strength %}<small> &middot; Strength: {{ inv.strength }}</small>{% endif %}
-    {% if inv.scope %}<small> &middot; Scope: {{ inv.scope }}</small>{% endif %}
-  </div>
-  {% endfor %}
-  {% endif %}
-  {% set critical_problems = [] %}
-  {% for p in brief.problems %}
-    {% if p.severity in ['critical', 'high'] %}
-      {% if critical_problems.append(p) %}{% endif %}
-    {% endif %}
-  {% endfor %}
-  {% if critical_problems %}
-  <h4>Critical/High Problems &mdash; {{ brief.concept.name }}</h4>
-  {% for p in critical_problems %}
-  <div class="card" style="margin-bottom:0.5em;">
-    <span class="badge" style="background:{% if p.severity == 'critical' %}#c0392b{% elif p.severity == 'high' %}#e67e22{% else %}#95a5a6{% endif %};">{{ p.severity }}</span>
-    <strong>{{ p.title }}</strong>
-    <p style="margin:0.3em 0;">{{ p.description }}</p>
-    {% if p.status %}<small>Status: {{ p.status }}</small>{% endif %}
-  </div>
-  {% endfor %}
-  {% endif %}
-  {% endfor %}
-  {% endif %}
-
-  {# --- PERFORMANCE: profile tables + benchmarks --- #}
-  {% if m.category == 'performance' %}
-  {% for brief in briefs %}
-  {% if brief.profiles %}
-  <h4>Performance Profiles &mdash; {{ brief.concept.name }}</h4>
-  <table>
-    <thead><tr><th>Metric</th><th>Complexity</th><th>Best</th><th>Typical</th><th>Worst</th><th>Conditions</th></tr></thead>
-    <tbody>
-    {% for prof in brief.profiles %}
-      <tr>
-        <td>{{ prof.metric }}</td>
-        <td>{{ prof.complexity }}</td>
-        <td>{{ prof.best_case }}</td>
-        <td>{{ prof.typical_case }}</td>
-        <td>{{ prof.worst_case }}</td>
-        <td>{{ prof.conditions }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
-  {% if brief.benchmarks %}
-  <h4>Benchmarks &mdash; {{ brief.concept.name }}</h4>
-  {% for b in brief.benchmarks %}
-  <div class="card" style="margin-bottom:0.3em;">
-    {{ b.result_summary }}
-    {% if b.conditions %}<small> &middot; {{ b.conditions }}</small>{% endif %}
-  </div>
-  {% endfor %}
-  {% endif %}
-  {% endfor %}
-  {% endif %}
-
-  {# --- SCALABILITY / EFFICIENCY / HARDWARE / MAINTAINABILITY: evidence items --- #}
-  {% if m.category in ('scalability', 'efficiency', 'hardware_enablement') %}
-  {% for ev in m.evidence %}
-  <div class="card" style="margin-bottom:0.3em;">
-    {{ ev.text }}
-  </div>
-  {% endfor %}
-  {% endif %}
-
-  {% if m.category == 'maintainability' %}
-  {% for brief in briefs %}
-  {% if brief.fixes %}
-  <h4>Recent Patches &mdash; {{ brief.concept.name }}</h4>
-  {% for f in brief.fixes %}
-  <div class="card" style="margin-bottom:0.3em;">
-    <span class="badge badge-kind">{{ f.fix_type }}</span>
-    {{ f.title }}
-    {% if f.commit_hash %}<small> &middot; <code>{{ f.commit_hash }}</code></small>{% endif %}
-    {% if f.source_date %}<small> &middot; {{ f.source_date }}</small>{% endif %}
-  </div>
-  {% endfor %}
-  {% endif %}
-  {% endfor %}
-  {% endif %}
-</div>
-{% endfor %}
 {% endif %}
 
 {# --- Scores --- #}
@@ -207,84 +108,126 @@
 </div>
 {% endif %}
 
-{# --- Structural Context (protocols, dependencies, code examples) --- #}
-{% for brief in briefs %}
-{% if brief.protocols %}
-<div class="attrs-section">
-  <h3>Interaction Protocols &mdash; {{ brief.concept.name }}</h3>
-  {% for proto in brief.protocols %}
-  <div class="card" style="margin-bottom:0.3em;">
-    {{ proto.rule }}
-    {% if proto.participant_concepts %}
-    <small> &middot; Participants: {{ proto.participant_concepts|map(attribute='name')|join(', ') }}</small>
+{# --- Structural Detail (collapsible) --- #}
+{% if briefs %}
+<details>
+  <summary><h3 style="display:inline;">Structural Detail</h3></summary>
+
+  {# Invariants #}
+  {% for brief in briefs %}
+  {% if brief.invariants %}
+  <div class="attrs-section">
+    <h4>Invariants &mdash; {{ brief.concept.name }}</h4>
+    {% for inv in brief.invariants %}
+    <div class="card" style="margin-bottom:0.3em;">
+      <code>{{ inv.predicate }}</code>
+      {% if inv.strength %}<small> &middot; Strength: {{ inv.strength }}</small>{% endif %}
+      {% if inv.scope %}<small> &middot; Scope: {{ inv.scope }}</small>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endfor %}
+
+  {# Failure Modes #}
+  {% for brief in briefs %}
+  {% if brief.failure_modes %}
+  <div class="attrs-section">
+    <h4>Failure Modes &mdash; {{ brief.concept.name }}</h4>
+    {% for fm in brief.failure_modes %}
+    <div class="card" style="margin-bottom:0.3em;">
+      {{ fm.symptom }}
+      {% if fm.blast_radius %}<small> &middot; Blast radius: {{ fm.blast_radius }}</small>{% endif %}
+      {% if fm.recoverability %}<small> &middot; {{ fm.recoverability }}</small>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endfor %}
+
+  {# Interaction Protocols #}
+  {% for brief in briefs %}
+  {% if brief.protocols %}
+  <div class="attrs-section">
+    <h4>Interaction Protocols &mdash; {{ brief.concept.name }}</h4>
+    {% for proto in brief.protocols %}
+    <div class="card" style="margin-bottom:0.3em;">
+      {{ proto.rule }}
+      {% if proto.participant_concepts %}
+      <small> &middot; Participants: {{ proto.participant_concepts|map(attribute='name')|join(', ') }}</small>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endfor %}
+
+  {# Dependencies #}
+  {% for brief in briefs %}
+  {% if brief.prerequisites.depended_on_by or brief.prerequisites.depends_on %}
+  <div class="attrs-section">
+    <h4>Dependencies &mdash; {{ brief.concept.name }}</h4>
+    {% if brief.prerequisites.depended_on_by %}
+    <h5>Components that depend on {{ brief.concept.name }}</h5>
+    <ul>
+    {% for dep in brief.prerequisites.depended_on_by %}
+      <li><a href="/concepts/{{ dep.id }}">{{ dep.name }}</a></li>
+    {% endfor %}
+    </ul>
+    {% endif %}
+    {% if brief.prerequisites.depends_on %}
+    <h5>Dependencies</h5>
+    <ul>
+    {% for dep in brief.prerequisites.depends_on %}
+      <li><a href="/concepts/{{ dep.id }}">{{ dep.name }}</a></li>
+    {% endfor %}
+    </ul>
     {% endif %}
   </div>
-  {% endfor %}
-</div>
-{% endif %}
-{% endfor %}
-
-{% for brief in briefs %}
-{% if brief.prerequisites.depended_on_by or brief.prerequisites.depends_on %}
-<div class="attrs-section">
-  <h3>Dependencies &mdash; {{ brief.concept.name }}</h3>
-  {% if brief.prerequisites.depended_on_by %}
-  <h4>Components that depend on {{ brief.concept.name }}</h4>
-  <ul>
-  {% for dep in brief.prerequisites.depended_on_by %}
-    <li><a href="/concepts/{{ dep.id }}">{{ dep.name }}</a></li>
-  {% endfor %}
-  </ul>
   {% endif %}
-  {% if brief.prerequisites.depends_on %}
-  <h4>Dependencies</h4>
-  <ul>
-  {% for dep in brief.prerequisites.depends_on %}
-    <li><a href="/concepts/{{ dep.id }}">{{ dep.name }}</a></li>
   {% endfor %}
-  </ul>
-  {% endif %}
-</div>
-{% endif %}
-{% endfor %}
 
-{% for brief in briefs %}
-{% if brief.code_examples %}
-<div class="attrs-section">
-  <h3>Code Examples &mdash; {{ brief.concept.name }}</h3>
-  {% for ex in brief.code_examples %}
-  <div style="margin-bottom:0.8em;">
-    <span class="badge badge-kind">{{ ex.language }}</span>
-    {% if ex.description %}<small> {{ ex.description }}</small>{% endif %}
-    <pre><code class="language-{{ ex.language }}">{{ ex.code }}</code></pre>
+  {# Performance Context #}
+  {% for brief in briefs %}
+  {% if brief.profiles %}
+  <div class="attrs-section">
+    <h4>Performance Context &mdash; {{ brief.concept.name }}</h4>
+    <table>
+      <thead><tr><th>Metric</th><th>Complexity</th><th>Best</th><th>Typical</th><th>Worst</th><th>Conditions</th></tr></thead>
+      <tbody>
+      {% for prof in brief.profiles %}
+        <tr>
+          <td>{{ prof.metric }}</td>
+          <td>{{ prof.complexity }}</td>
+          <td>{{ prof.best_case }}</td>
+          <td>{{ prof.typical_case }}</td>
+          <td>{{ prof.worst_case }}</td>
+          <td>{{ prof.conditions }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
   </div>
-  {% endfor %}
-</div>
-{% endif %}
-{% endfor %}
-
-{# --- Open Problems (non-critical, not already in STABILITY) --- #}
-{% for brief in briefs %}
-{% set other_problems = [] %}
-{% for p in brief.problems %}
-  {% if p.severity not in ['critical', 'high'] %}
-    {% if other_problems.append(p) %}{% endif %}
   {% endif %}
-{% endfor %}
-{% if other_problems %}
-<div class="attrs-section">
-  <h3>Other Open Problems &mdash; {{ brief.concept.name }}</h3>
-  {% for p in other_problems %}
-  <div class="card" style="margin-bottom:0.5em;">
-    <span class="badge" style="background:{% if p.severity == 'medium' %}#f1c40f;color:#333{% else %}#95a5a6{% endif %};">{{ p.severity }}</span>
-    <strong>{{ p.title }}</strong>
-    <p style="margin:0.3em 0;">{{ p.description }}</p>
-    {% if p.status %}<small>Status: {{ p.status }}</small>{% endif %}
-  </div>
   {% endfor %}
-</div>
+
+  {# Code Examples #}
+  {% for brief in briefs %}
+  {% if brief.code_examples %}
+  <div class="attrs-section">
+    <h4>Code Examples &mdash; {{ brief.concept.name }}</h4>
+    {% for ex in brief.code_examples %}
+    <div style="margin-bottom:0.8em;">
+      <span class="badge badge-kind">{{ ex.language }}</span>
+      {% if ex.description %}<small> {{ ex.description }}</small>{% endif %}
+      <pre><code class="language-{{ ex.language }}">{{ ex.code }}</code></pre>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endfor %}
+</details>
 {% endif %}
-{% endfor %}
 
 {# --- Related Ideas --- #}
 {% if related_ideas %}
