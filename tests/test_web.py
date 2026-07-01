@@ -1736,10 +1736,10 @@ def test_nav_has_vulns_link(radar_vuln_client):
 
 
 def test_idea_detail_shows_motivations(ideas_client):
-    """INV-KK-WEB-IDEA-MOTIVATIONS: motivation section rendered."""
+    """INV-KK-WEB-IDEA-MOTIVATIONS: motivation categories rendered."""
     response = ideas_client.get("/ideas/opp-rcu-1")
     assert response.status_code == 200
-    assert "Why Pursue This" in response.text
+    assert "SECURITY" in response.text or "STABILITY" in response.text or "MAINTAINABILITY" in response.text
 
 
 def test_idea_detail_shows_security_motivation(ideas_client):
@@ -1844,4 +1844,6 @@ def test_idea_detail_no_empty_motivations(tmp_path):
     with TestClient(app) as c:
         response = c.get("/ideas/opp-bare")
     assert response.status_code == 200
-    assert "Why Pursue This" not in response.text
+    assert "SECURITY" not in response.text
+    assert "STABILITY" not in response.text
+    assert "MAINTAINABILITY" not in response.text
