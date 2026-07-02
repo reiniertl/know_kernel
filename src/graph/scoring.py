@@ -224,6 +224,112 @@ def refresh_scores(
     return len(concept_ids)
 
 
+def research_score(
+    conn: sqlite3.Connection,
+    concept_id: str,
+    window_days: int = 90,
+) -> float:
+    """Composite research novelty score (ALG-KK-GRAPH-RESEARCH-SCORE).
+
+    INV-KK-GRAPH-RESEARCH-SCORE-FORMULA: 6-component weighted sum.
+    INV-KK-GRAPH-RESEARCH-SCORE-PURE: deterministic, no LLM.
+    INV-KK-GRAPH-RESEARCH-SCORE-NON-NEGATIVE: >= 0.0.
+    """
+    since = (datetime.now(tz=None) - timedelta(days=window_days)).strftime("%Y-%m-%d")
+
+    # (a) discussion_density (weight 0.25)
+    disc_rows = conn.execute(
+        "SELECT n.attrs FROM nodes n "
+        "JOIN edges e ON e.source_id = n.id "
+        "WHERE e.kind = 'discusses' AND e.target_id = ? "
+        "AND n.kind = 'Discussion' AND json_extract(n.attrs, '$.source_date') >= ?",
+        (concept_id, since),
+    ).fetchall()
+    discussion_density = 0.0
+    for row in disc_rows:
+        attrs = json.loads(row[0])
+        pc = attrs.get("participant_count", 0)
+        try:
+            pc = int(pc)
+        except (ValueError, TypeError):
+            pc = 0
+        discussion_density += min(pc, 50) / 10.0
+
+    # (b) observation_recency (weight 0.20)
+    obs_rows = conn.execute(
+        "SELECT n.attrs FROM nodes n "
+        "JOIN edges e ON e.source_id = n.id "
+        "WHERE e.kind = 'observes' AND e.target_id = ? "
+        "AND n.kind = 'Observation' AND json_extract(n.attrs, '$.source_date') >= ?",
+        (concept_id, since),
+    ).fetchall()
+    observation_recency = 0.0
+    for row in obs_rows:
+        attrs = json.loads(row[0])
+        conf = attrs.get("confidence", 0)
+        try:
+            conf = float(conf)
+        except (ValueError, TypeError):
+            conf = 0.0
+        observation_recency += conf
+
+    # (c) evidence_diversity (weight 0.20)
+    diversity_rows = conn.execute(
+        "SELECT COUNT(DISTINCT json_extract(src.attrs, '$.url')) "
+        "FROM edges e1 "
+        "JOIN edges e2 ON e2.source_id = e1.target_id AND e2.kind = 'sourced-from' "
+        "JOIN nodes src ON src.id = e2.target_id AND src.kind = 'Source' "
+        "WHERE e1.kind = 'extracted-from' AND e1.source_id = ? "
+        "AND json_extract(src.attrs, '$.url') IS NOT NULL",
+        (concept_id,),
+    ).fetchone()
+    evidence_diversity = float(diversity_rows[0]) if diversity_rows else 0.0
+
+    # (d) proposal_activity (weight 0.15)
+    prop_count = conn.execute(
+        "SELECT COUNT(*) FROM nodes n "
+        "JOIN edges e ON e.source_id = n.id "
+        "WHERE e.kind = 'grounded-in' AND e.target_id = ? "
+        "AND n.kind = 'Proposal' AND COALESCE(json_extract(n.attrs, '$.status'), '') != 'rejected'",
+        (concept_id,),
+    ).fetchone()[0]
+    proposal_activity = float(prop_count) * 2.0
+
+    # (e) benchmark_coverage (weight 0.10)
+    bench_count = conn.execute(
+        "SELECT COUNT(*) FROM nodes n "
+        "JOIN edges e ON e.source_id = n.id "
+        "WHERE e.kind = 'benchmarks' AND e.target_id = ? "
+        "AND n.kind = 'Benchmark' AND json_extract(n.attrs, '$.source_date') >= ?",
+        (concept_id, since),
+    ).fetchone()[0]
+    benchmark_coverage = float(bench_count) * 1.5
+
+    # (f) novelty_bonus (weight 0.10)
+    solved = _solved_confidence(conn, concept_id)
+    fix_count = conn.execute(
+        "SELECT COUNT(*) FROM nodes n "
+        "JOIN edges e ON e.source_id = n.id "
+        "WHERE e.kind = 'patches' AND e.target_id = ? AND n.kind = 'Fix'",
+        (concept_id,),
+    ).fetchone()[0]
+    novelty_bonus = (1.0 - solved) * 5.0
+    if fix_count == 0:
+        novelty_bonus += 5.0
+    elif fix_count <= 2:
+        novelty_bonus += 2.0
+
+    score = (
+        discussion_density * 0.25
+        + observation_recency * 0.20
+        + evidence_diversity * 0.20
+        + proposal_activity * 0.15
+        + benchmark_coverage * 0.10
+        + novelty_bonus * 0.10
+    )
+    return max(0.0, score)
+
+
 def vulnerability_propagation(
     conn: sqlite3.Connection,
     vuln_id: str,

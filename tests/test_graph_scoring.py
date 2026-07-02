@@ -23,6 +23,7 @@ from graph.scoring import (
     leverage_score,
     pain_score,
     refresh_scores,
+    research_score,
     vulnerability_propagation,
 )
 
@@ -592,6 +593,127 @@ class TestRefreshScores:
         row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
         scores2 = json.loads(json.loads(row[0])["_scores"])
         assert scores2["heat"] == 1.0
+
+
+def _add_fix(conn: sqlite3.Connection, concept_id: str, tag: str = "a") -> str:
+    fid = f"fix-{tag}-{concept_id[:8]}"
+    add_node(conn, fid, "Fix", {
+        "title": f"Fix {tag}",
+        "commit_hash": f"abc{tag}123",
+        "fix_type": "patch",
+        "source_date": "2026-06-15",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "patches", fid, concept_id)
+    return fid
+
+
+def _add_evidence_source(
+    conn: sqlite3.Connection, concept_id: str, url: str, tag: str = "a",
+) -> tuple[str, str]:
+    eid = f"ev-{tag}-{concept_id[:8]}"
+    add_node(conn, eid, "Evidence", {
+        "description": f"Evidence {tag}",
+        "artifact_class": "B",
+        "contamination_level": "L0",
+    })
+    sid = f"src-{tag}-{concept_id[:8]}"
+    add_node(conn, sid, "Source", {
+        "url": url,
+        "title": f"Source {tag}",
+        "source_type": "article",
+        "license": "CC-BY-4.0",
+        "source_date": "2026-06-01",
+    })
+    add_edge(conn, "extracted-from", concept_id, eid)
+    add_edge(conn, "sourced-from", eid, sid)
+    return eid, sid
+
+
+# ── Research score tests (ALG-KK-GRAPH-RESEARCH-SCORE) ──
+
+
+class TestResearchScore:
+    def test_research_score_returns_float(self, conn):
+        cid = _add_concept(conn, "RCU")
+        result = research_score(conn, cid)
+        assert isinstance(result, float)
+
+    def test_research_score_pure(self, conn):
+        """INV-KK-GRAPH-RESEARCH-SCORE-PURE: same inputs → same output."""
+        cid = _add_concept(conn, "Slab")
+        _add_discussion(conn, cid, _recent_date(5))
+        r1 = research_score(conn, cid, window_days=90)
+        r2 = research_score(conn, cid, window_days=90)
+        assert r1 == r2
+
+    def test_research_score_zero_for_empty_concept(self, conn):
+        """INV-KK-GRAPH-RESEARCH-SCORE-NON-NEGATIVE: empty concept still >= 0."""
+        cid = _add_concept(conn, "Empty")
+        score = research_score(conn, cid)
+        assert score >= 0.0
+        # novelty_bonus exists even for empty concepts (no fixes, no problems)
+        # novelty = (1.0 - 0.0) * 5.0 + 5.0 = 10.0, weighted 0.10 = 1.0
+        assert score == pytest.approx(1.0)
+
+    def test_research_score_increases_with_discussions(self, conn):
+        """More discussions in window → higher score."""
+        cid = _add_concept(conn, "VM")
+        s0 = research_score(conn, cid, window_days=90)
+        _add_discussion(conn, cid, _recent_date(5))
+        s1 = research_score(conn, cid, window_days=90)
+        _add_discussion(conn, cid, _recent_date(10))
+        s2 = research_score(conn, cid, window_days=90)
+        assert s1 > s0
+        assert s2 > s1
+
+    def test_research_score_weights_participant_count(self, conn):
+        """INV-KK-GRAPH-RESEARCH-SCORE-FORMULA: participant_count weighted."""
+        cid = _add_concept(conn, "Net")
+        did = f"disc-pc-{cid[:8]}"
+        add_node(conn, did, "Discussion", {
+            "title": "Big discussion",
+            "forum": "lkml",
+            "participant_count": 30,
+            "source_date": _recent_date(5),
+            "artifact_class": "B",
+        })
+        add_edge(conn, "discusses", did, cid)
+        # discussion_density = min(30, 50)/10 = 3.0, weighted 0.25 = 0.75
+        # novelty_bonus = (1-0)*5 + 5 = 10, weighted 0.10 = 1.0
+        # total should include 0.75 from discussion density
+        score = research_score(conn, cid, window_days=90)
+        assert score >= 1.75  # at least 0.75 + 1.0
+
+    def test_research_score_rewards_evidence_diversity(self, conn):
+        """More distinct source URLs → higher evidence_diversity component."""
+        cid = _add_concept(conn, "IO")
+        s0 = research_score(conn, cid, window_days=90)
+        _add_evidence_source(conn, cid, "https://example.com/a", "a")
+        s1 = research_score(conn, cid, window_days=90)
+        _add_evidence_source(conn, cid, "https://example.com/b", "b")
+        s2 = research_score(conn, cid, window_days=90)
+        assert s1 > s0
+        assert s2 > s1
+
+    def test_research_score_rewards_proposals(self, conn):
+        """Proposals via grounded-in increase score."""
+        cid = _add_concept(conn, "Sched")
+        s0 = research_score(conn, cid, window_days=90)
+        _add_proposal(conn, cid, _recent_date(3))
+        s1 = research_score(conn, cid, window_days=90)
+        assert s1 > s0
+
+    def test_research_score_novelty_bonus(self, conn):
+        """INV-KK-GRAPH-RESEARCH-SCORE-FORMULA: no fixes → higher novelty bonus."""
+        cid_no_fix = _add_concept(conn, "Novel", "concept-novel")
+        cid_with_fix = _add_concept(conn, "Fixed", "concept-fixed")
+        _add_fix(conn, cid_with_fix, "f1")
+        _add_fix(conn, cid_with_fix, "f2")
+        _add_fix(conn, cid_with_fix, "f3")
+        score_no_fix = research_score(conn, cid_no_fix, window_days=90)
+        score_with_fix = research_score(conn, cid_with_fix, window_days=90)
+        assert score_no_fix > score_with_fix
 
 
 # ── Vulnerability propagation tests (ALG-KK-VULN-PROPAGATE) ──
