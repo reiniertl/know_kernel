@@ -612,3 +612,51 @@ def test_argument_paragraph_deterministic():
     r1 = build_argument_paragraph({}, briefs, motivations, window_days=90)
     r2 = build_argument_paragraph({}, briefs, motivations, window_days=90)
     assert r1 == r2
+
+
+# --- INV-KK-GRAPH-BRIEF-SOURCE-RESOLVED tests ---
+
+
+def test_brief_items_have_source_url_key(brief_db):
+    brief = build_concept_brief(brief_db, "concept-slub")
+    collections = (
+        "problems", "vulnerabilities", "failure_modes", "invariants",
+        "protocols", "profiles", "fixes", "observations", "discussions",
+        "benchmarks",
+    )
+    for key in collections:
+        for item in brief[key]:
+            assert "source_url" in item, f"{key} item missing source_url"
+
+
+def test_brief_source_url_resolves_when_chain_exists(brief_db):
+    brief = build_concept_brief(brief_db, "concept-slub")
+    prob = brief["problems"][0]
+    assert prob["id"] == "prob-uaf"
+    assert prob["source_url"] == "https://lkml.org/slub"
+    inv = brief["invariants"][0]
+    assert inv["source_url"] == "https://lkml.org/slub"
+    fm = brief["failure_modes"][0]
+    assert fm["source_url"] == "https://lkml.org/slub"
+    disc = brief["discussions"][0]
+    assert disc["source_url"] == "https://lkml.org/slub"
+    obs = brief["observations"][0]
+    assert obs["source_url"] == "https://lkml.org/slub"
+    bench = brief["benchmarks"][0]
+    assert bench["source_url"] == "https://lkml.org/slub"
+
+
+def test_brief_source_url_empty_when_no_chain(brief_db):
+    brief = build_concept_brief(brief_db, "concept-slub")
+    vuln = brief["vulnerabilities"][0]
+    assert vuln["id"] == "vuln-001"
+    assert vuln["source_url"] == ""
+    fix = brief["fixes"][0]
+    assert fix["id"] == "fix-uaf"
+    assert fix["source_url"] == ""
+
+
+def test_brief_timeline_items_have_source_url(brief_db):
+    brief = build_concept_brief(brief_db, "concept-slub")
+    for item in brief["timeline"]:
+        assert "source_url" in item, f"timeline item {item['kind']} missing source_url"

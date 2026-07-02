@@ -310,6 +310,41 @@ def build_concept_brief(
     # 16. Extract code examples
     code_examples = attrs.get("code_examples", [])
 
+    # 17. Batch-resolve source URLs via provenance chain
+    all_evidence_ids: list[str] = []
+    evidence_collections = (
+        problems, vulnerabilities, failure_modes, invariants,
+        protocols, profiles, fixes, observations, discussions,
+        benchmarks,
+    )
+    for item_list in evidence_collections:
+        for item in item_list:
+            all_evidence_ids.append(item["id"])
+
+    source_urls: dict[str, str] = {}
+    if all_evidence_ids:
+        placeholders = ",".join("?" for _ in all_evidence_ids)
+        url_rows = conn.execute(
+            f"SELECT e1.source_id, json_extract(s.attrs, '$.url') "
+            f"FROM edges e1 "
+            f"JOIN edges e2 ON e2.source_id = e1.target_id "
+            f"AND e2.kind = 'sourced-from' "
+            f"JOIN nodes s ON e2.target_id = s.id "
+            f"WHERE e1.kind = 'extracted-from' "
+            f"AND e1.source_id IN ({placeholders})",
+            all_evidence_ids,
+        ).fetchall()
+        for row in url_rows:
+            if row[1]:
+                source_urls[row[0]] = row[1]
+
+    for item_list in evidence_collections:
+        for item in item_list:
+            item["source_url"] = source_urls.get(item["id"], "")
+
+    for item in timeline:
+        item["source_url"] = source_urls.get(item.get("id", ""), "")
+
     return {
         "concept": concept,
         "subsystem": subsystem,
