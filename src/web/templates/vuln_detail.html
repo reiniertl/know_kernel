@@ -50,7 +50,12 @@
     <div style="margin:0.5em 0;">
       {% for m in brief.motivations %}
         {% if m.category != 'security' %}
-        <span style="margin-right:0.5em;">{{ m.icon }} <strong>{{ m.label }}</strong>: {{ m.headline }}</span>
+        <div style="margin-bottom:0.3em;">
+          <span>{{ m.icon }} <strong>{{ m.label }}</strong>: {{ m.headline }}</span>
+          {% if m.blast_radius and m.blast_radius.count > 0 %}
+          <small> &middot; {{ m.blast_radius.count }} component{{ "s" if m.blast_radius.count != 1 else "" }} at risk</small>
+          {% endif %}
+        </div>
         {% endif %}
       {% endfor %}
     </div>

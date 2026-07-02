@@ -1845,3 +1845,88 @@ def test_idea_detail_no_empty_motivations(tmp_path):
         response = c.get("/ideas/opp-bare")
     assert response.status_code == 200
     assert "Why Pursue This" not in response.text
+
+
+# --- INV-KK-WEB-IDEA-MOTIVATION-ACTIONABLE + source links + blast radius tests ---
+
+
+def test_idea_detail_shows_actionable_text(ideas_client):
+    """INV-KK-WEB-IDEA-MOTIVATION-ACTIONABLE: actionable framing rendered."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "If addressed:" in response.text
+
+
+def test_idea_detail_shows_blast_radius(ideas_client):
+    """INV-KK-WEB-IDEA-MOTIVATIONS: blast radius with linked names."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "Blast radius:" in response.text
+    assert "Preemption" in response.text
+
+
+def test_idea_detail_shows_source_links(ideas_client):
+    """INV-KK-WEB-IDEAS-EVIDENCE-CHAIN: evidence items have fallback links."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert 'href="/concepts/' in response.text
+
+
+def test_idea_detail_no_truncation(ideas_client):
+    """INV-KK-WEB-IDEA-MOTIVATIONS: no evidence truncation."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "...and" not in response.text or "more</small>" not in response.text
+
+
+def test_idea_detail_evidence_timeline_has_links(ideas_client):
+    """INV-KK-WEB-IDEAS-EVIDENCE-CHAIN: timeline table has source link column."""
+    response = ideas_client.get("/ideas/opp-rcu-1")
+    assert response.status_code == 200
+    assert "<th>Source</th>" in response.text
+
+
+def test_idea_detail_shows_external_source_link(tmp_path):
+    """INV-KK-WEB-IDEAS-EVIDENCE-CHAIN: external source URL rendered when provenance exists."""
+    from graph.engine import add_edge, add_node
+    from graph.schema import init_db
+    from web.app import create_app
+    db_path = tmp_path / "src_link.db"
+    conn = init_db(db_path)
+    add_node(conn, "c1", "Concept", {
+        "name": "TestConcept", "description": "Test", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "",
+    })
+    add_node(conn, "prob1", "Problem", {
+        "title": "Test problem", "description": "A test problem with provenance",
+        "severity": "high", "status": "open", "source_date": "2026-06-01",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "identifies-problem", "prob1", "c1")
+    add_node(conn, "ev1", "Evidence", {
+        "artifact_class": "A", "contamination_level": "none",
+        "excerpt": "test", "extraction_method": "llm_extraction",
+        "source_date": "2026-06-01",
+    })
+    add_node(conn, "src1", "Source", {
+        "url": "https://lkml.org/test-thread",
+        "source_type": "mailing_list", "license": "GPL-2.0",
+    })
+    add_node(conn, "adv1", "Advisory", {
+        "assessment": "approved", "contamination_confirmed": False,
+    })
+    add_edge(conn, "assessed-by", "src1", "adv1")
+    add_edge(conn, "extracted-from", "prob1", "ev1")
+    add_edge(conn, "sourced-from", "ev1", "src1")
+    add_node(conn, "opp1", "Opportunity", {
+        "title": "Fix test problem", "description": "test",
+        "confidence": 0.5, "frontier_score": 5.0, "artifact_class": "B",
+    })
+    add_edge(conn, "opportunity-for", "opp1", "c1")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/ideas/opp1")
+    assert response.status_code == 200
+    assert "https://lkml.org/test-thread" in response.text
