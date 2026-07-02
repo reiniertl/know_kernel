@@ -22,7 +22,15 @@ from graph.engine import (
     transitive_impact,
 )
 from graph.briefing import build_argument_paragraph, build_concept_brief, classify_motivations
-from graph.scoring import compute_all_scores, heat_score, pain_score, vulnerability_propagation
+from graph.scoring import (
+    compute_all_scores,
+    feasibility_score,
+    heat_score,
+    impact_projection,
+    pain_score,
+    research_score,
+    vulnerability_propagation,
+)
 
 
 def _rows_to_dicts(rows) -> list[dict]:
@@ -555,6 +563,136 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "ideas": page_ideas,
                 "min_score": min_score,
                 "window_days": window_days,
+                "page": page,
+                "per_page": per_page,
+                "has_next": has_next,
+            },
+        )
+
+    @app.get("/research", response_class=HTMLResponse)
+    async def research_explorer(
+        request: Request,
+        min_research: float = Query(0.0, ge=0),
+        min_feasibility: float = Query(0.0, ge=0),
+        window_days: int = Query(90, ge=1, le=365),
+        sort_by: str = Query("research"),
+        page: int = Query(1, ge=1),
+        per_page: int = Query(20, ge=5, le=100),
+    ):
+        """Research explorer list (ALG-KK-WEB-RESEARCH-LIST).
+
+        INV-KK-WEB-RESEARCH-RANKED: sorted by sort_by param desc.
+        INV-KK-WEB-RESEARCH-FILTERED: min_research + min_feasibility filtering.
+        """
+        conn = request.app.state.conn
+        if sort_by not in ("research", "feasibility", "impact", "frontier"):
+            sort_by = "research"
+
+        concept_rows = conn.execute(
+            "SELECT id, kind, attrs FROM nodes WHERE kind = 'Concept' ORDER BY id"
+        ).fetchall()
+
+        scored: list[dict] = []
+        for row in _rows_to_dicts(concept_rows):
+            cid = row["id"]
+            attrs = row.get("attrs") or {}
+            rs = research_score(conn, cid, window_days=window_days)
+            fs = feasibility_score(conn, cid)
+            ip = impact_projection(conn, cid)
+            scores = compute_all_scores(conn, cid, window_days=window_days)
+            if rs < min_research or fs < min_feasibility:
+                continue
+            scored.append({
+                "id": cid,
+                "name": attrs.get("name", cid),
+                "description": attrs.get("description", ""),
+                "research_score": rs,
+                "feasibility_score": fs,
+                "impact": ip,
+                "scores": scores,
+            })
+
+        sort_key_map = {
+            "research": lambda x: x["research_score"],
+            "feasibility": lambda x: x["feasibility_score"],
+            "impact": lambda x: x["impact"]["total_impact"],
+            "frontier": lambda x: x["scores"].get("frontier", 0),
+        }
+        scored.sort(key=sort_key_map[sort_by], reverse=True)
+
+        offset = (page - 1) * per_page
+        page_items = scored[offset:offset + per_page + 1]
+        has_next = len(page_items) > per_page
+        page_items = page_items[:per_page]
+
+        for item in page_items:
+            cid = item["id"]
+            brief = build_concept_brief(conn, cid, window_days=window_days)
+            motivations = classify_motivations(brief)
+            item["motivations"] = motivations[:3]
+
+            sub_row = conn.execute(
+                "SELECT n.attrs FROM nodes n "
+                "JOIN edges e ON e.target_id = n.id "
+                "WHERE e.kind = 'belongs-to' AND e.source_id = ? AND n.kind = 'Subsystem' "
+                "LIMIT 1",
+                (cid,),
+            ).fetchone()
+            if sub_row:
+                sub_attrs = json.loads(sub_row[0]) if isinstance(sub_row[0], str) else (sub_row[0] or {})
+                item["subsystem"] = sub_attrs.get("name", "")
+            else:
+                item["subsystem"] = None
+
+            mat_row = conn.execute(
+                "SELECT attrs FROM edges WHERE kind = 'implemented-in' AND source_id = ? LIMIT 1",
+                (cid,),
+            ).fetchone()
+            if mat_row:
+                mat_attrs = json.loads(mat_row[0]) if isinstance(mat_row[0], str) else (mat_row[0] or {})
+                item["maturity"] = mat_attrs.get("maturity")
+            else:
+                item["maturity"] = None
+
+            source_urls = set()
+            for ev in brief.get("timeline", []):
+                url = ev.get("source_url", "")
+                if url:
+                    source_urls.add(url)
+            item["evidence_diversity"] = len(source_urls)
+
+            item["discussion_count"] = conn.execute(
+                "SELECT COUNT(*) FROM edges e JOIN nodes n ON e.source_id = n.id "
+                "WHERE e.kind = 'discusses' AND e.target_id = ? AND n.kind = 'Discussion'",
+                (cid,),
+            ).fetchone()[0]
+            item["observation_count"] = conn.execute(
+                "SELECT COUNT(*) FROM edges e JOIN nodes n ON e.source_id = n.id "
+                "WHERE e.kind = 'observes' AND e.target_id = ? AND n.kind = 'Observation'",
+                (cid,),
+            ).fetchone()[0]
+            item["benchmark_count"] = conn.execute(
+                "SELECT COUNT(*) FROM edges e JOIN nodes n ON e.source_id = n.id "
+                "WHERE e.kind = 'benchmarks' AND e.target_id = ? AND n.kind = 'Benchmark'",
+                (cid,),
+            ).fetchone()[0]
+
+            proposal_count = conn.execute(
+                "SELECT COUNT(*) FROM edges e JOIN nodes n ON e.source_id = n.id "
+                "WHERE e.kind = 'grounded-in' AND e.target_id = ? AND n.kind = 'Proposal'",
+                (cid,),
+            ).fetchone()[0]
+            item["proposal_count"] = proposal_count
+
+        return templates.TemplateResponse(
+            request,
+            "research.html",
+            {
+                "concepts": page_items,
+                "min_research": min_research,
+                "min_feasibility": min_feasibility,
+                "window_days": window_days,
+                "sort_by": sort_by,
                 "page": page,
                 "per_page": per_page,
                 "has_next": has_next,

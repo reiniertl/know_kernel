@@ -1930,3 +1930,81 @@ def test_idea_detail_shows_external_source_link(tmp_path):
         response = c.get("/ideas/opp1")
     assert response.status_code == 200
     assert "https://lkml.org/test-thread" in response.text
+
+
+# --- ALG-KK-WEB-RESEARCH-LIST tests ---
+
+
+@pytest.fixture
+def research_client(tmp_path):
+    db_path = tmp_path / "research_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-rcu", "Concept", {
+        "name": "RCU",
+        "description": "Read-Copy-Update",
+        "artifact_class": "B",
+        "key_properties": ["lock-free reads"],
+        "tradeoffs": ["write overhead"],
+        "design_rationale": "Eliminates read-side locks.",
+    })
+    add_node(conn, "disc-rcu-1", "Discussion", {
+        "title": "RCU future directions",
+        "forum": "LKML",
+        "source_date": "2026-06-15",
+        "participant_count": 10,
+        "artifact_class": "B",
+    })
+    add_edge(conn, "discusses", "disc-rcu-1", "concept-rcu")
+    add_node(conn, "obs-rcu-1", "Observation", {
+        "claim": "RCU latency spikes on NUMA",
+        "confidence": 0.8,
+        "source_date": "2026-06-10",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "observes", "obs-rcu-1", "concept-rcu")
+    add_node(conn, "prob-rcu-1", "Problem", {
+        "title": "RCU grace period too long",
+        "description": "Grace periods stall under load",
+        "severity": "high",
+        "status": "open",
+        "source_date": "2026-06-15",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "identifies-problem", "prob-rcu-1", "concept-rcu")
+    add_node(conn, "sub-sync", "Subsystem", {"name": "Synchronization"})
+    add_edge(conn, "belongs-to", "concept-rcu", "sub-sync")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        yield c
+
+
+def test_research_list_returns_200(research_client):
+    response = research_client.get("/research")
+    assert response.status_code == 200
+    assert "Research Explorer" in response.text
+
+
+def test_research_list_shows_concepts(research_client):
+    response = research_client.get("/research")
+    assert response.status_code == 200
+    assert "RCU" in response.text
+
+
+def test_research_list_shows_research_score(research_client):
+    response = research_client.get("/research")
+    assert response.status_code == 200
+    assert "Research:" in response.text
+
+
+def test_research_list_filters_by_min_research(research_client):
+    response = research_client.get("/research?min_research=999")
+    assert response.status_code == 200
+    assert "RCU" not in response.text
+
+
+def test_research_list_sort_by_feasibility(research_client):
+    response = research_client.get("/research?sort_by=feasibility")
+    assert response.status_code == 200
+    assert "Research Explorer" in response.text

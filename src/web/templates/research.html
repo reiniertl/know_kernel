@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Research Explorer</h1>
+<p>{{ concepts|length }} concepts{% if min_research > 0 %} (min research: {{ min_research }}){% endif %}{% if min_feasibility > 0 %} (min feasibility: {{ min_feasibility }}){% endif %} &mdash; {{ window_days }}-day window</p>
+
+<form method="get" action="/research" style="margin-bottom:1rem;">
+  <label>Min research: <input type="number" name="min_research" value="{{ min_research }}" step="0.1" min="0" style="width:5rem;font-family:monospace;"></label>
+  <label style="margin-left:1rem;">Min feasibility: <input type="number" name="min_feasibility" value="{{ min_feasibility }}" step="0.1" min="0" style="width:5rem;font-family:monospace;"></label>
+  <label style="margin-left:1rem;">Window (days): <input type="number" name="window_days" value="{{ window_days }}" min="1" max="365" style="width:5rem;font-family:monospace;"></label>
+  <label style="margin-left:1rem;">Sort by:
+    <select name="sort_by" style="font-family:monospace;">
+      <option value="research" {% if sort_by == 'research' %}selected{% endif %}>Research Score</option>
+      <option value="feasibility" {% if sort_by == 'feasibility' %}selected{% endif %}>Feasibility</option>
+      <option value="impact" {% if sort_by == 'impact' %}selected{% endif %}>Impact</option>
+      <option value="frontier" {% if sort_by == 'frontier' %}selected{% endif %}>Frontier</option>
+    </select>
+  </label>
+  <button type="submit" style="margin-left:1rem;">Filter</button>
+</form>
+
+{% for c in concepts %}
+<div class="card" style="margin-bottom:1rem;">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;">
+    <h3 style="margin:0;"><a href="/research/{{ c.id }}">{{ c.name }}</a></h3>
+    {% if c.subsystem %}<span class="badge" style="background:#2980b9;">{{ c.subsystem }}</span>{% endif %}
+    {% if c.maturity %}<span class="badge" style="background:{% if c.maturity == 'production' %}#27ae60{% elif c.maturity == 'experimental' %}#f39c12{% else %}#95a5a6{% endif %};">{{ c.maturity }}</span>{% endif %}
+  </div>
+  <div style="margin:0.4rem 0;font-size:0.9em;">
+    Research: <strong>{{ "%.1f"|format(c.research_score) }}</strong>
+    &nbsp;|&nbsp; Feasibility: {{ "%.1f"|format(c.feasibility_score) }}/10
+    &nbsp;|&nbsp; Impact: {{ "%.1f"|format(c.impact.total_impact) }}
+    &nbsp;|&nbsp; Frontier: {{ "%.1f"|format(c.scores.frontier) }}
+  </div>
+  <div style="font-size:0.85em;color:#555;">
+    {{ c.evidence_diversity }} independent source{{ "s" if c.evidence_diversity != 1 else "" }}
+    &nbsp;|&nbsp; {{ c.discussion_count }} discussion{{ "s" if c.discussion_count != 1 else "" }}
+    &nbsp;|&nbsp; {{ c.observation_count }} observation{{ "s" if c.observation_count != 1 else "" }}
+    &nbsp;|&nbsp; {{ c.benchmark_count }} benchmark{{ "s" if c.benchmark_count != 1 else "" }}
+  </div>
+  {% if c.motivations %}
+  <div style="font-size:0.85em;color:#555;margin-top:0.2rem;">
+    {% for m in c.motivations %}
+    <span style="margin-right:0.5rem;">{{ m.icon }} {{ m.category }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if c.proposal_count %}
+  <div style="font-size:0.85em;color:#555;">{{ c.proposal_count }} active proposal{{ "s" if c.proposal_count != 1 else "" }}</div>
+  {% endif %}
+</div>
+{% else %}
+<p>No research concepts found matching the current filters.</p>
+{% endfor %}
+
+<div class="pagination" style="margin-top:1rem;">
+  {% if page > 1 %}<a href="/research?page={{ page - 1 }}&per_page={{ per_page }}&min_research={{ min_research }}&min_feasibility={{ min_feasibility }}&window_days={{ window_days }}&sort_by={{ sort_by }}">&#8592; Previous</a>{% endif %}
+  <span style="margin:0 0.5rem;">Page {{ page }}</span>
+  {% if has_next %}<a href="/research?page={{ page + 1 }}&per_page={{ per_page }}&min_research={{ min_research }}&min_feasibility={{ min_feasibility }}&window_days={{ window_days }}&sort_by={{ sort_by }}">Next &#8594;</a>{% endif %}
+</div>
+{% endblock %}
