@@ -467,11 +467,18 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
     """Classify a concept brief into 1-7 orthogonal motivation categories.
 
     Returns a list of dicts, each with:
-      category, icon, label, headline, evidence
+      category, icon, label, headline, evidence,
+      blast_radius, actionable, cross_links
 
     Only triggered categories are returned, in priority order.
     """
     motivations: list[dict[str, Any]] = []
+
+    blast_radius = {
+        "count": len(brief["prerequisites"]["depended_on_by"]),
+        "components": brief["prerequisites"]["depended_on_by"],
+    }
+    dep_count = blast_radius["count"]
 
     # --- SECURITY ---
     vulns = brief["vulnerabilities"]
@@ -484,7 +491,6 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
         for s in ("critical", "high", "medium", "low"):
             if severity_counts.get(s):
                 severity_parts.append(f"{severity_counts[s]} {s}")
-        dep_count = len(brief["prerequisites"]["depended_on_by"])
         headline = (
             f"{len(vulns)} active vulnerabilit"
             f"{'y' if len(vulns) == 1 else 'ies'}"
@@ -499,18 +505,34 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
         evidence = [
             {
                 "type": "vulnerability",
+                "id": v["id"],
+                "source_url": v.get("source_url", ""),
+                "cve_id": v["cve_id"],
                 "text": f"{v['cve_id']}: {v['description']}",
                 "severity": v.get("severity", "medium"),
                 "cvss": v.get("cvss_score", 0.0),
+                "affected_versions": v.get("affected_versions", ""),
+                "status": v.get("status", ""),
             }
             for v in vulns
         ]
+        actionable = (
+            f"Fixing {'this vulnerability' if len(vulns) == 1 else 'these vulnerabilities'} "
+            f"eliminates {len(vulns)} active attack surface"
+            f"{'s' if len(vulns) != 1 else ''}"
+        )
+        if dep_count > 0:
+            actionable += f" and removes exposure from {dep_count} dependent component{'s' if dep_count != 1 else ''}"
+        actionable += "."
         motivations.append({
             "category": "security",
             "icon": _MOTIVATION_ICONS["security"],
             "label": _MOTIVATION_LABELS["security"],
             "headline": headline,
             "evidence": evidence,
+            "blast_radius": blast_radius,
+            "actionable": actionable,
+            "cross_links": [],
         })
 
     # --- STABILITY ---
@@ -532,8 +554,11 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
             fm_evidence.extend(
                 {
                     "type": "failure_mode",
+                    "id": fm["id"],
+                    "source_url": fm.get("source_url", ""),
                     "text": fm["symptom"],
                     "blast_radius": fm["blast_radius"],
+                    "recoverability": fm.get("recoverability", ""),
                 }
                 for fm in failure_modes
             )
@@ -541,7 +566,14 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
             top_inv = brief["invariants"][0]
             parts.append(f"Invariant at risk: \"{top_inv['predicate']}\"")
             fm_evidence.extend(
-                {"type": "invariant", "text": inv["predicate"]}
+                {
+                    "type": "invariant",
+                    "id": inv["id"],
+                    "source_url": inv.get("source_url", ""),
+                    "text": inv["predicate"],
+                    "strength": inv.get("strength", ""),
+                    "scope": inv.get("scope", ""),
+                }
                 for inv in brief["invariants"]
             )
         if critical_problems:
@@ -553,17 +585,45 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
             fm_evidence.extend(
                 {
                     "type": "problem",
+                    "id": p["id"],
+                    "source_url": p.get("source_url", ""),
                     "text": p["title"],
+                    "description": p["description"],
                     "severity": p["severity"],
+                    "status": p.get("status", ""),
                 }
                 for p in critical_problems
             )
+        _BLAST_ORDER = {"kernel-wide": 3, "subsystem": 2, "local": 1}
+        _RECOV_ORDER = {"unrecoverable": 3, "requires-restart": 2, "self-healing": 1}
+        worst_blast = max(
+            (fm["blast_radius"] for fm in failure_modes),
+            key=lambda b: _BLAST_ORDER.get(b, 0),
+            default="local",
+        ) if failure_modes else "local"
+        worst_recovery = max(
+            (fm.get("recoverability", "") for fm in failure_modes),
+            key=lambda r: _RECOV_ORDER.get(r, 0),
+            default="unknown",
+        ) if failure_modes else "unknown"
+        fm_count = len(failure_modes) + len(critical_problems)
+        actionable = (
+            f"Fixing this eliminates {fm_count} known crash/corruption path"
+            f"{'s' if fm_count != 1 else ''} "
+            f"(worst case: {worst_blast}, {worst_recovery})"
+        )
+        if dep_count > 0:
+            actionable += f" and restores invariant guarantees for {dep_count} dependent component{'s' if dep_count != 1 else ''}"
+        actionable += "."
         motivations.append({
             "category": "stability",
             "icon": _MOTIVATION_ICONS["stability"],
             "label": _MOTIVATION_LABELS["stability"],
             "headline": ". ".join(parts),
             "evidence": fm_evidence,
+            "blast_radius": blast_radius,
+            "actionable": actionable,
+            "cross_links": [],
         })
 
     # --- PERFORMANCE ---
@@ -585,26 +645,56 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
             perf_evidence.extend(
                 {
                     "type": "profile",
+                    "id": p["id"],
+                    "source_url": p.get("source_url", ""),
                     "text": (
                         f"{p['metric']}: {p['best_case']}"
                         f" → {p['worst_case']}"
                         f" ({p['conditions']})"
                     ),
+                    "metric": p["metric"],
+                    "best_case": p["best_case"],
+                    "worst_case": p["worst_case"],
+                    "typical_case": p["typical_case"],
+                    "conditions": p["conditions"],
+                    "complexity": p["complexity"],
                 }
                 for p in profiles
             )
         if benchmarks:
             perf_evidence.extend(
-                {"type": "benchmark", "text": b["result_summary"]}
+                {
+                    "type": "benchmark",
+                    "id": b["id"],
+                    "source_url": b.get("source_url", ""),
+                    "text": b["result_summary"],
+                    "conditions": b.get("conditions", ""),
+                }
                 for b in benchmarks
             )
         if perf_observations:
             for o in perf_observations:
                 parts.append(f"\"{o['claim']}\"")
             perf_evidence.extend(
-                {"type": "observation", "text": o["claim"]}
+                {
+                    "type": "observation",
+                    "id": o["id"],
+                    "source_url": o.get("source_url", ""),
+                    "text": o["claim"],
+                }
                 for o in perf_observations
             )
+        if profiles:
+            top = profiles[0]
+            actionable = (
+                f"Closing the gap between {top['best_case']} (best) and "
+                f"{top['worst_case']} (worst) on {top['metric']} "
+                f"under {top['conditions']}."
+            )
+        elif benchmarks:
+            actionable = f"Benchmark data shows optimization opportunity: {benchmarks[0]['result_summary']}."
+        else:
+            actionable = "Performance observations indicate measurable optimization opportunity."
         motivations.append({
             "category": "performance",
             "icon": _MOTIVATION_ICONS["performance"],
@@ -613,71 +703,99 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
                 ". ".join(parts) if parts else "Performance data available"
             ),
             "evidence": perf_evidence,
+            "blast_radius": blast_radius,
+            "actionable": actionable,
+            "cross_links": [],
         })
 
     # --- SCALABILITY ---
-    all_text_fields = (
-        [p["description"] for p in brief["problems"]]
-        + [o["claim"] for o in brief["observations"]]
-        + [d["title"] for d in brief["discussions"]]
-    )
-    scaling_hits = [
-        t for t in all_text_fields
-        if _text_has_keywords(t, _SCALABILITY_KEYWORDS)
-    ]
-    if scaling_hits:
+    scaling_items: list[dict[str, Any]] = []
+    for p in brief["problems"]:
+        if _text_has_keywords(p["description"], _SCALABILITY_KEYWORDS):
+            scaling_items.append({
+                "type": "problem", "id": p["id"],
+                "source_url": p.get("source_url", ""),
+                "text": p["description"],
+            })
+    for o in brief["observations"]:
+        if _text_has_keywords(o["claim"], _SCALABILITY_KEYWORDS):
+            scaling_items.append({
+                "type": "observation", "id": o["id"],
+                "source_url": o.get("source_url", ""),
+                "text": o["claim"],
+            })
+    for d in brief["discussions"]:
+        if _text_has_keywords(d["title"], _SCALABILITY_KEYWORDS):
+            scaling_items.append({
+                "type": "discussion", "id": d["id"],
+                "source_url": d.get("source_url", ""),
+                "text": d["title"],
+                "forum": d.get("forum", ""),
+            })
+    if scaling_items:
         motivations.append({
             "category": "scalability",
             "icon": _MOTIVATION_ICONS["scalability"],
             "label": _MOTIVATION_LABELS["scalability"],
-            "headline": scaling_hits[0],
-            "evidence": [
-                {"type": "text_match", "text": t} for t in scaling_hits
-            ],
+            "headline": scaling_items[0]["text"],
+            "evidence": scaling_items,
+            "blast_radius": blast_radius,
+            "actionable": "Removes scaling wall, enabling linear throughput growth with core count and NUMA topology.",
+            "cross_links": [],
         })
 
     # --- EFFICIENCY ---
-    efficiency_hits = (
-        [
-            f"{p['metric']}: {p['worst_case']}"
-            for p in profiles
-            if _text_has_keywords(p["metric"], _EFFICIENCY_KEYWORDS)
-        ]
-        + [
-            o["claim"]
-            for o in brief["observations"]
-            if _text_has_keywords(o["claim"], _EFFICIENCY_KEYWORDS)
-        ]
-        + [
-            p["description"]
-            for p in brief["problems"]
-            if _text_has_keywords(p["description"], _EFFICIENCY_KEYWORDS)
-        ]
-    )
-    if efficiency_hits:
+    efficiency_items: list[dict[str, Any]] = []
+    for p in profiles:
+        if _text_has_keywords(p["metric"], _EFFICIENCY_KEYWORDS):
+            efficiency_items.append({
+                "type": "profile", "id": p["id"],
+                "source_url": p.get("source_url", ""),
+                "text": f"{p['metric']}: {p['worst_case']}",
+            })
+    for o in brief["observations"]:
+        if _text_has_keywords(o["claim"], _EFFICIENCY_KEYWORDS):
+            efficiency_items.append({
+                "type": "observation", "id": o["id"],
+                "source_url": o.get("source_url", ""),
+                "text": o["claim"],
+            })
+    for p in brief["problems"]:
+        if _text_has_keywords(p["description"], _EFFICIENCY_KEYWORDS):
+            efficiency_items.append({
+                "type": "problem", "id": p["id"],
+                "source_url": p.get("source_url", ""),
+                "text": p["description"],
+            })
+    if efficiency_items:
+        first_text = efficiency_items[0]["text"]
         motivations.append({
             "category": "efficiency",
             "icon": _MOTIVATION_ICONS["efficiency"],
             "label": _MOTIVATION_LABELS["efficiency"],
-            "headline": efficiency_hits[0],
-            "evidence": [
-                {"type": "text_match", "text": t} for t in efficiency_hits
-            ],
+            "headline": first_text,
+            "evidence": efficiency_items,
+            "blast_radius": blast_radius,
+            "actionable": f"Reclaims resources currently wasted on {first_text.split(':')[0].lower()} without sacrificing functionality.",
+            "cross_links": [],
         })
 
     # --- HARDWARE ENABLEMENT ---
-    hw_hits = (
-        [
-            d["title"]
-            for d in brief["discussions"]
-            if _text_has_keywords(d["title"], _HARDWARE_KEYWORDS)
-        ]
-        + [
-            o["claim"]
-            for o in brief["observations"]
-            if _text_has_keywords(o["claim"], _HARDWARE_KEYWORDS)
-        ]
-    )
+    hw_evidence_items: list[dict[str, Any]] = []
+    for d in brief["discussions"]:
+        if _text_has_keywords(d["title"], _HARDWARE_KEYWORDS):
+            hw_evidence_items.append({
+                "type": "discussion", "id": d["id"],
+                "source_url": d.get("source_url", ""),
+                "text": d["title"],
+            })
+    for o in brief["observations"]:
+        if _text_has_keywords(o["claim"], _HARDWARE_KEYWORDS):
+            hw_evidence_items.append({
+                "type": "observation", "id": o["id"],
+                "source_url": o.get("source_url", ""),
+                "text": o["claim"],
+            })
     hw_from_description = _text_has_keywords(
         brief["concept"]["description"], _HARDWARE_KEYWORDS
     )
@@ -686,18 +804,17 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
         and brief["subsystem"]["name"] in _HARDWARE_SUBSYSTEMS
         and brief["scores"]["heat"] > brief["scores"]["pain"]
     )
-    if hw_hits or hw_from_description or hw_from_subsystem:
+    if hw_evidence_items or hw_from_description or hw_from_subsystem:
         parts = []
-        hw_evidence: list[dict[str, Any]] = [
-            {"type": "text_match", "text": t} for t in hw_hits
-        ]
         if hw_from_description:
             parts.append(
                 f"{brief['concept']['name']} interfaces"
                 " with hardware capabilities"
             )
-            hw_evidence.append({
+            hw_evidence_items.append({
                 "type": "concept_description",
+                "id": brief["concept"]["id"],
+                "source_url": "",
                 "text": brief["concept"]["description"][:200],
             })
         if hw_from_subsystem:
@@ -705,8 +822,18 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
                 f"Active area in {brief['subsystem']['name']}"
                 " subsystem (heat > pain)"
             )
-        if hw_hits:
-            parts.append(hw_hits[0])
+        if hw_evidence_items:
+            parts.append(hw_evidence_items[0]["text"])
+        hw_cross_links: list[str] = []
+        if brief["profiles"] or brief["benchmarks"]:
+            hw_cross_links.append("performance")
+        actionable = "Unlocks hardware capabilities that software currently cannot exploit."
+        if brief["profiles"]:
+            top = brief["profiles"][0]
+            actionable += (
+                f" Direct performance gains expected: {top['metric']} "
+                f"currently {top['worst_case']} worst case."
+            )
         motivations.append({
             "category": "hardware_enablement",
             "icon": _MOTIVATION_ICONS["hardware_enablement"],
@@ -716,7 +843,10 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
                 if parts
                 else "Hardware-related activity"
             ),
-            "evidence": hw_evidence,
+            "evidence": hw_evidence_items,
+            "blast_radius": blast_radius,
+            "actionable": actionable,
+            "cross_links": hw_cross_links,
         })
 
     # --- MAINTAINABILITY ---
@@ -735,6 +865,10 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
                 f"{len(regression_fixes)} regression fix"
                 f"{'es' if len(regression_fixes) != 1 else ''}"
             )
+        actionable = f"Reduces patch churn from {len(fixes)} patches in recent window"
+        if regression_fixes:
+            actionable += f", eliminates {len(regression_fixes)} regression cycle{'s' if len(regression_fixes) != 1 else ''}"
+        actionable += ". Future changes become cheaper and safer."
         motivations.append({
             "category": "maintainability",
             "icon": _MOTIVATION_ICONS["maintainability"],
@@ -745,12 +879,19 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
             "evidence": [
                 {
                     "type": "fix",
+                    "id": f["id"],
+                    "source_url": f.get("source_url", ""),
                     "text": f["title"],
                     "fix_type": f.get("fix_type", "unknown"),
                     "commit": f.get("commit_hash", ""),
+                    "source_date": f.get("source_date", ""),
+                    "resolves": f.get("resolves", []),
                 }
                 for f in fixes
             ],
+            "blast_radius": blast_radius,
+            "actionable": actionable,
+            "cross_links": [],
         })
 
     return motivations
