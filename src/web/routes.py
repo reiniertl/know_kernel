@@ -699,6 +699,152 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             },
         )
 
+    @app.get("/research/{concept_id}", response_class=HTMLResponse)
+    async def research_detail(request: Request, concept_id: str):
+        """Research brief for a single concept (ALG-KK-WEB-RESEARCH-DETAIL).
+
+        INV-KK-WEB-RESEARCH-404-NON-CONCEPT: 404 for missing or non-Concept.
+        INV-KK-WEB-RESEARCH-EVIDENCE-CHAIN: full evidence timeline with source links.
+        INV-KK-WEB-RESEARCH-FEASIBILITY-VISIBLE: feasibility score rendered.
+        INV-KK-WEB-RESEARCH-IMPACT-VISIBLE: impact projection rendered.
+        """
+        conn = request.app.state.conn
+        row = conn.execute(
+            "SELECT id, kind, attrs FROM nodes WHERE id = ?", (concept_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Concept not found")
+        node = _rows_to_dicts([row])[0]
+        if node["kind"] != "Concept":
+            raise HTTPException(status_code=404, detail="Not a Concept node")
+        attrs = node.get("attrs") or {}
+
+        brief = build_concept_brief(conn, concept_id)
+        motivations = classify_motivations(brief)
+        argument = build_argument_paragraph(attrs, [brief], motivations)
+        rs = research_score(conn, concept_id)
+        fs = feasibility_score(conn, concept_id)
+        ip = impact_projection(conn, concept_id)
+        scores = compute_all_scores(conn, concept_id)
+
+        mat_row = conn.execute(
+            "SELECT attrs FROM edges WHERE kind = 'implemented-in' AND source_id = ? LIMIT 1",
+            (concept_id,),
+        ).fetchone()
+        if mat_row:
+            mat_attrs = json.loads(mat_row[0]) if isinstance(mat_row[0], str) else (mat_row[0] or {})
+            maturity = mat_attrs.get("maturity")
+        else:
+            maturity = None
+
+        proposal_rows = conn.execute(
+            "SELECT n.id, n.attrs FROM nodes n JOIN edges e ON e.source_id = n.id "
+            "WHERE e.kind = 'grounded-in' AND e.target_id = ? AND n.kind = 'Proposal'",
+            (concept_id,),
+        ).fetchall()
+        proposals = []
+        for pr in proposal_rows:
+            pa = json.loads(pr[1]) if isinstance(pr[1], str) else (pr[1] or {})
+            problem_rows = conn.execute(
+                "SELECT n.id, n.attrs FROM nodes n JOIN edges e ON e.source_id = n.id "
+                "WHERE e.kind = 'addresses' AND e.target_id = ? AND n.kind = 'Problem'",
+                (pr[0],),
+            ).fetchall()
+            problems = []
+            for prb in problem_rows:
+                prb_a = json.loads(prb[1]) if isinstance(prb[1], str) else (prb[1] or {})
+                problems.append({"id": prb[0], "title": prb_a.get("title", prb[0])})
+            proposals.append({
+                "id": pr[0],
+                "name": pa.get("name", pr[0]),
+                "description": pa.get("description", ""),
+                "status": pa.get("status"),
+                "source_date": pa.get("source_date"),
+                "problems": problems,
+            })
+
+        source_urls = set()
+        for ev in brief.get("timeline", []):
+            url = ev.get("source_url", "")
+            if url:
+                source_urls.add(url)
+        evidence_diversity = len(source_urls)
+
+        sub_name = None
+        sub_row = conn.execute(
+            "SELECT n.id, n.attrs FROM nodes n "
+            "JOIN edges e ON e.target_id = n.id "
+            "WHERE e.kind = 'belongs-to' AND e.source_id = ? AND n.kind = 'Subsystem' LIMIT 1",
+            (concept_id,),
+        ).fetchone()
+        if sub_row:
+            sub_attrs = json.loads(sub_row[1]) if isinstance(sub_row[1], str) else (sub_row[1] or {})
+            sub_name = sub_attrs.get("name", "")
+            sub_id = sub_row[0]
+
+            related_rows = conn.execute(
+                "SELECT n.id, n.attrs FROM nodes n "
+                "JOIN edges e ON e.source_id = n.id "
+                "WHERE e.kind = 'belongs-to' AND e.target_id = ? AND n.kind = 'Concept' AND n.id != ? "
+                "LIMIT 5",
+                (sub_id, concept_id),
+            ).fetchall()
+            related_research = []
+            for rr in related_rows:
+                rr_attrs = json.loads(rr[1]) if isinstance(rr[1], str) else (rr[1] or {})
+                rr_rs = research_score(conn, rr[0])
+                if rr_rs > 0:
+                    related_research.append({
+                        "id": rr[0],
+                        "name": rr_attrs.get("name", rr[0]),
+                        "research_score": rr_rs,
+                    })
+        else:
+            related_research = []
+
+        all_evidence = list(brief.get("timeline", []))
+        all_evidence.sort(key=lambda x: x.get("source_date") or "", reverse=True)
+
+        discussion_count = conn.execute(
+            "SELECT COUNT(*) FROM edges e JOIN nodes n ON e.source_id = n.id "
+            "WHERE e.kind = 'discusses' AND e.target_id = ? AND n.kind = 'Discussion'",
+            (concept_id,),
+        ).fetchone()[0]
+        observation_count = conn.execute(
+            "SELECT COUNT(*) FROM edges e JOIN nodes n ON e.source_id = n.id "
+            "WHERE e.kind = 'observes' AND e.target_id = ? AND n.kind = 'Observation'",
+            (concept_id,),
+        ).fetchone()[0]
+        benchmark_count = conn.execute(
+            "SELECT COUNT(*) FROM edges e JOIN nodes n ON e.source_id = n.id "
+            "WHERE e.kind = 'benchmarks' AND e.target_id = ? AND n.kind = 'Benchmark'",
+            (concept_id,),
+        ).fetchone()[0]
+
+        return templates.TemplateResponse(
+            request,
+            "research_detail.html",
+            {
+                "concept": node,
+                "brief": brief,
+                "motivations": motivations,
+                "argument": argument,
+                "research_score": rs,
+                "feasibility_score": fs,
+                "impact": ip,
+                "maturity": maturity,
+                "proposals": proposals,
+                "evidence_diversity": evidence_diversity,
+                "related_research": related_research,
+                "all_evidence": all_evidence,
+                "scores": scores,
+                "sub_name": sub_name,
+                "discussion_count": discussion_count,
+                "observation_count": observation_count,
+                "benchmark_count": benchmark_count,
+            },
+        )
+
     @app.get("/ideas/{idea_id}", response_class=HTMLResponse)
     async def idea_detail(request: Request, idea_id: str):
         """Idea research brief (ALG-KK-WEB-IDEAS-DETAIL).

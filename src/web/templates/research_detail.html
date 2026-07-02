@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/research">&larr; Back to Research Explorer</a></p>
+
+<div style="display:flex;justify-content:space-between;align-items:baseline;">
+  <h1 style="margin:0;">{{ concept.attrs.name }}</h1>
+  <div>
+    {% if sub_name %}<span class="badge" style="background:#2980b9;">{{ sub_name }}</span>{% endif %}
+    {% if maturity %}<span class="badge" style="background:{% if maturity == 'production' %}#27ae60{% elif maturity == 'experimental' %}#f39c12{% else %}#95a5a6{% endif %};">{{ maturity }}</span>{% endif %}
+  </div>
+</div>
+
+{% if concept.attrs.description %}
+<p>{{ concept.attrs.description }}</p>
+{% endif %}
+
+{# --- RESEARCH ASSESSMENT (3-column) --- #}
+<div class="attrs-section">
+  <h3>Research Assessment</h3>
+  <div style="display:flex;gap:2rem;flex-wrap:wrap;">
+    <div style="flex:1;min-width:150px;border:1px solid #ddd;border-radius:4px;padding:0.8em;text-align:center;">
+      <div style="font-size:2em;font-weight:bold;">{{ "%.1f"|format(research_score) }}</div>
+      <div>Research Score</div>
+      <div style="font-size:0.8em;color:#666;">Activity and evidence density</div>
+    </div>
+    <div style="flex:1;min-width:150px;border:1px solid #ddd;border-radius:4px;padding:0.8em;text-align:center;">
+      <div style="font-size:2em;font-weight:bold;">{{ "%.1f"|format(feasibility_score) }}<span style="font-size:0.5em;">/10</span></div>
+      <div>Feasibility</div>
+      <div style="font-size:0.8em;color:#666;">Implementation complexity</div>
+    </div>
+    <div style="flex:1;min-width:150px;border:1px solid #ddd;border-radius:4px;padding:0.8em;text-align:center;">
+      <div style="font-size:2em;font-weight:bold;">{{ "%.1f"|format(impact.total_impact) }}</div>
+      <div>Impact</div>
+      <div style="font-size:0.8em;color:#666;">Potential effect if addressed</div>
+    </div>
+  </div>
+</div>
+
+{# --- IMPACT PROJECTION DETAIL --- #}
+<div class="attrs-section">
+  <h3>Impact Projection</h3>
+  <table>
+    <thead><tr><th>Dimension</th><th>Count</th><th>Weight</th><th>Contribution</th></tr></thead>
+    <tbody>
+      <tr><td>Problems addressed</td><td>{{ impact.problems_addressed }}</td><td>&times;2</td><td>{{ "%.1f"|format(impact.problems_addressed * 2) }}</td></tr>
+      <tr><td>Vulnerabilities mitigated</td><td>{{ impact.vulns_mitigated }}</td><td>&times;5</td><td>{{ "%.1f"|format(impact.vulns_mitigated * 5) }}</td></tr>
+      <tr><td>Failure modes eliminated</td><td>{{ impact.failure_modes_eliminated }}</td><td>&times;3</td><td>{{ "%.1f"|format(impact.failure_modes_eliminated * 3) }}</td></tr>
+      <tr><td>Dependent components</td><td>{{ impact.dependent_components }}</td><td>&times;1</td><td>{{ "%.1f"|format(impact.dependent_components * 1) }}</td></tr>
+      <tr><td>Performance metrics</td><td>{{ impact.performance_metrics }}</td><td>&times;1.5</td><td>{{ "%.1f"|format(impact.performance_metrics * 1.5) }}</td></tr>
+      <tr><td>Subsystems affected</td><td>{{ impact.subsystems_affected }}</td><td>&times;2</td><td>{{ "%.1f"|format(impact.subsystems_affected * 2) }}</td></tr>
+      <tr style="font-weight:bold;"><td>Total</td><td colspan="3">{{ "%.1f"|format(impact.total_impact) }}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+{# --- RESEARCH ACTIVITY --- #}
+<div class="attrs-section">
+  <h3>Research Activity</h3>
+  <p>
+    {{ evidence_diversity }} independent source{{ "s" if evidence_diversity != 1 else "" }}
+    &nbsp;|&nbsp; {{ discussion_count }} discussion{{ "s" if discussion_count != 1 else "" }}
+    &nbsp;|&nbsp; {{ observation_count }} observation{{ "s" if observation_count != 1 else "" }}
+    &nbsp;|&nbsp; {{ benchmark_count }} benchmark{{ "s" if benchmark_count != 1 else "" }}
+  </p>
+
+  {% if proposals %}
+  <h4>Proposals</h4>
+  {% for p in proposals %}
+  <div class="card" style="margin-bottom:0.5em;">
+    <strong>{{ p.name }}</strong>
+    {% if p.status %}<span class="badge badge-kind">{{ p.status }}</span>{% endif %}
+    {% if p.source_date %}<small style="color:#888;"> &middot; {{ p.source_date }}</small>{% endif %}
+    {% if p.description %}<p style="margin:0.3em 0 0 0;font-size:0.9em;">{{ p.description }}</p>{% endif %}
+    {% if p.problems %}
+    <div style="font-size:0.85em;margin-top:0.3em;">Addresses:
+      {% for prb in p.problems %}
+        <a href="/concepts/{{ prb.id }}">{{ prb.title }}</a>{% if not loop.last %}, {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+</div>
+
+{# --- THE CASE (argument paragraph) --- #}
+{% if argument %}
+<div class="attrs-section">
+  <h3>The Case</h3>
+  <p>{{ argument }}</p>
+</div>
+{% endif %}
+
+{# --- MOTIVATION CATEGORIES (reused from idea_detail) --- #}
+{% if motivations %}
+<div class="attrs-section">
+  <h3>Why Pursue This</h3>
+  {% for m in motivations %}
+  <div id="{{ m.category }}" style="margin-bottom:1.5em; padding:0.8em; border-left:3px solid
+    {% if m.category == 'security' %}#c0392b
+    {% elif m.category == 'stability' %}#e67e22
+    {% elif m.category == 'performance' %}#2980b9
+    {% elif m.category == 'scalability' %}#8e44ad
+    {% elif m.category == 'efficiency' %}#27ae60
+    {% elif m.category == 'hardware_enablement' %}#2c3e50
+    {% elif m.category == 'maintainability' %}#7f8c8d
+    {% endif %}; background:rgba(0,0,0,0.02);">
+
+    <h4 style="margin:0 0 0.3em 0;">{{ m.icon }} {{ m.label }}</h4>
+    <p style="margin:0.3em 0;">{{ m.headline }}</p>
+
+    <p style="margin:0.3em 0; font-style:italic; color:#2c3e50;">If addressed: {{ m.actionable }}</p>
+
+    {% if m.blast_radius and m.blast_radius.count > 0 %}
+    <p style="margin:0.3em 0; font-size:0.9em;">
+      Blast radius: <strong>{{ m.blast_radius.count }}</strong> dependent component{{ "s" if m.blast_radius.count != 1 else "" }}
+      &mdash;
+      {% for comp in m.blast_radius.components %}
+        <a href="/concepts/{{ comp.id }}">{{ comp.name }}</a>{% if not loop.last %}, {% endif %}
+      {% endfor %}
+    </p>
+    {% endif %}
+
+    {% if m.cross_links %}
+    <p style="margin:0.3em 0; font-size:0.85em; color:#666;">
+      See also:
+      {% for cl in m.cross_links %}
+        <a href="#{{ cl }}">{{ cl|upper|replace("_", " ") }}</a>{% if not loop.last %}, {% endif %}
+      {% endfor %}
+    </p>
+    {% endif %}
+
+    {% for ev in m.evidence %}
+      <div style="margin-left:1em; margin-top:0.4em; font-size:0.9em; color:#555;">
+        {% if ev.type == 'vulnerability' %}
+          <span class="badge" style="background:{% if ev.severity == 'critical' %}#c0392b{% elif ev.severity == 'high' %}#e67e22{% elif ev.severity == 'medium' %}#f1c40f;color:#333{% else %}#95a5a6{% endif %};">{{ ev.severity }}</span>
+          {{ ev.text }}{% if ev.cvss %} (CVSS {{ ev.cvss }}){% endif %}
+          {% if ev.affected_versions %}<small> &middot; {{ ev.affected_versions }}</small>{% endif %}
+          {% if ev.status %}<small> &middot; {{ ev.status }}</small>{% endif %}
+        {% elif ev.type == 'failure_mode' %}
+          &ldquo;{{ ev.text }}&rdquo; (blast radius: {{ ev.blast_radius }}{% if ev.recoverability %}, {{ ev.recoverability }}{% endif %})
+        {% elif ev.type == 'invariant' %}
+          <code>{{ ev.text }}</code>
+          {% if ev.strength %}<small> &middot; {{ ev.strength }}</small>{% endif %}
+          {% if ev.scope %}<small> &middot; {{ ev.scope }}</small>{% endif %}
+        {% elif ev.type == 'problem' %}
+          <span class="badge" style="background:{% if ev.severity == 'critical' %}#c0392b{% elif ev.severity == 'high' %}#e67e22{% elif ev.severity == 'medium' %}#f1c40f;color:#333{% else %}#95a5a6{% endif %};">{{ ev.severity }}</span>
+          <strong>{{ ev.text }}</strong>
+          {% if ev.description %}<br><small style="margin-left:2em;">{{ ev.description }}</small>{% endif %}
+        {% elif ev.type == 'profile' %}
+          {{ ev.text }}
+          {% if ev.complexity %}<small> &middot; {{ ev.complexity }}</small>{% endif %}
+        {% elif ev.type == 'benchmark' %}
+          {{ ev.text }}
+          {% if ev.conditions %}<small> &middot; {{ ev.conditions }}</small>{% endif %}
+        {% elif ev.type == 'fix' %}
+          {% if ev.fix_type %}<span class="badge badge-kind">{{ ev.fix_type }}</span>{% endif %}
+          {{ ev.text }}
+          {% if ev.commit %}<code>{{ ev.commit }}</code>{% endif %}
+          {% if ev.source_date %}<small> &middot; {{ ev.source_date }}</small>{% endif %}
+        {% else %}
+          &ldquo;{{ ev.text }}&rdquo;
+          {% if ev.type %}<small>({{ ev.type }})</small>{% endif %}
+        {% endif %}
+
+        {% if ev.source_url %}
+          <a href="{{ ev.source_url }}" target="_blank" style="margin-left:0.3em; font-size:0.85em;">source &rarr;</a>
+        {% elif ev.id %}
+          <a href="/concepts/{{ ev.id }}" style="margin-left:0.3em; font-size:0.85em;">detail &rarr;</a>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# --- SCORES TABLE --- #}
+<div class="attrs-section">
+  <h3>Scores</h3>
+  <table>
+    <thead><tr><th>Heat</th><th>Pain</th><th>Impact</th><th>Leverage</th><th>Frontier</th><th>Research</th><th>Feasibility</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>{{ "%.1f"|format(scores.heat) }}</td>
+        <td>{{ "%.1f"|format(scores.pain) }}</td>
+        <td>{{ "%.1f"|format(scores.impact) }}</td>
+        <td>{{ "%.1f"|format(scores.leverage) }}</td>
+        <td>{{ "%.1f"|format(scores.frontier) }}</td>
+        <td>{{ "%.1f"|format(research_score) }}</td>
+        <td>{{ "%.1f"|format(feasibility_score) }}/10</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+{# --- RELATED RESEARCH --- #}
+{% if related_research %}
+<div class="attrs-section">
+  <h3>Related Research</h3>
+  {% for rr in related_research %}
+  <div class="card" style="margin-bottom:0.4em;">
+    <a href="/research/{{ rr.id }}">{{ rr.name }}</a>
+    <span style="font-size:0.85em;"> &mdash; Research: {{ "%.1f"|format(rr.research_score) }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# --- EVIDENCE TIMELINE --- #}
+{% if all_evidence %}
+<div class="attrs-section">
+  <h3>Evidence Timeline</h3>
+  <table>
+    <thead><tr><th>Date</th><th>Type</th><th>Evidence</th><th>Source</th></tr></thead>
+    <tbody>
+    {% for ev in all_evidence %}
+      <tr>
+        <td style="white-space:nowrap;">{{ ev.source_date or "&mdash;" }}</td>
+        <td><span class="badge badge-kind"
+          {% if ev.kind == 'Vulnerability' %}style="background:#c0392b;"
+          {% elif ev.kind == 'Discussion' %}style="background:#2980b9;"
+          {% elif ev.kind == 'Observation' %}style="background:#27ae60;"
+          {% elif ev.kind == 'Benchmark' %}style="background:#e67e22;"
+          {% elif ev.kind == 'Problem' %}style="background:#f1c40f;color:#333;"
+          {% endif %}>{{ ev.kind }}</span></td>
+        <td>{{ ev.text }}</td>
+        <td>
+          {% if ev.source_url %}
+            <a href="{{ ev.source_url }}" target="_blank">source &rarr;</a>
+          {% elif ev.id %}
+            <a href="/concepts/{{ ev.id }}">detail &rarr;</a>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{# --- DEPENDENCIES --- #}
+{% if brief.prerequisites.depended_on_by or brief.prerequisites.depends_on %}
+<div class="attrs-section">
+  <h3>Dependencies</h3>
+  {% if brief.prerequisites.depended_on_by %}
+  <h4>Components that depend on {{ concept.attrs.name }}</h4>
+  <ul>
+  {% for dep in brief.prerequisites.depended_on_by %}
+    <li><a href="/concepts/{{ dep.id }}">{{ dep.name }}</a></li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+  {% if brief.prerequisites.depends_on %}
+  <h4>Dependencies</h4>
+  <ul>
+  {% for dep in brief.prerequisites.depends_on %}
+    <li><a href="/concepts/{{ dep.id }}">{{ dep.name }}</a></li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}

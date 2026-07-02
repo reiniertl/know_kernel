@@ -2008,3 +2008,55 @@ def test_research_list_sort_by_feasibility(research_client):
     response = research_client.get("/research?sort_by=feasibility")
     assert response.status_code == 200
     assert "Research Explorer" in response.text
+
+
+def test_research_detail_returns_200(research_client):
+    response = research_client.get("/research/concept-rcu")
+    assert response.status_code == 200
+    assert "RCU" in response.text
+
+
+def test_research_detail_404_for_missing(research_client):
+    response = research_client.get("/research/nonexistent-node")
+    assert response.status_code == 404
+
+
+def test_research_detail_404_for_non_concept(research_client):
+    response = research_client.get("/research/sub-sync")
+    assert response.status_code == 404
+
+
+def test_research_detail_shows_research_assessment(research_client):
+    response = research_client.get("/research/concept-rcu")
+    assert response.status_code == 200
+    assert "Research Score" in response.text
+
+
+def test_research_detail_shows_feasibility(research_client):
+    response = research_client.get("/research/concept-rcu")
+    assert response.status_code == 200
+    assert "Feasibility" in response.text
+
+
+def test_research_detail_shows_impact_projection(research_client):
+    response = research_client.get("/research/concept-rcu")
+    assert response.status_code == 200
+    assert "Impact Projection" in response.text
+
+
+def test_research_detail_shows_motivations(research_client):
+    response = research_client.get("/research/concept-rcu")
+    assert response.status_code == 200
+    assert "stability" in response.text.lower() or "security" in response.text.lower() or "Why Pursue" in response.text
+
+
+def test_research_detail_shows_evidence_timeline(research_client):
+    response = research_client.get("/research/concept-rcu")
+    assert response.status_code == 200
+    assert "Evidence Timeline" in response.text
+
+
+def test_research_nav_link_visible(research_client):
+    response = research_client.get("/")
+    assert response.status_code == 200
+    assert 'href="/research"' in response.text
