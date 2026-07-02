@@ -14,11 +14,13 @@ from graph.schema import init_db
 from graph.scoring import (
     compute_all_scores,
     cvss_weight,
+    feasibility_score,
     frontier_score,
     get_linked_failure_modes,
     get_linked_problems,
     get_linked_vulns,
     heat_score,
+    impact_projection,
     impact_score,
     leverage_score,
     pain_score,
@@ -714,6 +716,111 @@ class TestResearchScore:
         score_no_fix = research_score(conn, cid_no_fix, window_days=90)
         score_with_fix = research_score(conn, cid_with_fix, window_days=90)
         assert score_no_fix > score_with_fix
+
+
+def _add_subsystem(conn: sqlite3.Connection, name: str) -> str:
+    sid = f"sub-{name.lower()}"
+    add_node(conn, sid, "Subsystem", {"name": name})
+    return sid
+
+
+def _add_perf_profile(conn: sqlite3.Connection, concept_id: str, tag: str = "a") -> str:
+    pid = f"pp-{tag}-{concept_id[:8]}"
+    add_node(conn, pid, "PerformanceProfile", {
+        "metric": "latency",
+        "complexity": "O(1)",
+        "best_case": "1ms",
+        "typical_case": "5ms",
+        "worst_case": "50ms",
+        "conditions": "128 cores",
+        "artifact_class": "abstracted-mechanism",
+    })
+    add_edge(conn, "profiled-by", pid, concept_id)
+    return pid
+
+
+# ── Feasibility score tests (ALG-KK-GRAPH-FEASIBILITY-SCORE) ──
+
+
+class TestFeasibilityScore:
+    def test_feasibility_score_bounded(self, conn):
+        """INV-KK-GRAPH-FEASIBILITY-BOUNDED: always in [0, 10]."""
+        cid = _add_concept(conn, "RCU")
+        score = feasibility_score(conn, cid)
+        assert 0.0 <= score <= 10.0
+
+    def test_feasibility_score_max_for_standalone(self, conn):
+        """Standalone concept with no prereqs/invariants/protocols → 10.0."""
+        cid = _add_concept(conn, "Simple")
+        assert feasibility_score(conn, cid) == 10.0
+
+    def test_feasibility_score_decreases_with_depth(self, conn):
+        """INV-KK-GRAPH-FEASIBILITY-FORMULA: deeper prereq chain → lower score."""
+        cid_a = _add_concept(conn, "A", "concept-feas-a")
+        cid_b = _add_concept(conn, "B", "concept-feas-b")
+        cid_c = _add_concept(conn, "C", "concept-feas-c")
+        add_edge(conn, "prerequisite", cid_a, cid_b)
+        add_edge(conn, "prerequisite", cid_b, cid_c)
+        # depth=2 for A, depth=1 for B, depth=0 for C
+        score_a = feasibility_score(conn, cid_a)
+        score_b = feasibility_score(conn, cid_b)
+        score_c = feasibility_score(conn, cid_c)
+        assert score_c > score_b > score_a
+
+    def test_feasibility_score_cross_subsystem_penalty(self, conn):
+        """INV-KK-GRAPH-FEASIBILITY-FORMULA: cross-subsystem → -2.0 penalty."""
+        cid_a = _add_concept(conn, "X", "concept-cross-a")
+        cid_b = _add_concept(conn, "Y", "concept-cross-b")
+        sub1 = _add_subsystem(conn, "MM")
+        sub2 = _add_subsystem(conn, "Net")
+        add_edge(conn, "belongs-to", cid_a, sub1)
+        add_edge(conn, "belongs-to", cid_b, sub2)
+        add_edge(conn, "prerequisite", cid_a, cid_b)
+        score = feasibility_score(conn, cid_a)
+        # depth=1 → 1.5, cross_subsystem=1 → 2.0, total penalty=3.5
+        assert score == pytest.approx(6.5)
+
+
+# ── Impact projection tests (ALG-KK-GRAPH-IMPACT-PROJECTION) ──
+
+
+class TestImpactProjection:
+    def test_impact_projection_returns_dict(self, conn):
+        """INV-KK-GRAPH-IMPACT-PROJECTION-COMPLETE: returns 7-key dict."""
+        cid = _add_concept(conn, "RCU")
+        result = impact_projection(conn, cid)
+        assert isinstance(result, dict)
+        expected_keys = {
+            "problems_addressed", "vulns_mitigated",
+            "failure_modes_eliminated", "dependent_components",
+            "performance_metrics", "subsystems_affected", "total_impact",
+        }
+        assert set(result.keys()) == expected_keys
+
+    def test_impact_projection_counts_problems(self, conn):
+        """Unresolved problems are counted, resolved are not."""
+        cid = _add_concept(conn, "Slab")
+        pid1 = _add_problem(conn, cid, "high")
+        _add_problem(conn, cid, "medium")
+        conn.execute(
+            "UPDATE nodes SET attrs = json_set(attrs, '$.status', 'resolved') WHERE id = ?",
+            (pid1,),
+        )
+        result = impact_projection(conn, cid)
+        assert result["problems_addressed"] == 1
+
+    def test_impact_projection_total_formula(self, conn):
+        """INV-KK-GRAPH-IMPACT-PROJECTION-FORMULA: verify weighted sum."""
+        cid = _add_concept(conn, "VM", "concept-impact-vm")
+        _add_problem(conn, cid, "high")  # 1 problem → *2
+        _add_vulnerability(conn, cid, cvss="7.0", cve_id="CVE-2026-IMP1")  # 1 vuln → *5
+        _add_failure_mode(conn, cid)  # 1 fm → *3
+        _add_perf_profile(conn, cid, "lat")  # 1 pp → *1.5
+        sub = _add_subsystem(conn, "VMSub")
+        add_edge(conn, "belongs-to", cid, sub)  # 1 sub → *2
+        result = impact_projection(conn, cid)
+        expected = 1*2 + 1*5 + 1*3 + 0*1 + 1*1.5 + 1*2
+        assert result["total_impact"] == pytest.approx(expected)
 
 
 # ── Vulnerability propagation tests (ALG-KK-VULN-PROPAGATE) ──

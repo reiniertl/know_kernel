@@ -330,6 +330,153 @@ def research_score(
     return max(0.0, score)
 
 
+def _prerequisite_depth(conn: sqlite3.Connection, concept_id: str) -> int:
+    """BFS max depth of prerequisite chain from concept."""
+    depth = 0
+    current_level = {concept_id}
+    visited = {concept_id}
+    while current_level:
+        next_level: set[str] = set()
+        for cid in current_level:
+            rows = conn.execute(
+                "SELECT target_id FROM edges WHERE kind = 'prerequisite' AND source_id = ?",
+                (cid,),
+            ).fetchall()
+            for r in rows:
+                if r[0] not in visited:
+                    visited.add(r[0])
+                    next_level.add(r[0])
+        if next_level:
+            depth += 1
+        current_level = next_level
+    return depth
+
+
+def _prerequisite_subsystems(conn: sqlite3.Connection, concept_id: str) -> set[str]:
+    """Collect distinct subsystems across the prerequisite chain."""
+    visited = set()
+    queue = [concept_id]
+    subsystems: set[str] = set()
+    while queue:
+        cid = queue.pop(0)
+        if cid in visited:
+            continue
+        visited.add(cid)
+        sub_rows = conn.execute(
+            "SELECT target_id FROM edges WHERE kind = 'belongs-to' AND source_id = ?",
+            (cid,),
+        ).fetchall()
+        for r in sub_rows:
+            subsystems.add(r[0])
+        prereq_rows = conn.execute(
+            "SELECT target_id FROM edges WHERE kind = 'prerequisite' AND source_id = ?",
+            (cid,),
+        ).fetchall()
+        for r in prereq_rows:
+            if r[0] not in visited:
+                queue.append(r[0])
+    return subsystems
+
+
+def feasibility_score(
+    conn: sqlite3.Connection,
+    concept_id: str,
+) -> float:
+    """Estimate implementation feasibility (ALG-KK-GRAPH-FEASIBILITY-SCORE).
+
+    INV-KK-GRAPH-FEASIBILITY-BOUNDED: result in [0, 10].
+    INV-KK-GRAPH-FEASIBILITY-FORMULA: 10 - penalties.
+    INV-KK-GRAPH-FEASIBILITY-PURE: deterministic.
+    """
+    prereq_depth = _prerequisite_depth(conn, concept_id)
+
+    subsystems = _prerequisite_subsystems(conn, concept_id)
+    cross_subsystem = 1 if len(subsystems) > 1 else 0
+
+    inv_count = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'governed-by' AND target_id = ?",
+        (concept_id,),
+    ).fetchone()[0]
+
+    proto_count = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'constrains-composition' AND target_id = ?",
+        (concept_id,),
+    ).fetchone()[0]
+
+    penalties = (
+        prereq_depth * 1.5
+        + cross_subsystem * 2.0
+        + inv_count * 0.5
+        + proto_count * 0.5
+    )
+    return max(0.0, min(10.0, 10.0 - penalties))
+
+
+def impact_projection(
+    conn: sqlite3.Connection,
+    concept_id: str,
+) -> dict[str, Any]:
+    """Project benefit if research succeeds (ALG-KK-GRAPH-IMPACT-PROJECTION).
+
+    INV-KK-GRAPH-IMPACT-PROJECTION-COMPLETE: returns 7-key dict.
+    INV-KK-GRAPH-IMPACT-PROJECTION-FORMULA: total_impact weighted sum.
+    """
+    problems = get_linked_problems(conn, concept_id)
+    problems_addressed = sum(
+        1 for p in problems if p.get("status") != "resolved"
+    )
+
+    vulns_mitigated = len(get_linked_vulns(conn, concept_id))
+
+    failure_modes_eliminated = len(get_linked_failure_modes(conn, concept_id))
+
+    dependent_rows = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'prerequisite' AND target_id = ?",
+        (concept_id,),
+    ).fetchone()[0]
+    dependent_components = dependent_rows
+
+    perf_count = conn.execute(
+        "SELECT COUNT(*) FROM nodes n "
+        "JOIN edges e ON e.source_id = n.id "
+        "WHERE e.kind = 'profiled-by' AND e.target_id = ? AND n.kind = 'PerformanceProfile'",
+        (concept_id,),
+    ).fetchone()[0]
+    performance_metrics = perf_count
+
+    sub_rows = conn.execute(
+        "SELECT DISTINCT target_id FROM edges WHERE kind = 'belongs-to' AND source_id = ?",
+        (concept_id,),
+    ).fetchall()
+    dep_sub_rows = conn.execute(
+        "SELECT DISTINCT e2.target_id FROM edges e1 "
+        "JOIN edges e2 ON e2.source_id = e1.source_id AND e2.kind = 'belongs-to' "
+        "WHERE e1.kind = 'prerequisite' AND e1.target_id = ?",
+        (concept_id,),
+    ).fetchall()
+    all_subs = {r[0] for r in sub_rows} | {r[0] for r in dep_sub_rows}
+    subsystems_affected = len(all_subs)
+
+    total_impact = (
+        problems_addressed * 2
+        + vulns_mitigated * 5
+        + failure_modes_eliminated * 3
+        + dependent_components * 1
+        + performance_metrics * 1.5
+        + subsystems_affected * 2
+    )
+
+    return {
+        "problems_addressed": problems_addressed,
+        "vulns_mitigated": vulns_mitigated,
+        "failure_modes_eliminated": failure_modes_eliminated,
+        "dependent_components": dependent_components,
+        "performance_metrics": performance_metrics,
+        "subsystems_affected": subsystems_affected,
+        "total_impact": total_impact,
+    }
+
+
 def vulnerability_propagation(
     conn: sqlite3.Connection,
     vuln_id: str,
