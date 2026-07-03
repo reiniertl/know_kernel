@@ -863,9 +863,21 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         else:
             related_research = []
 
-        all_evidence = list(brief.get("timeline", []))
+        _RESEARCH_TIMELINE_KINDS = ("Discussion", "Observation", "Benchmark", "Proposal", "Problem")
+        all_evidence = [
+            ev for ev in brief.get("timeline", [])
+            if ev.get("kind") in _RESEARCH_TIMELINE_KINDS
+        ]
         for ev in all_evidence:
-            if ev.get("id") and not ev.get("source_url"):
+            if ev.get("source_url"):
+                src_check = conn.execute(
+                    "SELECT json_extract(attrs, '$.source_type') FROM nodes "
+                    "WHERE kind = 'Source' AND json_extract(attrs, '$.url') = ? LIMIT 1",
+                    (ev["source_url"],),
+                ).fetchone()
+                if not src_check or src_check[0] not in _RESEARCH_SOURCE_TYPES:
+                    ev["source_url"] = None
+            if not ev.get("source_url") and ev.get("id"):
                 ev_row = conn.execute(
                     "SELECT e.target_id FROM edges e "
                     "WHERE e.kind = 'extracted-from' AND e.source_id = ? LIMIT 1",
@@ -878,17 +890,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                         "WHERE e.kind = 'sourced-from' AND e.source_id = ? AND n.kind = 'Source' LIMIT 1",
                         (ev_row[0],),
                     ).fetchone()
-                    if src_row and src_row[0]:
-                        if src_row[1] in _RESEARCH_SOURCE_TYPES:
-                            ev["source_url"] = src_row[0]
-            elif ev.get("source_url"):
-                src_check = conn.execute(
-                    "SELECT json_extract(attrs, '$.source_type') FROM nodes "
-                    "WHERE kind = 'Source' AND json_extract(attrs, '$.url') = ? LIMIT 1",
-                    (ev["source_url"],),
-                ).fetchone()
-                if src_check and src_check[0] not in _RESEARCH_SOURCE_TYPES:
-                    ev["source_url"] = None
+                    if src_row and src_row[0] and src_row[1] in _RESEARCH_SOURCE_TYPES:
+                        ev["source_url"] = src_row[0]
         all_evidence.sort(key=lambda x: x.get("source_date") or "", reverse=True)
 
         discussion_count = conn.execute(
