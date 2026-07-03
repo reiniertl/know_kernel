@@ -2062,6 +2062,58 @@ def test_research_nav_link_visible(research_client):
     assert 'href="/research"' in response.text
 
 
+def test_research_detail_evidence_timeline_dual_columns(tmp_path):
+    db_path = tmp_path / "dual_col_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-dc", "Concept", {
+        "name": "DualCol", "description": "d", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+    })
+    add_node(conn, "src-dc", "Source", {
+        "url": "https://lwn.net/Articles/111111/",
+        "source_type": "article", "license": "LicenseRef-LWN",
+    })
+    add_node(conn, "ev-dc", "Evidence", {
+        "artifact_class": "B", "contamination_level": "none",
+    })
+    add_edge(conn, "sourced-from", "ev-dc", "src-dc")
+    add_node(conn, "obs-dc", "Observation", {
+        "claim": "Dual column test", "confidence": "high",
+        "source_date": "2026-06-01", "artifact_class": "B",
+    })
+    add_edge(conn, "observes", "obs-dc", "concept-dc")
+    add_edge(conn, "extracted-from", "obs-dc", "ev-dc")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/research/concept-dc")
+        assert response.status_code == 200
+        assert "https://lwn.net/Articles/111111/" in response.text
+        assert 'href="/concepts/obs-dc"' in response.text
+
+
+def test_research_detail_stale_evidence_muted(tmp_path):
+    db_path = tmp_path / "stale_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-st", "Concept", {
+        "name": "StaleTest", "description": "d", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+    })
+    add_node(conn, "obs-old", "Observation", {
+        "claim": "Old stale observation", "confidence": "high",
+        "source_date": "2022-01-01", "artifact_class": "B",
+    })
+    add_edge(conn, "observes", "obs-old", "concept-st")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/research/concept-st")
+        assert response.status_code == 200
+        assert "stale-evidence" in response.text
+
+
 def test_research_detail_evidence_timeline_has_source_link(tmp_path):
     db_path = tmp_path / "ev_src_test.db"
     conn = init_db(db_path)

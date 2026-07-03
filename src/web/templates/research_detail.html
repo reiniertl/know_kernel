@@ -213,10 +213,10 @@
 <div class="attrs-section">
   <h3>Evidence Timeline</h3>
   <table>
-    <thead><tr><th>Date</th><th>Type</th><th>Evidence</th><th>Source</th></tr></thead>
+    <thead><tr><th>Date</th><th>Type</th><th>Evidence</th><th>Source</th><th>Detail</th></tr></thead>
     <tbody>
     {% for ev in all_evidence %}
-      <tr>
+      <tr{% if ev.source_date and ev.source_date < stale_cutoff %} class="stale-evidence"{% endif %}>
         <td style="white-space:nowrap;">{{ ev.source_date or "&mdash;" }}</td>
         <td><span class="badge badge-kind"
           {% if ev.kind == 'Vulnerability' %}style="background:#c0392b;"
@@ -226,13 +226,8 @@
           {% elif ev.kind == 'Problem' %}style="background:#f1c40f;color:#333;"
           {% endif %}>{{ ev.kind }}</span></td>
         <td>{{ ev.text }}</td>
-        <td>
-          {% if ev.source_url %}
-            <a href="{{ ev.source_url }}" target="_blank">source &rarr;</a>
-          {% elif ev.id %}
-            <a href="/concepts/{{ ev.id }}">detail &rarr;</a>
-          {% endif %}
-        </td>
+        <td>{% if ev.source_url %}<a href="{{ ev.source_url }}" target="_blank">source &rarr;</a>{% else %}&mdash;{% endif %}</td>
+        <td>{% if ev.id %}<a href="/concepts/{{ ev.id }}">detail &rarr;</a>{% else %}&mdash;{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>

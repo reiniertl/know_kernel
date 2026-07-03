@@ -7,6 +7,7 @@ INV-KK-WEB-FULL-ACCESS: all node kinds are served without filtering.
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -871,6 +872,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "all_evidence": all_evidence,
                 "scores": scores,
                 "sub_name": sub_name,
+                "stale_cutoff": (date.today() - timedelta(days=180)).isoformat(),
                 "discussion_count": discussion_count,
                 "observation_count": observation_count,
                 "benchmark_count": benchmark_count,
