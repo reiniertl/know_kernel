@@ -577,7 +577,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         min_research: float = Query(0.0, ge=0),
         min_feasibility: float = Query(0.0, ge=0),
         window_days: int = Query(90, ge=1, le=365),
-        sort_by: str = Query("research"),
+        sort_by: str = Query("latest_activity"),
         page: int = Query(1, ge=1),
         per_page: int = Query(20, ge=5, le=100),
     ):
@@ -587,8 +587,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         INV-KK-WEB-RESEARCH-FILTERED: min_research + min_feasibility filtering.
         """
         conn = request.app.state.conn
-        if sort_by not in ("research", "feasibility", "impact", "frontier"):
-            sort_by = "research"
+        if sort_by not in ("research", "feasibility", "impact", "frontier", "latest_activity"):
+            sort_by = "latest_activity"
 
         concept_rows = conn.execute(
             "SELECT id, kind, attrs FROM nodes WHERE kind = 'Concept' ORDER BY id"
@@ -606,6 +606,14 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 continue
             if is_security_only_concept(conn, cid):
                 continue
+            latest_date_row = conn.execute(
+                "SELECT MAX(json_extract(n.attrs, '$.source_date')) "
+                "FROM edges e JOIN nodes n ON e.source_id = n.id "
+                "WHERE e.target_id = ? AND e.kind IN ('discusses', 'observes', 'benchmarks') "
+                "AND n.kind IN ('Discussion', 'Observation', 'Benchmark')",
+                (cid,),
+            ).fetchone()
+            latest_activity_date = (latest_date_row[0] or "") if latest_date_row else ""
             scored.append({
                 "id": cid,
                 "name": attrs.get("name", cid),
@@ -614,6 +622,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "feasibility_score": fs,
                 "impact": ip,
                 "scores": scores,
+                "latest_activity_date": latest_activity_date,
             })
 
         sort_key_map = {
@@ -621,6 +630,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "feasibility": lambda x: x["feasibility_score"],
             "impact": lambda x: x["impact"]["total_impact"],
             "frontier": lambda x: x["scores"].get("frontier", 0),
+            "latest_activity": lambda x: x["latest_activity_date"],
         }
         scored.sort(key=sort_key_map[sort_by], reverse=True)
 

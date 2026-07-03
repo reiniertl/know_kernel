@@ -9,6 +9,7 @@
   <label style="margin-left:1rem;">Window (days): <input type="number" name="window_days" value="{{ window_days }}" min="1" max="365" style="width:5rem;font-family:monospace;"></label>
   <label style="margin-left:1rem;">Sort by:
     <select name="sort_by" style="font-family:monospace;">
+      <option value="latest_activity" {% if sort_by == 'latest_activity' %}selected{% endif %}>Latest Activity</option>
       <option value="research" {% if sort_by == 'research' %}selected{% endif %}>Research Score</option>
       <option value="feasibility" {% if sort_by == 'feasibility' %}selected{% endif %}>Feasibility</option>
       <option value="impact" {% if sort_by == 'impact' %}selected{% endif %}>Impact</option>
@@ -26,7 +27,7 @@
     {% if c.maturity %}<span class="badge" style="background:{% if c.maturity == 'production' %}#27ae60{% elif c.maturity == 'experimental' %}#f39c12{% else %}#95a5a6{% endif %};">{{ c.maturity }}</span>{% endif %}
   </div>
   <div style="margin:0.4rem 0;font-size:0.9em;">
-    Research: <strong>{{ "%.1f"|format(c.research_score) }}</strong>
+    {% if c.latest_activity_date %}Latest: <strong>{{ c.latest_activity_date }}</strong> &nbsp;|&nbsp; {% endif %}Research: {{ "%.1f"|format(c.research_score) }}
     &nbsp;|&nbsp; Feasibility: {{ "%.1f"|format(c.feasibility_score) }}/10
     &nbsp;|&nbsp; Impact: {{ "%.1f"|format(c.impact.total_impact) }}
     &nbsp;|&nbsp; Frontier: {{ "%.1f"|format(c.scores.frontier) }}

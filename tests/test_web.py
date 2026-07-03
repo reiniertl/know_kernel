@@ -2172,3 +2172,36 @@ def test_research_detail_proposal_has_source_link(tmp_path):
         response = c.get("/research/concept-x")
         assert response.status_code == 200
         assert "https://lwn.net/Articles/999999/" in response.text
+
+
+def test_research_list_sort_by_latest_activity(tmp_path):
+    db_path = tmp_path / "sort_activity_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-old", "Concept", {
+        "name": "OldConcept", "description": "old", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+    })
+    add_node(conn, "disc-old", "Discussion", {
+        "title": "Old discussion", "source_date": "2025-01-01",
+        "artifact_class": "B", "forum": "lkml", "participant_count": 3,
+    })
+    add_edge(conn, "discusses", "disc-old", "concept-old")
+    add_node(conn, "concept-new", "Concept", {
+        "name": "NewConcept", "description": "new", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+    })
+    add_node(conn, "disc-new", "Discussion", {
+        "title": "New discussion", "source_date": "2026-06-01",
+        "artifact_class": "B", "forum": "lkml", "participant_count": 5,
+    })
+    add_edge(conn, "discusses", "disc-new", "concept-new")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/research?sort_by=latest_activity")
+        assert response.status_code == 200
+        text = response.text
+        pos_new = text.index("NewConcept")
+        pos_old = text.index("OldConcept")
+        assert pos_new < pos_old, "NewConcept should appear before OldConcept when sorted by latest_activity"
