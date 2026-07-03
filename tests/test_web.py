@@ -2421,3 +2421,9 @@ def test_research_detail_strips_non_research_source_from_motivations(tmp_path):
         assert response.status_code == 200
         assert "https://git.kernel.org/pub/scm/linux/kernel/doc-stub.rst" not in response.text
         assert "https://dl.acm.org/doi/motiv-paper" in response.text
+        text = response.text
+        motiv_start = text.find("Why Pursue This")
+        motiv_end = text.find("Evidence Timeline") if "Evidence Timeline" in text else len(text)
+        if motiv_start >= 0:
+            motiv_section = text[motiv_start:motiv_end]
+            assert "detail" not in motiv_section.lower() or "detail →" not in motiv_section
