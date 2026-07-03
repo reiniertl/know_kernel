@@ -1947,6 +1947,14 @@ def research_client(tmp_path):
         "tradeoffs": ["write overhead"],
         "design_rationale": "Eliminates read-side locks.",
     })
+    add_node(conn, "src-rcu-paper", "Source", {
+        "url": "https://example.com/rcu-paper",
+        "source_type": "conference-paper", "license": "LicenseRef-Academic",
+    })
+    add_node(conn, "ev-rcu-paper", "Evidence", {
+        "artifact_class": "B", "contamination_level": "none",
+    })
+    add_edge(conn, "sourced-from", "ev-rcu-paper", "src-rcu-paper")
     add_node(conn, "disc-rcu-1", "Discussion", {
         "title": "RCU future directions",
         "forum": "LKML",
@@ -1954,6 +1962,7 @@ def research_client(tmp_path):
         "participant_count": 10,
         "artifact_class": "B",
     })
+    add_edge(conn, "extracted-from", "disc-rcu-1", "ev-rcu-paper")
     add_edge(conn, "discusses", "disc-rcu-1", "concept-rcu")
     add_node(conn, "obs-rcu-1", "Observation", {
         "claim": "RCU latency spikes on NUMA",
@@ -2177,6 +2186,14 @@ def test_research_detail_proposal_has_source_link(tmp_path):
 def test_research_list_sort_by_latest_activity(tmp_path):
     db_path = tmp_path / "sort_activity_test.db"
     conn = init_db(db_path)
+    add_node(conn, "src-sort", "Source", {
+        "url": "https://example.com/sort-paper", "source_type": "article",
+        "license": "LicenseRef-Academic",
+    })
+    add_node(conn, "ev-sort", "Evidence", {
+        "artifact_class": "B", "contamination_level": "none",
+    })
+    add_edge(conn, "sourced-from", "ev-sort", "src-sort")
     add_node(conn, "concept-old", "Concept", {
         "name": "OldConcept", "description": "old", "artifact_class": "B",
         "key_properties": [], "tradeoffs": [], "design_rationale": "r",
@@ -2185,6 +2202,7 @@ def test_research_list_sort_by_latest_activity(tmp_path):
         "title": "Old discussion", "source_date": "2025-01-01",
         "artifact_class": "B", "forum": "lkml", "participant_count": 3,
     })
+    add_edge(conn, "extracted-from", "disc-old", "ev-sort")
     add_edge(conn, "discusses", "disc-old", "concept-old")
     add_node(conn, "concept-new", "Concept", {
         "name": "NewConcept", "description": "new", "artifact_class": "B",
@@ -2194,6 +2212,7 @@ def test_research_list_sort_by_latest_activity(tmp_path):
         "title": "New discussion", "source_date": "2026-06-01",
         "artifact_class": "B", "forum": "lkml", "participant_count": 5,
     })
+    add_edge(conn, "extracted-from", "disc-new", "ev-sort")
     add_edge(conn, "discusses", "disc-new", "concept-new")
     conn.commit()
     conn.close()
@@ -2230,10 +2249,19 @@ def test_research_list_includes_concept_with_evidence(tmp_path):
         "name": "EvidenceConcept", "description": "has discussion", "artifact_class": "B",
         "key_properties": [], "tradeoffs": [], "design_rationale": "r",
     })
+    add_node(conn, "src-ev", "Source", {
+        "url": "https://example.com/paper", "source_type": "conference-paper",
+        "license": "LicenseRef-Academic",
+    })
+    add_node(conn, "ev-ev", "Evidence", {
+        "artifact_class": "B", "contamination_level": "none",
+    })
+    add_edge(conn, "sourced-from", "ev-ev", "src-ev")
     add_node(conn, "disc-ev", "Discussion", {
         "title": "A real discussion", "source_date": "2026-06-01",
         "artifact_class": "B", "forum": "lkml", "participant_count": 5,
     })
+    add_edge(conn, "extracted-from", "disc-ev", "ev-ev")
     add_edge(conn, "discusses", "disc-ev", "concept-ev")
     conn.commit()
     conn.close()
@@ -2242,3 +2270,108 @@ def test_research_list_includes_concept_with_evidence(tmp_path):
         response = c.get("/research")
         assert response.status_code == 200
         assert "EvidenceConcept" in response.text
+
+
+def test_research_list_excludes_concept_with_only_vuln_sources(tmp_path):
+    db_path = tmp_path / "vuln_only_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-vo", "Concept", {
+        "name": "VulnOnlyConcept", "description": "vuln only", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+    })
+    add_node(conn, "src-nvd", "Source", {
+        "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-99999",
+        "source_type": "vulnerability-database", "license": "LicenseRef-NVD",
+    })
+    add_node(conn, "ev-nvd", "Evidence", {
+        "artifact_class": "B", "contamination_level": "none",
+    })
+    add_edge(conn, "sourced-from", "ev-nvd", "src-nvd")
+    add_node(conn, "disc-nvd", "Discussion", {
+        "title": "CVE discussion", "source_date": "2026-06-01",
+        "artifact_class": "B", "forum": "lkml", "participant_count": 2,
+    })
+    add_edge(conn, "extracted-from", "disc-nvd", "ev-nvd")
+    add_edge(conn, "discusses", "disc-nvd", "concept-vo")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/research")
+        assert response.status_code == 200
+        assert "VulnOnlyConcept" not in response.text
+
+
+def test_research_list_includes_concept_with_paper_source(tmp_path):
+    db_path = tmp_path / "paper_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-pp", "Concept", {
+        "name": "PaperConcept", "description": "has paper", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+    })
+    add_node(conn, "src-pp", "Source", {
+        "url": "https://dl.acm.org/doi/paper123",
+        "source_type": "conference-paper", "license": "LicenseRef-Academic",
+    })
+    add_node(conn, "ev-pp", "Evidence", {
+        "artifact_class": "B", "contamination_level": "none",
+    })
+    add_edge(conn, "sourced-from", "ev-pp", "src-pp")
+    add_node(conn, "disc-pp", "Discussion", {
+        "title": "Paper discussion", "source_date": "2026-05-01",
+        "artifact_class": "B", "forum": "SOSP", "participant_count": 7,
+    })
+    add_edge(conn, "extracted-from", "disc-pp", "ev-pp")
+    add_edge(conn, "discusses", "disc-pp", "concept-pp")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/research")
+        assert response.status_code == 200
+        assert "PaperConcept" in response.text
+
+
+def test_research_detail_excludes_non_research_sources(tmp_path):
+    db_path = tmp_path / "filter_timeline_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-ft", "Concept", {
+        "name": "FilterTimeline", "description": "d", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+    })
+    add_node(conn, "src-paper", "Source", {
+        "url": "https://dl.acm.org/doi/real-paper",
+        "source_type": "conference-paper", "license": "LicenseRef-Academic",
+    })
+    add_node(conn, "ev-paper", "Evidence", {
+        "artifact_class": "B", "contamination_level": "none",
+    })
+    add_edge(conn, "sourced-from", "ev-paper", "src-paper")
+    add_node(conn, "src-nvd2", "Source", {
+        "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-00001",
+        "source_type": "vulnerability-database", "license": "LicenseRef-NVD",
+    })
+    add_node(conn, "ev-nvd2", "Evidence", {
+        "artifact_class": "B", "contamination_level": "none",
+    })
+    add_edge(conn, "sourced-from", "ev-nvd2", "src-nvd2")
+    add_node(conn, "obs-paper", "Observation", {
+        "claim": "Paper finding", "confidence": "high",
+        "source_date": "2026-05-01", "artifact_class": "B",
+    })
+    add_edge(conn, "extracted-from", "obs-paper", "ev-paper")
+    add_edge(conn, "observes", "obs-paper", "concept-ft")
+    add_node(conn, "obs-nvd", "Observation", {
+        "claim": "Vuln finding", "confidence": "high",
+        "source_date": "2026-04-01", "artifact_class": "B",
+    })
+    add_edge(conn, "extracted-from", "obs-nvd", "ev-nvd2")
+    add_edge(conn, "observes", "obs-nvd", "concept-ft")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/research/concept-ft")
+        assert response.status_code == 200
+        assert "https://dl.acm.org/doi/real-paper" in response.text
+        assert "https://nvd.nist.gov/vuln/detail/CVE-2026-00001" not in response.text

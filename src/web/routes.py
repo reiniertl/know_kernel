@@ -35,6 +35,35 @@ from graph.scoring import (
 )
 
 
+_RESEARCH_SOURCE_TYPES = ("conference-paper", "conference-proceedings", "preprint", "article")
+
+
+def _has_research_source(conn, concept_id: str) -> bool:
+    """Check if concept has at least one evidence chain to a research-type source."""
+    activity_nodes = conn.execute(
+        "SELECT e.source_id FROM edges e JOIN nodes n ON e.source_id = n.id "
+        "WHERE e.target_id = ? AND e.kind IN ('discusses', 'observes', 'benchmarks', 'grounded-in') "
+        "AND n.kind IN ('Discussion', 'Observation', 'Benchmark', 'Proposal')",
+        (concept_id,),
+    ).fetchall()
+    for (node_id,) in activity_nodes:
+        ev_row = conn.execute(
+            "SELECT target_id FROM edges WHERE kind = 'extracted-from' AND source_id = ? LIMIT 1",
+            (node_id,),
+        ).fetchone()
+        if not ev_row:
+            continue
+        src_type = conn.execute(
+            "SELECT json_extract(n.attrs, '$.source_type') FROM edges e "
+            "JOIN nodes n ON e.target_id = n.id "
+            "WHERE e.kind = 'sourced-from' AND e.source_id = ? AND n.kind = 'Source' LIMIT 1",
+            (ev_row[0],),
+        ).fetchone()
+        if src_type and src_type[0] in _RESEARCH_SOURCE_TYPES:
+            return True
+    return False
+
+
 def _rows_to_dicts(rows) -> list[dict]:
     result = []
     for row in rows:
@@ -606,13 +635,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 continue
             if is_security_only_concept(conn, cid):
                 continue
-            has_evidence = conn.execute(
-                "SELECT 1 FROM edges e JOIN nodes n ON e.source_id = n.id "
-                "WHERE e.target_id = ? AND e.kind IN ('discusses', 'observes', 'benchmarks', 'grounded-in') "
-                "AND n.kind IN ('Discussion', 'Observation', 'Benchmark', 'Proposal') LIMIT 1",
-                (cid,),
-            ).fetchone()
-            if not has_evidence:
+            if not _has_research_source(conn, cid):
                 continue
             latest_date_row = conn.execute(
                 "SELECT MAX(json_extract(n.attrs, '$.source_date')) "
@@ -850,13 +873,22 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 ).fetchone()
                 if ev_row:
                     src_row = conn.execute(
-                        "SELECT json_extract(n.attrs, '$.url') FROM nodes n "
-                        "JOIN edges e ON e.target_id = n.id "
-                        "WHERE e.kind = 'sourced-from' AND e.source_id = ? LIMIT 1",
+                        "SELECT json_extract(n.attrs, '$.url'), json_extract(n.attrs, '$.source_type') "
+                        "FROM nodes n JOIN edges e ON e.target_id = n.id "
+                        "WHERE e.kind = 'sourced-from' AND e.source_id = ? AND n.kind = 'Source' LIMIT 1",
                         (ev_row[0],),
                     ).fetchone()
                     if src_row and src_row[0]:
-                        ev["source_url"] = src_row[0]
+                        if src_row[1] in _RESEARCH_SOURCE_TYPES:
+                            ev["source_url"] = src_row[0]
+            elif ev.get("source_url"):
+                src_check = conn.execute(
+                    "SELECT json_extract(attrs, '$.source_type') FROM nodes "
+                    "WHERE kind = 'Source' AND json_extract(attrs, '$.url') = ? LIMIT 1",
+                    (ev["source_url"],),
+                ).fetchone()
+                if src_check and src_check[0] not in _RESEARCH_SOURCE_TYPES:
+                    ev["source_url"] = None
         all_evidence.sort(key=lambda x: x.get("source_date") or "", reverse=True)
 
         discussion_count = conn.execute(
