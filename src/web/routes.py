@@ -64,6 +64,34 @@ def _has_research_source(conn, concept_id: str) -> bool:
     return False
 
 
+def _strip_non_research_urls(conn, brief: dict) -> None:
+    """Strip source_url from all brief items where the source is not research-type."""
+    _url_cache: dict[str, bool] = {}
+
+    def _is_research_url(url: str) -> bool:
+        if url in _url_cache:
+            return _url_cache[url]
+        row = conn.execute(
+            "SELECT json_extract(attrs, '$.source_type') FROM nodes "
+            "WHERE kind = 'Source' AND json_extract(attrs, '$.url') = ? LIMIT 1",
+            (url,),
+        ).fetchone()
+        result = bool(row and row[0] in _RESEARCH_SOURCE_TYPES)
+        _url_cache[url] = result
+        return result
+
+    collections = (
+        "problems", "vulnerabilities", "failure_modes", "invariants",
+        "protocols", "profiles", "fixes", "observations", "discussions",
+        "benchmarks", "timeline",
+    )
+    for key in collections:
+        for item in brief.get(key, []):
+            url = item.get("source_url")
+            if url and not _is_research_url(url):
+                item["source_url"] = None
+
+
 def _rows_to_dicts(rows) -> list[dict]:
     result = []
     for row in rows:
@@ -765,6 +793,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         attrs = node.get("attrs") or {}
 
         brief = build_concept_brief(conn, concept_id)
+        _strip_non_research_urls(conn, brief)
         motivations = classify_motivations(brief)
         argument = build_argument_paragraph(attrs, [brief], motivations)
         rs = research_score(conn, concept_id)

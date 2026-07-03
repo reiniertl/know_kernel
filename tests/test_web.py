@@ -2375,3 +2375,49 @@ def test_research_detail_excludes_non_research_sources(tmp_path):
         assert response.status_code == 200
         assert "https://dl.acm.org/doi/real-paper" in response.text
         assert "https://nvd.nist.gov/vuln/detail/CVE-2026-00001" not in response.text
+
+
+def test_research_detail_strips_non_research_source_from_motivations(tmp_path):
+    db_path = tmp_path / "motiv_filter_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-mf", "Concept", {
+        "name": "MotivFilter", "description": "d", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+    })
+    add_node(conn, "src-kdoc", "Source", {
+        "url": "https://git.kernel.org/pub/scm/linux/kernel/doc-stub.rst",
+        "source_type": "kernel-doc", "license": "LicenseRef-kernel",
+    })
+    add_node(conn, "ev-kdoc", "Evidence", {
+        "artifact_class": "B", "contamination_level": "none",
+    })
+    add_edge(conn, "sourced-from", "ev-kdoc", "src-kdoc")
+    add_node(conn, "prob-mf", "Problem", {
+        "title": "Test problem", "description": "kernel-doc linked",
+        "severity": "high", "status": "open",
+        "source_date": "2026-04-01", "artifact_class": "B",
+    })
+    add_edge(conn, "identifies-problem", "prob-mf", "concept-mf")
+    add_edge(conn, "extracted-from", "prob-mf", "ev-kdoc")
+    add_node(conn, "src-paper-mf", "Source", {
+        "url": "https://dl.acm.org/doi/motiv-paper",
+        "source_type": "conference-paper", "license": "LicenseRef-Academic",
+    })
+    add_node(conn, "ev-paper-mf", "Evidence", {
+        "artifact_class": "B", "contamination_level": "none",
+    })
+    add_edge(conn, "sourced-from", "ev-paper-mf", "src-paper-mf")
+    add_node(conn, "disc-mf", "Discussion", {
+        "title": "Paper discussion", "source_date": "2026-05-01",
+        "artifact_class": "B", "forum": "SOSP", "participant_count": 5,
+    })
+    add_edge(conn, "extracted-from", "disc-mf", "ev-paper-mf")
+    add_edge(conn, "discusses", "disc-mf", "concept-mf")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/research/concept-mf")
+        assert response.status_code == 200
+        assert "https://git.kernel.org/pub/scm/linux/kernel/doc-stub.rst" not in response.text
+        assert "https://dl.acm.org/doi/motiv-paper" in response.text
