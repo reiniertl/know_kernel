@@ -2205,3 +2205,40 @@ def test_research_list_sort_by_latest_activity(tmp_path):
         pos_new = text.index("NewConcept")
         pos_old = text.index("OldConcept")
         assert pos_new < pos_old, "NewConcept should appear before OldConcept when sorted by latest_activity"
+
+
+def test_research_list_excludes_concept_with_no_evidence(tmp_path):
+    db_path = tmp_path / "no_ev_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-bare", "Concept", {
+        "name": "BareConcept", "description": "no evidence", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+    })
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/research")
+        assert response.status_code == 200
+        assert "BareConcept" not in response.text
+
+
+def test_research_list_includes_concept_with_evidence(tmp_path):
+    db_path = tmp_path / "with_ev_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-ev", "Concept", {
+        "name": "EvidenceConcept", "description": "has discussion", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+    })
+    add_node(conn, "disc-ev", "Discussion", {
+        "title": "A real discussion", "source_date": "2026-06-01",
+        "artifact_class": "B", "forum": "lkml", "participant_count": 5,
+    })
+    add_edge(conn, "discusses", "disc-ev", "concept-ev")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/research")
+        assert response.status_code == 200
+        assert "EvidenceConcept" in response.text

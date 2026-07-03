@@ -606,6 +606,14 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 continue
             if is_security_only_concept(conn, cid):
                 continue
+            has_evidence = conn.execute(
+                "SELECT 1 FROM edges e JOIN nodes n ON e.source_id = n.id "
+                "WHERE e.target_id = ? AND e.kind IN ('discusses', 'observes', 'benchmarks', 'grounded-in') "
+                "AND n.kind IN ('Discussion', 'Observation', 'Benchmark', 'Proposal') LIMIT 1",
+                (cid,),
+            ).fetchone()
+            if not has_evidence:
+                continue
             latest_date_row = conn.execute(
                 "SELECT MAX(json_extract(n.attrs, '$.source_date')) "
                 "FROM edges e JOIN nodes n ON e.source_id = n.id "
@@ -1109,6 +1117,20 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 impact_count += len(v.get("dependents", []))
                 impact_count += len(v.get("composed_with", []))
                 impact_count += len(v.get("shared_invariant", []))
+            source_url = None
+            ev_row = conn.execute(
+                "SELECT target_id FROM edges WHERE kind = 'extracted-from' AND source_id = ? LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+            if ev_row:
+                src_row = conn.execute(
+                    "SELECT json_extract(n.attrs, '$.url') FROM edges e "
+                    "JOIN nodes n ON e.target_id = n.id "
+                    "WHERE e.kind = 'sourced-from' AND e.source_id = ? AND n.kind = 'Source' LIMIT 1",
+                    (ev_row[0],),
+                ).fetchone()
+                if src_row and src_row[0]:
+                    source_url = src_row[0]
             vulns.append({
                 "id": row["id"],
                 "cve_id": attrs.get("cve_id", row["id"]),
@@ -1117,6 +1139,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "severity": severity,
                 "impact_count": impact_count,
                 "description": attrs.get("description", ""),
+                "source_url": source_url,
             })
         vulns.sort(key=lambda x: x["cvss_score"], reverse=True)
         offset = (page - 1) * per_page
@@ -1227,12 +1250,28 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             if pd["subsystem"] and pd["subsystem"] not in [s["name"] for s in affected_subsystems]:
                 affected_subsystems.append({"id": None, "name": pd["subsystem"]})
 
+        source_url = None
+        ev_row = conn.execute(
+            "SELECT target_id FROM edges WHERE kind = 'extracted-from' AND source_id = ? LIMIT 1",
+            (vuln_id,),
+        ).fetchone()
+        if ev_row:
+            src_row = conn.execute(
+                "SELECT json_extract(n.attrs, '$.url') FROM edges e "
+                "JOIN nodes n ON e.target_id = n.id "
+                "WHERE e.kind = 'sourced-from' AND e.source_id = ? AND n.kind = 'Source' LIMIT 1",
+                (ev_row[0],),
+            ).fetchone()
+            if src_row and src_row[0]:
+                source_url = src_row[0]
+
         return templates.TemplateResponse(
             request, "vuln_detail.html",
             {
                 "node": node,
                 "cvss_score": cvss,
                 "severity": severity,
+                "source_url": source_url,
                 "direct_briefs": direct_briefs,
                 "propagated_details": propagated_details,
                 "coupling_labels": coupling_labels,
