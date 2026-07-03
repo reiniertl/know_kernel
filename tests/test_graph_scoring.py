@@ -718,6 +718,38 @@ class TestResearchScore:
         assert score_no_fix > score_with_fix
 
 
+    def test_is_security_only_concept_true(self, conn):
+        """INV-KK-GRAPH-RESEARCH-SCORE-NO-SECURITY-ONLY: concept with only vulns is security-only."""
+        from graph.scoring import is_security_only_concept
+        cid = _add_concept(conn, "SecOnly", "concept-seconly")
+        add_node(conn, "vuln-test1", "Vulnerability", {
+            "cve_id": "CVE-2026-0001", "title": "Test vuln", "description": "d",
+            "severity": "high", "cvss_score": 7.5, "affected_versions": "6.x",
+            "status": "open", "source_date": "2026-06-01", "artifact_class": "B",
+        })
+        add_edge(conn, "exploits", "vuln-test1", cid)
+        assert is_security_only_concept(conn, cid) is True
+
+    def test_is_security_only_concept_false_with_discussions(self, conn):
+        """INV-KK-GRAPH-RESEARCH-SCORE-NO-SECURITY-ONLY: concept with discussions is not security-only."""
+        from graph.scoring import is_security_only_concept
+        cid = _add_concept(conn, "WithDisc", "concept-withdisc")
+        _add_discussion(conn, cid, "2026-06-01")
+        add_node(conn, "vuln-test2", "Vulnerability", {
+            "cve_id": "CVE-2026-0002", "title": "Test vuln 2", "description": "d",
+            "severity": "high", "cvss_score": 7.5, "affected_versions": "6.x",
+            "status": "open", "source_date": "2026-06-01", "artifact_class": "B",
+        })
+        add_edge(conn, "exploits", "vuln-test2", cid)
+        assert is_security_only_concept(conn, cid) is False
+
+    def test_is_security_only_concept_false_no_vulns(self, conn):
+        """INV-KK-GRAPH-RESEARCH-SCORE-NO-SECURITY-ONLY: concept with no vulns is not security-only."""
+        from graph.scoring import is_security_only_concept
+        cid = _add_concept(conn, "NoVuln", "concept-novuln")
+        assert is_security_only_concept(conn, cid) is False
+
+
 def _add_subsystem(conn: sqlite3.Connection, name: str) -> str:
     sid = f"sub-{name.lower()}"
     add_node(conn, sid, "Subsystem", {"name": name})

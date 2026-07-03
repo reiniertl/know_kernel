@@ -28,6 +28,7 @@ from graph.scoring import (
     feasibility_score,
     heat_score,
     impact_projection,
+    is_security_only_concept,
     pain_score,
     research_score,
     vulnerability_propagation,
@@ -602,6 +603,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             ip = impact_projection(conn, cid)
             scores = compute_all_scores(conn, cid, window_days=window_days)
             if rs < min_research or fs < min_feasibility:
+                continue
+            if is_security_only_concept(conn, cid):
                 continue
             scored.append({
                 "id": cid,

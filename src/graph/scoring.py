@@ -330,6 +330,27 @@ def research_score(
     return max(0.0, score)
 
 
+def is_security_only_concept(conn: sqlite3.Connection, concept_id: str) -> bool:
+    """INV-KK-GRAPH-RESEARCH-SCORE-NO-SECURITY-ONLY: True if concept's only
+    inbound activity is from Vulnerability/Advisory nodes (exploits, assessed-by)."""
+    _security_edge_kinds = ("exploits", "affects-subsystem")
+    _research_edge_kinds = ("discusses", "observes", "benchmarks", "grounded-in",
+                            "profiled-by", "identifies-problem")
+    has_research = conn.execute(
+        "SELECT 1 FROM edges WHERE kind IN ({}) AND target_id = ? LIMIT 1".format(
+            ",".join(f"'{k}'" for k in _research_edge_kinds)),
+        (concept_id,),
+    ).fetchone()
+    if has_research:
+        return False
+    has_security = conn.execute(
+        "SELECT 1 FROM edges e JOIN nodes n ON n.id = e.source_id "
+        "WHERE e.target_id = ? AND n.kind IN ('Vulnerability', 'Advisory') LIMIT 1",
+        (concept_id,),
+    ).fetchone()
+    return has_security is not None
+
+
 def _prerequisite_depth(conn: sqlite3.Connection, concept_id: str) -> int:
     """BFS max depth of prerequisite chain from concept."""
     depth = 0
