@@ -70,6 +70,7 @@
     <strong>{{ p.name }}</strong>
     {% if p.status %}<span class="badge badge-kind">{{ p.status }}</span>{% endif %}
     {% if p.source_date %}<small style="color:#888;"> &middot; {{ p.source_date }}</small>{% endif %}
+    {% if p.source_url %}<a href="{{ p.source_url }}" target="_blank" style="margin-left:0.5em;font-size:0.85em;">source &rarr;</a>{% endif %}
     {% if p.description %}<p style="margin:0.3em 0 0 0;font-size:0.9em;">{{ p.description }}</p>{% endif %}
     {% if p.problems %}
     <div style="font-size:0.85em;margin-top:0.3em;">Addresses:

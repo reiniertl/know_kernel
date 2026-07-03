@@ -754,12 +754,28 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             for prb in problem_rows:
                 prb_a = json.loads(prb[1]) if isinstance(prb[1], str) else (prb[1] or {})
                 problems.append({"id": prb[0], "title": prb_a.get("title", prb[0])})
+            source_url = None
+            ev_row = conn.execute(
+                "SELECT e.target_id FROM edges e "
+                "WHERE e.kind = 'extracted-from' AND e.source_id = ? LIMIT 1",
+                (pr[0],),
+            ).fetchone()
+            if ev_row:
+                src_row = conn.execute(
+                    "SELECT json_extract(n.attrs, '$.url') FROM nodes n "
+                    "JOIN edges e ON e.target_id = n.id "
+                    "WHERE e.kind = 'sourced-from' AND e.source_id = ? LIMIT 1",
+                    (ev_row[0],),
+                ).fetchone()
+                if src_row:
+                    source_url = src_row[0]
             proposals.append({
                 "id": pr[0],
                 "name": pa.get("name", pr[0]),
                 "description": pa.get("description", ""),
                 "status": pa.get("status"),
                 "source_date": pa.get("source_date"),
+                "source_url": source_url,
                 "problems": problems,
             })
 
@@ -803,6 +819,22 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             related_research = []
 
         all_evidence = list(brief.get("timeline", []))
+        for ev in all_evidence:
+            if ev.get("id") and not ev.get("source_url"):
+                ev_row = conn.execute(
+                    "SELECT e.target_id FROM edges e "
+                    "WHERE e.kind = 'extracted-from' AND e.source_id = ? LIMIT 1",
+                    (ev["id"],),
+                ).fetchone()
+                if ev_row:
+                    src_row = conn.execute(
+                        "SELECT json_extract(n.attrs, '$.url') FROM nodes n "
+                        "JOIN edges e ON e.target_id = n.id "
+                        "WHERE e.kind = 'sourced-from' AND e.source_id = ? LIMIT 1",
+                        (ev_row[0],),
+                    ).fetchone()
+                    if src_row and src_row[0]:
+                        ev["source_url"] = src_row[0]
         all_evidence.sort(key=lambda x: x.get("source_date") or "", reverse=True)
 
         discussion_count = conn.execute(

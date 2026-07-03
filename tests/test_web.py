@@ -2060,3 +2060,63 @@ def test_research_nav_link_visible(research_client):
     response = research_client.get("/")
     assert response.status_code == 200
     assert 'href="/research"' in response.text
+
+
+def test_research_detail_evidence_timeline_has_source_link(tmp_path):
+    db_path = tmp_path / "ev_src_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-t", "Concept", {
+        "name": "TestConcept", "description": "d", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+    })
+    add_node(conn, "src-t", "Source", {
+        "url": "https://lwn.net/Articles/888888/",
+        "source_type": "article", "license": "LicenseRef-LWN",
+    })
+    add_node(conn, "ev-t", "Evidence", {
+        "artifact_class": "B", "contamination_level": "none",
+    })
+    add_edge(conn, "sourced-from", "ev-t", "src-t")
+    add_node(conn, "obs-t", "Observation", {
+        "claim": "Test observation claim",
+        "confidence": "high", "source_date": "2024-06-01", "artifact_class": "B",
+    })
+    add_edge(conn, "observes", "obs-t", "concept-t")
+    add_edge(conn, "extracted-from", "obs-t", "ev-t")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/research/concept-t")
+        assert response.status_code == 200
+        assert "https://lwn.net/Articles/888888/" in response.text
+
+
+def test_research_detail_proposal_has_source_link(tmp_path):
+    db_path = tmp_path / "prop_src_test.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-x", "Concept", {
+        "name": "TestConcept", "description": "d", "artifact_class": "B",
+        "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+    })
+    add_node(conn, "src-x", "Source", {
+        "url": "https://lwn.net/Articles/999999/",
+        "source_type": "article", "license": "LicenseRef-LWN",
+    })
+    add_node(conn, "ev-x", "Evidence", {
+        "artifact_class": "B", "contamination_level": "none",
+    })
+    add_edge(conn, "sourced-from", "ev-x", "src-x")
+    add_node(conn, "prop-x", "Proposal", {
+        "name": "Test Proposal", "description": "desc",
+        "status": "review", "source_date": "2024-01-01", "artifact_class": "B",
+    })
+    add_edge(conn, "grounded-in", "prop-x", "concept-x")
+    add_edge(conn, "extracted-from", "prop-x", "ev-x")
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        response = c.get("/research/concept-x")
+        assert response.status_code == 200
+        assert "https://lwn.net/Articles/999999/" in response.text
