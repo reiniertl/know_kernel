@@ -449,8 +449,8 @@ def test_search_returns_evidence_kinds(evidence_snapshot_path):
 
 
 @pytest.fixture
-def idea_snapshot_path(tmp_path):
-    """Snapshot with ideas, scores, and problems for idea tool tests."""
+def scores_snapshot_path(tmp_path):
+    """Snapshot with concepts, scores, and problems for MCP tool tests."""
     master_path = tmp_path / "master_idea.db"
     snap_path = tmp_path / "snapshot_idea.db"
 
@@ -529,36 +529,7 @@ def idea_snapshot_path(tmp_path):
         srv._conn = None
 
 
-def test_get_idea_feed_returns_list(idea_snapshot_path):
-    result = srv.get_idea_feed()
-    assert isinstance(result, list)
-    assert len(result) >= 1
-
-
-def test_get_idea_feed_ranked_by_frontier(idea_snapshot_path):
-    """INV-KK-MCP-IDEA-FEED-RANKED: sorted by frontier_score desc."""
-    result = srv.get_idea_feed()
-    for i in range(len(result) - 1):
-        assert result[i]["frontier_score"] >= result[i + 1]["frontier_score"]
-
-
-def test_get_idea_feed_top_k(idea_snapshot_path):
-    result = srv.get_idea_feed(top_k=1)
-    assert len(result) <= 1
-
-
-def test_get_idea_feed_subsystem_filter(idea_snapshot_path):
-    result = srv.get_idea_feed(subsystem="sub-sched")
-    for item in result:
-        assert item.get("concept_id") is not None
-
-
-def test_get_idea_feed_empty_on_nonexistent_subsystem(idea_snapshot_path):
-    result = srv.get_idea_feed(subsystem="sub-nonexistent")
-    assert len(result) == 0
-
-
-def test_get_concept_scores_returns_all_5(idea_snapshot_path):
+def test_get_concept_scores_returns_all_5(scores_snapshot_path):
     """INV-KK-MCP-SCORES-COMPLETE: returns all 5 score types."""
     result = srv.get_concept_scores("concept-rcu")
     assert isinstance(result, dict)
@@ -567,17 +538,17 @@ def test_get_concept_scores_returns_all_5(idea_snapshot_path):
         assert isinstance(v, (int, float))
 
 
-def test_get_concept_scores_empty_for_missing(idea_snapshot_path):
+def test_get_concept_scores_empty_for_missing(scores_snapshot_path):
     result = srv.get_concept_scores("concept-nonexistent")
     assert result == {}
 
 
-def test_get_concept_scores_empty_for_non_concept(idea_snapshot_path):
+def test_get_concept_scores_empty_for_non_concept(scores_snapshot_path):
     result = srv.get_concept_scores("sub-sched")
     assert result == {}
 
 
-def test_get_hot_areas_returns_subsystems(idea_snapshot_path):
+def test_get_hot_areas_returns_subsystems(scores_snapshot_path):
     """INV-KK-MCP-HOT-AREAS-SUBSYSTEM: aggregates heat per subsystem."""
     result = srv.get_hot_areas()
     assert isinstance(result, list)
@@ -589,36 +560,36 @@ def test_get_hot_areas_returns_subsystems(idea_snapshot_path):
         assert "concept_count" in item
 
 
-def test_get_hot_areas_sorted_by_heat(idea_snapshot_path):
+def test_get_hot_areas_sorted_by_heat(scores_snapshot_path):
     result = srv.get_hot_areas()
     for i in range(len(result) - 1):
         assert result[i]["heat"] >= result[i + 1]["heat"]
 
 
-def test_get_hot_areas_top_k(idea_snapshot_path):
+def test_get_hot_areas_top_k(scores_snapshot_path):
     result = srv.get_hot_areas(top_k=1)
     assert len(result) <= 1
 
 
-def test_get_problems_for_concept_returns_problems(idea_snapshot_path):
+def test_get_problems_for_concept_returns_problems(scores_snapshot_path):
     result = srv.get_problems_for_concept("concept-rcu")
     assert isinstance(result, list)
     assert len(result) == 3
 
 
-def test_get_problems_sorted_by_severity(idea_snapshot_path):
+def test_get_problems_sorted_by_severity(scores_snapshot_path):
     """INV-KK-MCP-PROBLEMS-SEVERITY: sorted by severity desc."""
     result = srv.get_problems_for_concept("concept-rcu")
     severities = [(r.get("attrs") or {}).get("severity", "") for r in result]
     assert severities == ["critical", "high", "low"]
 
 
-def test_get_problems_empty_for_no_problems(idea_snapshot_path):
+def test_get_problems_empty_for_no_problems(scores_snapshot_path):
     result = srv.get_problems_for_concept("concept-slab")
     assert result == []
 
 
-def test_get_problems_empty_for_missing_concept(idea_snapshot_path):
+def test_get_problems_empty_for_missing_concept(scores_snapshot_path):
     result = srv.get_problems_for_concept("concept-nonexistent")
     assert result == []
 

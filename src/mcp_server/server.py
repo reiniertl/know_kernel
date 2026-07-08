@@ -1,12 +1,11 @@
 """MCP server -- exposes Class B concepts to opencode via MCP protocol.
 
-ALG-KK-MCP-QUERY: query the Class B-only snapshot DB (19 tools).
+ALG-KK-MCP-QUERY: query the Class B-only snapshot DB (18 tools).
 INV-KK-MCP-SNAPSHOT-ONLY: only the snapshot path is opened; master DB never accessed.
 INV-KK-MCP-NO-WRITE: snapshot DB opened read-only (uri mode=ro).
-INV-KK-MCP-TOOLS-EXPOSED: exactly 19 tools; no Evidence/Source/Advisory in results.
+INV-KK-MCP-TOOLS-EXPOSED: exactly 18 tools; no Evidence/Source/Advisory in results.
 INV-KK-MCP-EXPLORE-DEPTH-CAP: explore_subgraph caps depth at 3.
 INV-KK-MCP-SEARCH-ALL-KINDS: search_concepts uses dynamic ALLOWED_KINDS from exporter.
-INV-KK-MCP-IDEA-FEED-RANKED: get_idea_feed returns ideas sorted by frontier desc.
 INV-KK-MCP-SCORES-COMPLETE: get_concept_scores returns all 5 score types.
 INV-KK-MCP-HOT-AREAS-SUBSYSTEM: get_hot_areas aggregates heat per subsystem.
 INV-KK-MCP-PROBLEMS-SEVERITY: get_problems_for_concept returns problems sorted by severity.
@@ -260,88 +259,6 @@ def query_edges(kind: str, filters: dict[str, str] | None = None) -> list[dict[s
 
 
 _SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1}
-
-
-@mcp.tool()
-def get_idea_feed(
-    subsystem: str | None = None, top_k: int = 10, window_days: int = 90,
-) -> list[dict[str, Any]]:
-    """Get ranked idea feed (opportunities + trends) sorted by frontier_score desc.
-
-    INV-KK-MCP-IDEA-FEED-RANKED: sorted by frontier_score descending.
-    Optional subsystem filter restricts to ideas linked to concepts in that subsystem.
-    Reads existing Opportunity/Trend nodes from snapshot (INV-KK-MCP-SNAPSHOT-ONLY).
-    """
-    conn = _get_conn()
-    ideas: list[dict[str, Any]] = []
-    for row in conn.execute(
-        "SELECT id, kind, attrs FROM nodes WHERE kind = 'Opportunity' ORDER BY id"
-    ).fetchall():
-        node = _row_to_dict(row)
-        attrs = node.get("attrs") or {}
-        fs = attrs.get("frontier_score", 0)
-        if isinstance(fs, str):
-            try:
-                fs = float(fs)
-            except ValueError:
-                fs = 0
-        concept_id = None
-        concept_name = None
-        opp_edge = conn.execute(
-            "SELECT target_id FROM edges WHERE kind = 'opportunity-for' AND source_id = ?",
-            (node["id"],),
-        ).fetchone()
-        if opp_edge:
-            concept_id = opp_edge[0]
-            cn = get_node(conn, concept_id)
-            if cn:
-                concept_name = (cn["attrs"] or {}).get("name", concept_id)
-        ideas.append({
-            "type": "opportunity",
-            "id": node["id"],
-            "concept_id": concept_id,
-            "concept_name": concept_name,
-            "title": attrs.get("title", node["id"]),
-            "frontier_score": fs,
-            "confidence": attrs.get("confidence"),
-        })
-    for row in conn.execute(
-        "SELECT id, kind, attrs FROM nodes WHERE kind = 'Trend' ORDER BY id"
-    ).fetchall():
-        node = _row_to_dict(row)
-        attrs = node.get("attrs") or {}
-        concept_id = None
-        concept_name = None
-        trend_edge = conn.execute(
-            "SELECT target_id FROM edges WHERE kind = 'trend-about' AND source_id = ?",
-            (node["id"],),
-        ).fetchone()
-        if trend_edge:
-            concept_id = trend_edge[0]
-            cn = get_node(conn, concept_id)
-            if cn:
-                concept_name = (cn["attrs"] or {}).get("name", concept_id)
-        scores = compute_all_scores(conn, concept_id, window_days=window_days) if concept_id else {}
-        fs = scores.get("frontier", 0)
-        ideas.append({
-            "type": "trend",
-            "id": node["id"],
-            "concept_id": concept_id,
-            "concept_name": concept_name,
-            "title": attrs.get("title", node["id"]),
-            "frontier_score": fs,
-            "strength": attrs.get("strength"),
-        })
-    ideas.sort(key=lambda x: x["frontier_score"], reverse=True)
-    if subsystem:
-        ideas = [
-            i for i in ideas
-            if i.get("concept_id") and conn.execute(
-                "SELECT 1 FROM edges WHERE kind = 'belongs-to' AND source_id = ? AND target_id = ?",
-                (i["concept_id"], subsystem),
-            ).fetchone()
-        ]
-    return ideas[:top_k]
 
 
 @mcp.tool()
