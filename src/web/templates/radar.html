@@ -12,7 +12,6 @@
       <th>Pain</th>
       <th>Vulns</th>
       <th>Fixes</th>
-      <th>Top Idea</th>
     </tr>
   </thead>
   <tbody>
@@ -24,17 +23,9 @@
       <td>{{ "%.1f"|format(sub.pain) }}</td>
       <td>{{ sub.vuln_count }}</td>
       <td>{{ sub.fix_count }}</td>
-      <td>
-        {% if sub.top_idea %}
-          <a href="/ideas/{{ sub.top_idea.id }}">{{ sub.top_idea.title }}</a>
-          ({{ "%.1f"|format(sub.top_idea.frontier_score) }})
-        {% else %}
-          —
-        {% endif %}
-      </td>
     </tr>
   {% else %}
-    <tr><td colspan="7">No subsystems with concepts found.</td></tr>
+    <tr><td colspan="6">No subsystems with concepts found.</td></tr>
   {% endfor %}
   </tbody>
 </table>
