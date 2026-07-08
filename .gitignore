@@ -29,6 +29,9 @@ env/
 *.swp
 *.swo
 
+# Downloaded research PDFs (large binaries, re-downloadable)
+data/pdfs/*.pdf
+
 # Runtime databases (generated, not source)
 *.db-journal
 *.db-wal
