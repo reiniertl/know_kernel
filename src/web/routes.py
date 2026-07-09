@@ -851,6 +851,85 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             },
         )
 
+    @app.get("/feed", response_class=HTMLResponse)
+    async def research_feed(request: Request):
+        """Daily research feed grouped by publication date."""
+        conn = request.app.state.conn
+
+        rows = conn.execute(
+            "SELECT s.id, s.attrs, c.id as concept_id, c.attrs as concept_attrs "
+            "FROM nodes s "
+            "JOIN edges se ON se.kind = 'sourced-from' AND se.target_id = s.id "
+            "JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
+            "JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
+            "JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
+            "WHERE s.kind = 'Source' "
+            "AND json_extract(s.attrs, '$.source_type') IN "
+            "('paper','preprint','conference-paper','conference-proceedings') "
+            "ORDER BY json_extract(s.attrs, '$.published_date') DESC, s.id"
+        ).fetchall()
+
+        by_date: dict[str, list] = {}
+        for row in rows:
+            s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
+            c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
+            pub_date = s_attrs.get("published_date", s_attrs.get("source_date", "unknown"))
+            if not pub_date:
+                pub_date = "unknown"
+            entry = {
+                "source_id": row[0],
+                "title": s_attrs.get("title", row[0]),
+                "url": s_attrs.get("url", ""),
+                "source_type": s_attrs.get("source_type", ""),
+                "concept_id": row[2],
+                "concept_name": c_attrs.get("name", row[2]),
+            }
+            by_date.setdefault(pub_date, []).append(entry)
+
+        return templates.TemplateResponse(
+            request,
+            "feed.html",
+            {"by_date": by_date, "total": sum(len(v) for v in by_date.values())},
+        )
+
+    @app.get("/api/feed/card/{date_str}")
+    async def feed_card_json(request: Request, date_str: str):
+        """JSON card for a single day's research feed."""
+        conn = request.app.state.conn
+
+        rows = conn.execute(
+            "SELECT s.id, s.attrs, c.id as concept_id, c.attrs as concept_attrs "
+            "FROM nodes s "
+            "JOIN edges se ON se.kind = 'sourced-from' AND se.target_id = s.id "
+            "JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
+            "JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
+            "JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
+            "WHERE s.kind = 'Source' "
+            "AND json_extract(s.attrs, '$.source_type') IN "
+            "('paper','preprint','conference-paper','conference-proceedings') "
+            "AND json_extract(s.attrs, '$.published_date') = ? "
+            "ORDER BY s.id",
+            (date_str,),
+        ).fetchall()
+
+        items = []
+        for row in rows:
+            s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
+            c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
+            items.append({
+                "title": s_attrs.get("title", row[0]),
+                "url": s_attrs.get("url", ""),
+                "source_type": s_attrs.get("source_type", ""),
+                "concept": c_attrs.get("name", row[2]),
+                "concept_url": f"/research/{row[2]}",
+            })
+
+        return JSONResponse({
+            "date": date_str,
+            "count": len(items),
+            "items": items,
+        })
+
     @app.get("/radar", response_class=HTMLResponse)
     async def radar(request: Request):
         """Subsystem radar dashboard (ALG-KK-WEB-RADAR).

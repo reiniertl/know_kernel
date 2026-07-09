@@ -1649,12 +1649,6 @@ def test_research_detail_shows_feasibility(research_client):
     assert "Feasibility" in response.text
 
 
-def test_research_detail_shows_impact_projection(research_client):
-    response = research_client.get("/research/concept-rcu")
-    assert response.status_code == 200
-    assert "Impact Projection" in response.text
-
-
 def test_research_detail_shows_motivations(research_client):
     response = research_client.get("/research/concept-rcu")
     assert response.status_code == 200

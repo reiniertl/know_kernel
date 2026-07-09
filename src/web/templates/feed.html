@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Research Feed</h1>
+<p>{{ total }} research publications grouped by date</p>
+
+{% for date, items in by_date.items() %}
+<div class="attrs-section" style="margin-bottom:1.5rem; border:1px solid #ddd; border-radius:4px; padding:0.8rem;">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+    <h3 style="margin:0;">{{ date }} <span style="font-size:0.8em; color:#777;">({{ items|length }} paper{{ "s" if items|length != 1 else "" }})</span></h3>
+    <button onclick="sendCard('{{ date }}')" style="font-family:monospace; padding:0.3rem 0.8rem; cursor:pointer; background:#2980b9; color:#fff; border:none; border-radius:3px;" title="Send daily card">Send card</button>
+  </div>
+  <table style="width:100%;">
+    <thead>
+      <tr>
+        <th style="width:50%;">Paper</th>
+        <th style="width:15%;">Type</th>
+        <th style="width:35%;">Concept</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for item in items %}
+      <tr>
+        <td>
+          {% if item.url %}<a href="{{ item.url }}" target="_blank">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}
+        </td>
+        <td><span class="badge badge-kind">{{ item.source_type }}</span></td>
+        <td><a href="/research/{{ item.concept_id }}">{{ item.concept_name }}</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p>No research publications found.</p>
+{% endfor %}
+
+<script>
+async function sendCard(dateStr) {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  try {
+    const resp = await fetch('/api/feed/card/' + encodeURIComponent(dateStr));
+    const card = await resp.json();
+    // placeholder: log to console until CLI command is configured
+    console.log('Daily card for ' + dateStr + ':', JSON.stringify(card, null, 2));
+    btn.textContent = 'Sent ✓';
+    btn.style.background = '#27ae60';
+    setTimeout(function() {
+      btn.textContent = 'Send card';
+      btn.style.background = '#2980b9';
+      btn.disabled = false;
+    }, 3000);
+  } catch(e) {
+    btn.textContent = 'Failed';
+    btn.style.background = '#c0392b';
+    btn.disabled = false;
+  }
+}
+</script>
+{% endblock %}
