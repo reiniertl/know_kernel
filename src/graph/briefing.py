@@ -918,7 +918,13 @@ def build_argument_paragraph(
 
     parts: list[str] = []
     concept_names = [b["concept"]["name"] for b in briefs]
-    source_count = sum(
+    source_urls = set()
+    for b in briefs:
+        for ev in b.get("timeline", []):
+            url = ev.get("source_url", "")
+            if url:
+                source_urls.add(url)
+    source_count = len(source_urls) or sum(
         len(b["discussions"]) + len(b["observations"]) for b in briefs
     )
 
