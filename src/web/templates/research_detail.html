@@ -36,23 +36,6 @@
   </div>
 </div>
 
-{# --- IMPACT PROJECTION DETAIL --- #}
-<div class="attrs-section">
-  <h3>Impact Projection</h3>
-  <table>
-    <thead><tr><th>Dimension</th><th>Count</th><th>Weight</th><th>Contribution</th></tr></thead>
-    <tbody>
-      <tr><td>Problems addressed</td><td>{{ impact.problems_addressed }}</td><td>&times;2</td><td>{{ "%.1f"|format(impact.problems_addressed * 2) }}</td></tr>
-      <tr><td>Vulnerabilities mitigated</td><td>{{ impact.vulns_mitigated }}</td><td>&times;5</td><td>{{ "%.1f"|format(impact.vulns_mitigated * 5) }}</td></tr>
-      <tr><td>Failure modes eliminated</td><td>{{ impact.failure_modes_eliminated }}</td><td>&times;3</td><td>{{ "%.1f"|format(impact.failure_modes_eliminated * 3) }}</td></tr>
-      <tr><td>Dependent components</td><td>{{ impact.dependent_components }}</td><td>&times;1</td><td>{{ "%.1f"|format(impact.dependent_components * 1) }}</td></tr>
-      <tr><td>Performance metrics</td><td>{{ impact.performance_metrics }}</td><td>&times;1.5</td><td>{{ "%.1f"|format(impact.performance_metrics * 1.5) }}</td></tr>
-      <tr><td>Subsystems affected</td><td>{{ impact.subsystems_affected }}</td><td>&times;2</td><td>{{ "%.1f"|format(impact.subsystems_affected * 2) }}</td></tr>
-      <tr style="font-weight:bold;"><td>Total</td><td colspan="3">{{ "%.1f"|format(impact.total_impact) }}</td></tr>
-    </tbody>
-  </table>
-</div>
-
 {# --- RESEARCH ACTIVITY --- #}
 <div class="attrs-section">
   <h3>Research Activity</h3>
