@@ -3,11 +3,23 @@
 <h1>Research Feed</h1>
 <p>{{ total }} research publications grouped by date</p>
 
+<div style="margin-bottom:1.5rem; padding:0.8rem; background:#f5f5f5; border:1px solid #ddd; border-radius:4px;">
+  <label style="font-weight:bold;">CLI Command Template</label>
+  <p style="font-size:0.85em; color:#555; margin:0.2rem 0 0.5rem;">Use <code>&lt;CARD&gt;</code> as placeholder for the card text. The button replaces it and runs the command.</p>
+  <input type="text" id="cli-command" placeholder='echo "<CARD>"'
+         style="width:100%; font-family:monospace; padding:0.4rem; box-sizing:border-box; font-size:0.9em;"
+         value='echo "<CARD>"'>
+  <div id="cli-status" style="margin-top:0.3rem; font-size:0.85em; color:#555;"></div>
+</div>
+
 {% for date, items in by_date.items() %}
 <div class="attrs-section" style="margin-bottom:1.5rem; border:1px solid #ddd; border-radius:4px; padding:0.8rem;">
   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
     <h3 style="margin:0;">{{ date }} <span style="font-size:0.8em; color:#777;">({{ items|length }} paper{{ "s" if items|length != 1 else "" }})</span></h3>
-    <button onclick="sendCard('{{ date }}')" style="font-family:monospace; padding:0.3rem 0.8rem; cursor:pointer; background:#2980b9; color:#fff; border:none; border-radius:3px;" title="Send daily card">Send card</button>
+    <div>
+      <button onclick="previewCard('{{ date }}', this)" style="font-family:monospace; padding:0.3rem 0.8rem; cursor:pointer; background:#7f8c8d; color:#fff; border:none; border-radius:3px; margin-right:0.3rem;" title="Preview card text">Preview</button>
+      <button onclick="sendCard('{{ date }}', this)" style="font-family:monospace; padding:0.3rem 0.8rem; cursor:pointer; background:#2980b9; color:#fff; border:none; border-radius:3px;" title="Send card via CLI command">Send card</button>
+    </div>
   </div>
   <table style="width:100%;">
     <thead>
@@ -29,33 +41,71 @@
     {% endfor %}
     </tbody>
   </table>
+  <pre id="preview-{{ date }}" style="display:none; margin-top:0.5rem; white-space:pre-wrap; font-size:0.85em; background:#fafafa; padding:0.5rem; border:1px solid #eee;"></pre>
 </div>
 {% else %}
 <p>No research publications found.</p>
 {% endfor %}
 
 <script>
-async function sendCard(dateStr) {
-  const btn = event.target;
+async function previewCard(dateStr, btn) {
+  var pre = document.getElementById('preview-' + dateStr);
+  if (pre.style.display !== 'none') {
+    pre.style.display = 'none';
+    return;
+  }
+  try {
+    var resp = await fetch('/api/feed/card/' + encodeURIComponent(dateStr));
+    var data = await resp.json();
+    pre.textContent = data.card;
+    pre.style.display = 'block';
+  } catch(e) {
+    pre.textContent = 'Error loading preview';
+    pre.style.display = 'block';
+  }
+}
+
+async function sendCard(dateStr, btn) {
+  var cliTemplate = document.getElementById('cli-command').value.trim();
+  var statusEl = document.getElementById('cli-status');
+  if (!cliTemplate || cliTemplate.indexOf('<CARD>') === -1) {
+    statusEl.textContent = 'Error: CLI command must contain <CARD> placeholder';
+    statusEl.style.color = '#c0392b';
+    return;
+  }
   btn.disabled = true;
   btn.textContent = 'Sending...';
+  statusEl.textContent = '';
   try {
-    const resp = await fetch('/api/feed/card/' + encodeURIComponent(dateStr));
-    const card = await resp.json();
-    // placeholder: log to console until CLI command is configured
-    console.log('Daily card for ' + dateStr + ':', JSON.stringify(card, null, 2));
-    btn.textContent = 'Sent ✓';
-    btn.style.background = '#27ae60';
-    setTimeout(function() {
-      btn.textContent = 'Send card';
-      btn.style.background = '#2980b9';
-      btn.disabled = false;
-    }, 3000);
+    var resp = await fetch('/api/feed/send/' + encodeURIComponent(dateStr), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cli_command: cliTemplate})
+    });
+    var result = await resp.json();
+    if (result.status === 'ok') {
+      btn.textContent = 'Sent ✓';
+      btn.style.background = '#27ae60';
+      statusEl.textContent = 'Command executed successfully';
+      statusEl.style.color = '#27ae60';
+      if (result.stdout) statusEl.textContent += ': ' + result.stdout.substring(0, 200);
+    } else {
+      btn.textContent = 'Failed';
+      btn.style.background = '#c0392b';
+      statusEl.textContent = 'Error: ' + (result.stderr || result.error || 'unknown');
+      statusEl.style.color = '#c0392b';
+    }
   } catch(e) {
     btn.textContent = 'Failed';
     btn.style.background = '#c0392b';
-    btn.disabled = false;
+    statusEl.textContent = 'Network error: ' + e.message;
+    statusEl.style.color = '#c0392b';
   }
+  setTimeout(function() {
+    btn.textContent = 'Send card';
+    btn.style.background = '#2980b9';
+    btn.disabled = false;
+  }, 3000);
 }
 </script>
 {% endblock %}

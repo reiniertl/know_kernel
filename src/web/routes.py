@@ -892,6 +892,24 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             {"by_date": by_date, "total": sum(len(v) for v in by_date.values())},
         )
 
+    _TYPE_EMOJI = {
+        "preprint": "\U0001f4dd",
+        "conference-paper": "\U0001f3db️",
+        "conference-proceedings": "\U0001f3a4",
+        "paper": "\U0001f4d6",
+    }
+
+    def _build_card_text(date_str: str, items: list[dict]) -> str:
+        lines = [f"\U0001f4e1 *Kernel Research — {date_str}*"]
+        lines.append(f"\U0001f4ca {len(items)} publication{'s' if len(items) != 1 else ''}\n")
+        for item in items:
+            emoji = _TYPE_EMOJI.get(item["source_type"], "\U0001f4c4")
+            lines.append(f"{emoji} *{item['concept']}*")
+            if item.get("url"):
+                lines.append(f"   \U0001f517 {item['url']}")
+        lines.append(f"\n\U0001f50d Browse: /research")
+        return "\n".join(lines)
+
     @app.get("/api/feed/card/{date_str}")
     async def feed_card_json(request: Request, date_str: str):
         """JSON card for a single day's research feed."""
@@ -921,14 +939,71 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "url": s_attrs.get("url", ""),
                 "source_type": s_attrs.get("source_type", ""),
                 "concept": c_attrs.get("name", row[2]),
-                "concept_url": f"/research/{row[2]}",
             })
 
+        card_text = _build_card_text(date_str, items)
         return JSONResponse({
             "date": date_str,
             "count": len(items),
+            "card": card_text,
             "items": items,
         })
+
+    @app.post("/api/feed/send/{date_str}")
+    async def feed_send_card(request: Request, date_str: str):
+        """Execute CLI command with card text replacing <CARD> placeholder."""
+        import subprocess
+
+        body = await request.json()
+        cli_template = body.get("cli_command", "")
+        if not cli_template or "<CARD>" not in cli_template:
+            return JSONResponse({"error": "CLI command must contain <CARD> placeholder"}, status_code=400)
+
+        conn = request.app.state.conn
+        rows = conn.execute(
+            "SELECT s.id, s.attrs, c.id as concept_id, c.attrs as concept_attrs "
+            "FROM nodes s "
+            "JOIN edges se ON se.kind = 'sourced-from' AND se.target_id = s.id "
+            "JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
+            "JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
+            "JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
+            "WHERE s.kind = 'Source' "
+            "AND json_extract(s.attrs, '$.source_type') IN "
+            "('paper','preprint','conference-paper','conference-proceedings') "
+            "AND json_extract(s.attrs, '$.published_date') = ? "
+            "ORDER BY s.id",
+            (date_str,),
+        ).fetchall()
+
+        items = []
+        for row in rows:
+            s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
+            c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
+            items.append({
+                "title": s_attrs.get("title", row[0]),
+                "url": s_attrs.get("url", ""),
+                "source_type": s_attrs.get("source_type", ""),
+                "concept": c_attrs.get("name", row[2]),
+            })
+
+        card_text = _build_card_text(date_str, items)
+        full_command = cli_template.replace("<CARD>", card_text)
+
+        try:
+            result = subprocess.run(
+                full_command, shell=True, capture_output=True, text=True, timeout=30,
+            )
+            return JSONResponse({
+                "status": "ok" if result.returncode == 0 else "error",
+                "returncode": result.returncode,
+                "stdout": result.stdout[:500],
+                "stderr": result.stderr[:500],
+                "command_preview": full_command[:200],
+            })
+        except subprocess.TimeoutExpired:
+            return JSONResponse({"status": "timeout", "error": "Command timed out after 30s"}, status_code=504)
+        except Exception as e:
+            return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
     @app.get("/radar", response_class=HTMLResponse)
     async def radar(request: Request):
