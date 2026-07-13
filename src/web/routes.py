@@ -944,10 +944,10 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         "MAINTAINABILITY": "\U0001f504",
     }
 
-    _BASE_URL = "http://127.0.0.1:8000"
+    _BASE_URL = "http://10.123.102.166:8000"
 
     def _build_card_text(date_str: str, items: list[dict]) -> str:
-        lines = [f"\U0001f4e1 *Kernel Research — {date_str}*"]
+        lines = [f"\U0001f4e1 *Kernel Research — {date_str}*\n"]
         lines.append(f"\U0001f4ca {len(items)} publication{'s' if len(items) != 1 else ''}\n")
         for item in items:
             emoji = _TYPE_EMOJI.get(item["source_type"], "\U0001f4c4")
@@ -970,7 +970,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 lines.append(f"   \U0001f517 {concept_url}")
             elif item.get("url"):
                 lines.append(f"   \U0001f517 {item['url']}")
-        return "\n".join(lines)
+        return "\\n".join(lines).replace("\n", "\\n")
 
     @app.get("/api/feed/card/{date_str}")
     async def feed_card_json(request: Request, date_str: str):
