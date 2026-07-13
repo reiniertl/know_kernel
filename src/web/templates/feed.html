@@ -24,9 +24,12 @@
   <table style="width:100%;">
     <thead>
       <tr>
-        <th style="width:50%;">Paper</th>
-        <th style="width:15%;">Type</th>
-        <th style="width:35%;">Concept</th>
+        <th style="width:25%;">Paper</th>
+        <th style="width:10%;">Type</th>
+        <th style="width:15%;">Concept</th>
+        <th style="width:30%;">Summary</th>
+        <th style="width:10%;">Subsystem</th>
+        <th style="width:10%;">Why Pursue</th>
       </tr>
     </thead>
     <tbody>
@@ -37,6 +40,17 @@
         </td>
         <td><span class="badge badge-kind">{{ item.source_type }}</span></td>
         <td><a href="/research/{{ item.concept_id }}">{{ item.concept_name }}</a></td>
+        <td style="font-size:0.85em; color:#444;">{{ item.summary }}</td>
+        <td>
+          {% for s in item.subsystems %}
+          <span class="badge" style="font-size:0.7em; padding:0.15em 0.4em; margin:0.1em; display:inline-block; background:#34495e; color:#fff; border-radius:3px;">{{ s }}</span>
+          {% endfor %}
+        </td>
+        <td>
+          {% for m in item.motivations %}
+          <span class="badge" style="font-size:0.7em; padding:0.15em 0.4em; margin:0.1em; display:inline-block; background:{{ {'SECURITY':'#e74c3c','STABILITY':'#e67e22','PERFORMANCE':'#f39c12','SCALABILITY':'#3498db','EFFICIENCY':'#2ecc71','HARDWARE ENABLEMENT':'#9b59b6','MAINTAINABILITY':'#7f8c8d'}.get(m,'#95a5a6') }}; color:#fff; border-radius:3px;">{{ m }}</span>
+          {% endfor %}
+        </td>
       </tr>
     {% endfor %}
     </tbody>

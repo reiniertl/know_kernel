@@ -869,6 +869,10 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "ORDER BY json_extract(s.attrs, '$.published_date') DESC, s.id"
         ).fetchall()
 
+        from graph.briefing import classify_source_motivations
+
+        motiv_cache: dict[str, list[str]] = {}
+        subsys_cache: dict[str, list[str]] = {}
         by_date: dict[str, list] = {}
         for row in rows:
             s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
@@ -876,13 +880,23 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             pub_date = s_attrs.get("published_date", s_attrs.get("source_date", "unknown"))
             if not pub_date:
                 pub_date = "unknown"
+            sid = row[0]
+            cid = row[2]
+            if sid not in motiv_cache:
+                motiv_cache[sid] = classify_source_motivations(conn, sid)
+            if cid not in subsys_cache:
+                subsys_cache[cid] = _get_concept_subsystems(conn, cid)
+            desc = c_attrs.get("description", "")
             entry = {
-                "source_id": row[0],
-                "title": s_attrs.get("title", row[0]),
+                "source_id": sid,
+                "title": s_attrs.get("title", sid),
                 "url": s_attrs.get("url", ""),
                 "source_type": s_attrs.get("source_type", ""),
-                "concept_id": row[2],
-                "concept_name": c_attrs.get("name", row[2]),
+                "concept_id": cid,
+                "concept_name": c_attrs.get("name", cid),
+                "motivations": motiv_cache[sid],
+                "summary": _truncate_words(desc, 100),
+                "subsystems": subsys_cache[cid],
             }
             by_date.setdefault(pub_date, []).append(entry)
 
@@ -892,6 +906,27 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             {"by_date": by_date, "total": sum(len(v) for v in by_date.values())},
         )
 
+    def _truncate_words(text: str, max_words: int = 100) -> str:
+        words = text.split()
+        if len(words) <= max_words:
+            return text
+        return " ".join(words[:max_words]) + "..."
+
+    def _get_concept_subsystems(conn, concept_id: str) -> list[str]:
+        rows = conn.execute(
+            "SELECT n.attrs FROM nodes n "
+            "JOIN edges e ON e.kind = 'belongs-to' AND e.source_id = ? AND e.target_id = n.id "
+            "WHERE n.kind = 'Subsystem'",
+            (concept_id,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            attrs = json.loads(r[0]) if isinstance(r[0], str) else (r[0] or {})
+            name = attrs.get("name", "")
+            if name:
+                result.append(name)
+        return result
+
     _TYPE_EMOJI = {
         "preprint": "\U0001f4dd",
         "conference-paper": "\U0001f3db️",
@@ -899,15 +934,42 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         "paper": "\U0001f4d6",
     }
 
+    _MOTIV_EMOJI = {
+        "SECURITY": "\U0001f534",
+        "STABILITY": "⚠️",
+        "PERFORMANCE": "⚡",
+        "SCALABILITY": "\U0001f4c8",
+        "EFFICIENCY": "\U0001f4a1",
+        "HARDWARE ENABLEMENT": "\U0001f527",
+        "MAINTAINABILITY": "\U0001f504",
+    }
+
+    _BASE_URL = "http://127.0.0.1:8000"
+
     def _build_card_text(date_str: str, items: list[dict]) -> str:
         lines = [f"\U0001f4e1 *Kernel Research — {date_str}*"]
         lines.append(f"\U0001f4ca {len(items)} publication{'s' if len(items) != 1 else ''}\n")
         for item in items:
             emoji = _TYPE_EMOJI.get(item["source_type"], "\U0001f4c4")
             lines.append(f"{emoji} *{item['concept']}*")
-            if item.get("url"):
+            motivs = item.get("motivations", [])
+            if motivs:
+                tags = " ".join(
+                    f"{_MOTIV_EMOJI.get(m, '')}{m}" for m in motivs
+                )
+                lines.append(f"   {tags}")
+            subsystems = item.get("subsystems", [])
+            if subsystems:
+                sub_tags = " ".join(f"[{s}]" for s in subsystems)
+                lines.append(f"   \U0001f4c2 {sub_tags}")
+            summary = item.get("summary", "")
+            if summary:
+                lines.append(f"   _{summary}_")
+            concept_url = item.get("concept_url", "")
+            if concept_url:
+                lines.append(f"   \U0001f517 {concept_url}")
+            elif item.get("url"):
                 lines.append(f"   \U0001f517 {item['url']}")
-        lines.append(f"\n\U0001f50d Browse: /research")
         return "\n".join(lines)
 
     @app.get("/api/feed/card/{date_str}")
@@ -930,15 +992,30 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             (date_str,),
         ).fetchall()
 
+        from graph.briefing import classify_source_motivations
+
+        motiv_cache: dict[str, list[str]] = {}
+        subsys_cache: dict[str, list[str]] = {}
         items = []
         for row in rows:
             s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
             c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
+            sid = row[0]
+            cid = row[2]
+            if sid not in motiv_cache:
+                motiv_cache[sid] = classify_source_motivations(conn, sid)
+            if cid not in subsys_cache:
+                subsys_cache[cid] = _get_concept_subsystems(conn, cid)
+            desc = c_attrs.get("description", "")
             items.append({
-                "title": s_attrs.get("title", row[0]),
+                "title": s_attrs.get("title", sid),
                 "url": s_attrs.get("url", ""),
                 "source_type": s_attrs.get("source_type", ""),
-                "concept": c_attrs.get("name", row[2]),
+                "concept": c_attrs.get("name", cid),
+                "concept_url": f"{_BASE_URL}/research/{cid}",
+                "summary": _truncate_words(desc, 100),
+                "subsystems": subsys_cache[cid],
+                "motivations": motiv_cache[sid],
             })
 
         card_text = _build_card_text(date_str, items)
@@ -975,15 +1052,30 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             (date_str,),
         ).fetchall()
 
+        from graph.briefing import classify_source_motivations
+
+        motiv_cache: dict[str, list[str]] = {}
+        subsys_cache: dict[str, list[str]] = {}
         items = []
         for row in rows:
             s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
             c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
+            sid = row[0]
+            cid = row[2]
+            if sid not in motiv_cache:
+                motiv_cache[sid] = classify_source_motivations(conn, sid)
+            if cid not in subsys_cache:
+                subsys_cache[cid] = _get_concept_subsystems(conn, cid)
+            desc = c_attrs.get("description", "")
             items.append({
-                "title": s_attrs.get("title", row[0]),
+                "title": s_attrs.get("title", sid),
                 "url": s_attrs.get("url", ""),
                 "source_type": s_attrs.get("source_type", ""),
-                "concept": c_attrs.get("name", row[2]),
+                "concept": c_attrs.get("name", cid),
+                "concept_url": f"{_BASE_URL}/research/{cid}",
+                "summary": _truncate_words(desc, 100),
+                "subsystems": subsys_cache[cid],
+                "motivations": motiv_cache[sid],
             })
 
         card_text = _build_card_text(date_str, items)
