@@ -897,6 +897,85 @@ def classify_motivations(brief: dict[str, Any]) -> list[dict[str, Any]]:
     return motivations
 
 
+def classify_source_motivations(
+    conn: sqlite3.Connection, source_id: str,
+) -> list[str]:
+    """Return motivation labels grounded in a single Source's evidence chain.
+
+    Only considers nodes extracted from this source's Evidence, so labels
+    reflect what the paper actually discusses, not concept-level aggregates.
+    """
+    ev_ids = [
+        r[0] for r in conn.execute(
+            "SELECT source_id FROM edges "
+            "WHERE kind = 'sourced-from' AND target_id = ?",
+            (source_id,),
+        ).fetchall()
+    ]
+    if not ev_ids:
+        return []
+
+    ph = ",".join("?" for _ in ev_ids)
+    child_rows = conn.execute(
+        f"SELECT n.kind, n.attrs FROM nodes n "
+        f"JOIN edges e ON e.source_id = n.id "
+        f"WHERE e.kind = 'extracted-from' AND e.target_id IN ({ph})",
+        ev_ids,
+    ).fetchall()
+
+    _SOURCE_TEXT_FIELDS = {
+        **{k: v for k, v in _VERBATIM_TEXT_FIELD.items()},
+        "PerformanceProfile": "metric",
+        "KernelInvariant": "predicate",
+        "FailureMode": "symptom",
+        "InteractionProtocol": "rule",
+    }
+
+    kinds_present: set[str] = set()
+    texts_by_kind: dict[str, list[str]] = {}
+    for kind, raw_attrs in child_rows:
+        kinds_present.add(kind)
+        attrs = json.loads(raw_attrs) if isinstance(raw_attrs, str) else (raw_attrs or {})
+        field = _SOURCE_TEXT_FIELDS.get(kind, "title")
+        text = attrs.get(field, attrs.get("description", ""))
+        if text:
+            texts_by_kind.setdefault(kind, []).append(text)
+
+    labels: list[str] = []
+    all_texts = [t for ts in texts_by_kind.values() for t in ts]
+
+    if "Vulnerability" in kinds_present:
+        labels.append("SECURITY")
+
+    if "FailureMode" in kinds_present or [
+        t for t in texts_by_kind.get("Problem", [])
+        if any(kw in t.lower() for kw in ("critical", "high"))
+    ]:
+        labels.append("STABILITY")
+
+    if (
+        "PerformanceProfile" in kinds_present
+        or "Benchmark" in kinds_present
+        or any(_text_has_keywords(t, _PERFORMANCE_KEYWORDS) for t in all_texts)
+    ):
+        labels.append("PERFORMANCE")
+
+    if any(_text_has_keywords(t, _SCALABILITY_KEYWORDS) for t in all_texts):
+        labels.append("SCALABILITY")
+
+    if any(_text_has_keywords(t, _EFFICIENCY_KEYWORDS) for t in all_texts):
+        labels.append("EFFICIENCY")
+
+    if any(_text_has_keywords(t, _HARDWARE_KEYWORDS) for t in all_texts):
+        labels.append("HARDWARE ENABLEMENT")
+
+    fix_texts = texts_by_kind.get("Fix", [])
+    if len(fix_texts) >= 3 or any("regression" in t.lower() for t in fix_texts):
+        labels.append("MAINTAINABILITY")
+
+    return labels
+
+
 # ---------------------------------------------------------------------------
 # Argument paragraph (ALG-KK-GRAPH-BUILD-ARGUMENT)
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@
   {% if attrs.get("status") %}&middot; Status: {{ attrs.status }}{% endif %}
   {% if attrs.get("affected_versions") %}&middot; Affected: {{ attrs.affected_versions }}{% endif %}
   {% if attrs.get("source_date") %}&middot; Disclosed: {{ attrs.source_date }}{% endif %}
+  {% if source_url %}&middot; <a href="{{ source_url }}" target="_blank">source &rarr;</a>{% endif %}
 </p>
 
 {# --- Section 2: Description (VERBATIM) --- #}
