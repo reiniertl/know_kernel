@@ -4,26 +4,267 @@
       "name": "lwn",
       "feed_type": "rss",
       "url": "https://lwn.net/headlines/Features",
-      "poll_interval_seconds": 604800
+      "poll_interval_seconds": 604800,
+      "venue_type": "news",
+      "acronym": "LWN",
+      "publisher": "LWN.net"
     },
     {
       "name": "hackernews",
       "feed_type": "api",
       "url": "https://hacker-news.firebaseio.com/v0/",
       "poll_interval_seconds": 3600,
-      "kernel_filter": "(linux|kernel|scheduler|memory|io_uring|bpf|ebpf|rcu|numa|folio|mm|vfs|filesystem|networking|net|driver|module)"
+      "kernel_filter": "(linux|kernel|scheduler|memory|io_uring|bpf|ebpf|rcu|numa|folio|mm|vfs|filesystem|networking|net|driver|module)",
+      "venue_type": "aggregator",
+      "acronym": "HN",
+      "publisher": "Y Combinator"
     },
     {
       "name": "lkml",
       "feed_type": "rss",
       "url": "https://lkml.org/lkml/rss",
-      "poll_interval_seconds": 86400
+      "poll_interval_seconds": 86400,
+      "venue_type": "mailing-list",
+      "acronym": "LKML",
+      "publisher": "Linux Foundation"
     },
     {
       "name": "phoronix",
       "feed_type": "rss",
       "url": "https://www.phoronix.com/rss.php",
-      "poll_interval_seconds": 86400
+      "poll_interval_seconds": 86400,
+      "venue_type": "news",
+      "acronym": "Phoronix",
+      "publisher": "Phoronix Media"
+    },
+    {
+      "name": "arxiv-os",
+      "feed_type": "rss",
+      "url": "https://rss.arxiv.org/rss/cs.OS",
+      "poll_interval_seconds": 86400,
+      "venue_type": "preprint",
+      "acronym": "arXiv cs.OS",
+      "publisher": "Cornell University"
+    },
+    {
+      "name": "arxiv-arch",
+      "feed_type": "rss",
+      "url": "https://rss.arxiv.org/rss/cs.AR",
+      "poll_interval_seconds": 86400,
+      "venue_type": "preprint",
+      "acronym": "arXiv cs.AR",
+      "publisher": "Cornell University"
+    },
+    {
+      "name": "arxiv-dc",
+      "feed_type": "rss",
+      "url": "https://rss.arxiv.org/rss/cs.DC",
+      "poll_interval_seconds": 86400,
+      "venue_type": "preprint",
+      "acronym": "arXiv cs.DC",
+      "publisher": "Cornell University"
+    },
+    {
+      "name": "arxiv-cr",
+      "feed_type": "rss",
+      "url": "https://rss.arxiv.org/rss/cs.CR",
+      "poll_interval_seconds": 86400,
+      "venue_type": "preprint",
+      "acronym": "arXiv cs.CR",
+      "publisher": "Cornell University"
+    },
+    {
+      "name": "kernel-doc",
+      "feed_type": "venue",
+      "url": "https://www.kernel.org/doc/html/latest/",
+      "venue_type": "documentation",
+      "acronym": "kernel.org",
+      "publisher": "Linux Kernel Organization"
+    },
+    {
+      "name": "osdi",
+      "feed_type": "venue",
+      "url": "https://www.usenix.org/conference/osdi25",
+      "venue_type": "conference",
+      "acronym": "OSDI",
+      "publisher": "USENIX Association"
+    },
+    {
+      "name": "sosp",
+      "feed_type": "venue",
+      "url": "https://sigops.org/s/conferences/sosp/2025/",
+      "venue_type": "symposium",
+      "acronym": "SOSP",
+      "publisher": "ACM SIGOPS"
+    },
+    {
+      "name": "usenix-atc",
+      "feed_type": "venue",
+      "url": "https://www.usenix.org/conference/atc25",
+      "venue_type": "conference",
+      "acronym": "USENIX ATC",
+      "publisher": "USENIX Association"
+    },
+    {
+      "name": "eurosys",
+      "feed_type": "venue",
+      "url": "https://2025.eurosys.org/",
+      "venue_type": "conference",
+      "acronym": "EuroSys",
+      "publisher": "ACM SIGOPS / EuroSys"
+    },
+    {
+      "name": "asplos",
+      "feed_type": "venue",
+      "url": "https://www.asplos-conference.org/",
+      "venue_type": "conference",
+      "acronym": "ASPLOS",
+      "publisher": "ACM SIGARCH / SIGPLAN / SIGOPS"
+    },
+    {
+      "name": "fast",
+      "feed_type": "venue",
+      "url": "https://www.usenix.org/conference/fast25",
+      "venue_type": "conference",
+      "acronym": "FAST",
+      "publisher": "USENIX Association"
+    },
+    {
+      "name": "nsdi",
+      "feed_type": "venue",
+      "url": "https://www.usenix.org/conference/nsdi25",
+      "venue_type": "conference",
+      "acronym": "NSDI",
+      "publisher": "USENIX Association"
+    },
+    {
+      "name": "hotos",
+      "feed_type": "venue",
+      "url": "https://sigops.org/s/conferences/hotos/2025/",
+      "venue_type": "workshop",
+      "acronym": "HotOS",
+      "publisher": "ACM SIGOPS"
+    },
+    {
+      "name": "isca",
+      "feed_type": "venue",
+      "url": "https://iscaconf.org/isca2025/",
+      "venue_type": "symposium",
+      "acronym": "ISCA",
+      "publisher": "IEEE / ACM"
+    },
+    {
+      "name": "ieee-sp",
+      "feed_type": "venue",
+      "url": "https://www.ieee-security.org/TC/SP2025/",
+      "venue_type": "symposium",
+      "acronym": "IEEE S&P",
+      "publisher": "IEEE"
+    },
+    {
+      "name": "ccs",
+      "feed_type": "venue",
+      "url": "https://www.sigsac.org/ccs/CCS2025/",
+      "venue_type": "conference",
+      "acronym": "CCS",
+      "publisher": "ACM SIGSAC"
+    },
+    {
+      "name": "ndss",
+      "feed_type": "venue",
+      "url": "https://www.ndss-symposium.org/ndss2025/",
+      "venue_type": "symposium",
+      "acronym": "NDSS",
+      "publisher": "Internet Society"
+    },
+    {
+      "name": "usenix-security",
+      "feed_type": "venue",
+      "url": "https://www.usenix.org/conference/usenixsecurity25",
+      "venue_type": "conference",
+      "acronym": "USENIX Security",
+      "publisher": "USENIX Association"
+    },
+    {
+      "name": "lpc",
+      "feed_type": "venue",
+      "url": "https://lpc.events/",
+      "venue_type": "conference",
+      "acronym": "LPC",
+      "publisher": "Linux Foundation"
+    },
+    {
+      "name": "lsfmmbpf",
+      "feed_type": "venue",
+      "url": "https://events.linuxfoundation.org/lsfmmbpf/",
+      "venue_type": "workshop",
+      "acronym": "LSF/MM/BPF",
+      "publisher": "Linux Foundation"
+    },
+    {
+      "name": "acm-tocs",
+      "feed_type": "venue",
+      "url": "https://dl.acm.org/journal/tocs",
+      "venue_type": "journal",
+      "acronym": "ACM TOCS",
+      "publisher": "ACM"
+    },
+    {
+      "name": "acm-queue",
+      "feed_type": "rss",
+      "url": "https://queue.acm.org/rss/feeds/queuecontent.xml",
+      "poll_interval_seconds": 604800,
+      "venue_type": "journal",
+      "acronym": "ACM Queue",
+      "publisher": "ACM"
+    },
+    {
+      "name": "nvd",
+      "feed_type": "venue",
+      "url": "https://nvd.nist.gov/",
+      "venue_type": "vulnerability-db",
+      "acronym": "NVD",
+      "publisher": "NIST"
+    },
+    {
+      "name": "micro",
+      "feed_type": "venue",
+      "url": "https://microarch.org/micro58/",
+      "venue_type": "symposium",
+      "acronym": "MICRO",
+      "publisher": "IEEE / ACM"
+    },
+    {
+      "name": "hpca",
+      "feed_type": "venue",
+      "url": "https://hpca-conf.org/2025/",
+      "venue_type": "symposium",
+      "acronym": "HPCA",
+      "publisher": "IEEE"
+    },
+    {
+      "name": "middleware",
+      "feed_type": "venue",
+      "url": "https://middleware-conf.github.io/2025/",
+      "venue_type": "conference",
+      "acronym": "Middleware",
+      "publisher": "ACM / IFIP / USENIX"
+    },
+    {
+      "name": "lisa",
+      "feed_type": "venue",
+      "url": "https://www.usenix.org/conference/lisa2025",
+      "venue_type": "conference",
+      "acronym": "LISA",
+      "publisher": "USENIX Association"
+    },
+    {
+      "name": "systor",
+      "feed_type": "venue",
+      "url": "https://www.systor.org/2025/",
+      "venue_type": "conference",
+      "acronym": "SYSTOR",
+      "publisher": "ACM"
     }
   ]
 }
