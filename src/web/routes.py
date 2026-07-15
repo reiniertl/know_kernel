@@ -26,10 +26,8 @@ from graph.briefing import build_argument_paragraph, build_concept_brief, classi
 from graph.scoring import (
     compute_all_scores,
     feasibility_score,
-    heat_score,
     impact_projection,
     is_security_only_concept,
-    pain_score,
     research_score,
     vulnerability_propagation,
 )
@@ -1074,58 +1072,65 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
 
     @app.get("/radar", response_class=HTMLResponse)
     async def radar(request: Request):
-        """Subsystem radar dashboard (ALG-KK-WEB-RADAR).
-
-        INV-KK-WEB-RADAR-SUBSYSTEM: shows all subsystems with >= 1 concept.
-        """
+        """Research radar: papers grouped by kernel concept (ALG-KK-WEB-RADAR)."""
         conn = request.app.state.conn
-        sub_rows = conn.execute(
-            "SELECT id, kind, attrs FROM nodes WHERE kind = 'Subsystem' ORDER BY id"
+
+        rows = conn.execute(
+            "SELECT s.id, s.attrs, c.id as concept_id, c.attrs as concept_attrs "
+            "FROM nodes s "
+            "JOIN edges se ON se.kind = 'sourced-from' AND se.target_id = s.id "
+            "JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
+            "JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
+            "JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
+            "WHERE s.kind = 'Source' "
+            "AND json_extract(s.attrs, '$.source_type') IN "
+            "('paper','preprint','conference-paper','conference-proceedings') "
+            "ORDER BY c.id, json_extract(s.attrs, '$.published_date') DESC"
         ).fetchall()
 
-        subsystems: list[dict] = []
-        for sr in _rows_to_dicts(sub_rows):
-            sub_id = sr["id"]
-            attrs = sr.get("attrs") or {}
-            concept_rows = conn.execute(
-                "SELECT e.source_id FROM edges e "
-                "JOIN nodes n ON e.source_id = n.id AND n.kind = 'Concept' "
-                "WHERE e.kind = 'belongs-to' AND e.target_id = ?",
-                (sub_id,),
-            ).fetchall()
-            concept_ids = [r[0] for r in concept_rows]
-            if not concept_ids:
-                continue
-            total_heat = 0.0
-            total_pain = 0.0
-            for cid in concept_ids:
-                total_heat += heat_score(conn, cid)
-                total_pain += pain_score(conn, cid)
-            vuln_count = 0
-            fix_count = 0
-            for cid in concept_ids:
-                vuln_count += conn.execute(
-                    "SELECT COUNT(*) FROM edges WHERE kind = 'exploits' AND target_id = ?",
-                    (cid,),
-                ).fetchone()[0]
-                fix_count += conn.execute(
-                    "SELECT COUNT(*) FROM edges e "
-                    "JOIN nodes n ON e.source_id = n.id AND n.kind = 'Fix' "
-                    "WHERE e.kind = 'patches' AND e.target_id = ?",
-                    (cid,),
-                ).fetchone()[0]
-            subsystems.append({
-                "id": sub_id,
-                "name": attrs.get("name", sub_id),
-                "concept_count": len(concept_ids),
-                "heat": total_heat,
-                "pain": total_pain,
-                "vuln_count": vuln_count,
-                "fix_count": fix_count,
+        from graph.briefing import classify_source_motivations
+
+        by_concept: dict[str, dict] = {}
+        for row in rows:
+            s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
+            c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
+            cid = row[2]
+            sid = row[0]
+            pub_date = s_attrs.get("published_date", s_attrs.get("source_date", ""))
+
+            if cid not in by_concept:
+                by_concept[cid] = {
+                    "concept_id": cid,
+                    "concept_name": c_attrs.get("name", cid),
+                    "subsystems": _get_concept_subsystems(conn, cid),
+                    "motivations_set": set(),
+                    "latest_date": "",
+                    "papers": [],
+                }
+
+            entry = by_concept[cid]
+            motivs = classify_source_motivations(conn, sid)
+            entry["motivations_set"].update(motivs)
+
+            if pub_date and pub_date > entry["latest_date"]:
+                entry["latest_date"] = pub_date
+
+            entry["papers"].append({
+                "source_id": sid,
+                "title": s_attrs.get("title", sid),
+                "url": s_attrs.get("url", ""),
+                "source_type": s_attrs.get("source_type", ""),
+                "published_date": pub_date,
             })
-        subsystems.sort(key=lambda x: x["pain"], reverse=True)
+
+        concepts = list(by_concept.values())
+        for c in concepts:
+            c["motivations"] = sorted(c.pop("motivations_set"))
+            c["paper_count"] = len(c["papers"])
+        concepts.sort(key=lambda x: x["paper_count"], reverse=True)
+
         return templates.TemplateResponse(
-            request, "radar.html", {"subsystems": subsystems},
+            request, "radar.html", {"concepts": concepts, "total_papers": sum(c["paper_count"] for c in concepts)},
         )
 
     @app.get("/vulns", response_class=HTMLResponse)
