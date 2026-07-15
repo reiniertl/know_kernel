@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Research Feed</h1>
-<p>{{ total }} research publications grouped by date</p>
+<p>{{ total }} research publication{{ "s" if total != 1 else "" }}</p>
 
 <div style="margin-bottom:1.5rem; padding:0.8rem; background:#f5f5f5; border:1px solid #ddd; border-radius:4px;">
   <label style="font-weight:bold;">CLI Command Template</label>
@@ -12,74 +12,77 @@
   <div id="cli-status" style="margin-top:0.3rem; font-size:0.85em; color:#555;"></div>
 </div>
 
-{% for date, items in by_date.items() %}
-<div class="attrs-section" style="margin-bottom:1.5rem; border:1px solid #ddd; border-radius:4px; padding:0.8rem;">
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
-    <h3 style="margin:0;">{{ date }} <span style="font-size:0.8em; color:#777;">({{ items|length }} paper{{ "s" if items|length != 1 else "" }})</span></h3>
-    <div>
-      <button onclick="previewCard('{{ date }}', this)" style="font-family:monospace; padding:0.3rem 0.8rem; cursor:pointer; background:#7f8c8d; color:#fff; border:none; border-radius:3px; margin-right:0.3rem;" title="Preview card text">Preview</button>
-      <button onclick="sendCard('{{ date }}', this)" style="font-family:monospace; padding:0.3rem 0.8rem; cursor:pointer; background:#2980b9; color:#fff; border:none; border-radius:3px;" title="Send card via CLI command">Send card</button>
-    </div>
-  </div>
-  <table style="width:100%;">
-    <thead>
-      <tr>
-        <th style="width:25%;">Paper</th>
-        <th style="width:10%;">Type</th>
-        <th style="width:15%;">Concept</th>
-        <th style="width:30%;">Summary</th>
-        <th style="width:10%;">Subsystem</th>
-        <th style="width:10%;">Why Pursue</th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for item in items %}
-      <tr>
-        <td>
-          {% if item.url %}<a href="{{ item.url }}" target="_blank">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}
-        </td>
-        <td><span class="badge badge-kind">{{ item.source_type }}</span></td>
-        <td><a href="/research/{{ item.concept_id }}">{{ item.concept_name }}</a></td>
-        <td style="font-size:0.85em; color:#444;">{{ item.summary }}</td>
-        <td>
-          {% for s in item.subsystems %}
-          <span class="badge" style="font-size:0.7em; padding:0.15em 0.4em; margin:0.1em; display:inline-block; background:#34495e; color:#fff; border-radius:3px;">{{ s }}</span>
-          {% endfor %}
-        </td>
-        <td>
-          {% for m in item.motivations %}
-          <span class="badge" style="font-size:0.7em; padding:0.15em 0.4em; margin:0.1em; display:inline-block; background:{{ {'SECURITY':'#e74c3c','STABILITY':'#e67e22','PERFORMANCE':'#f39c12','SCALABILITY':'#3498db','EFFICIENCY':'#2ecc71','HARDWARE ENABLEMENT':'#9b59b6','MAINTAINABILITY':'#7f8c8d'}.get(m,'#95a5a6') }}; color:#fff; border-radius:3px;">{{ m }}</span>
-          {% endfor %}
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  <pre id="preview-{{ date }}" style="display:none; margin-top:0.5rem; white-space:pre-wrap; font-size:0.85em; background:#fafafa; padding:0.5rem; border:1px solid #eee;"></pre>
-</div>
+{% if items %}
+<table style="width:100%;">
+  <thead>
+    <tr>
+      <th style="width:10%;">Date</th>
+      <th style="width:20%;">Paper</th>
+      <th style="width:10%;">Type</th>
+      <th style="width:12%;">Concept</th>
+      <th style="width:22%;">Summary</th>
+      <th style="width:8%;">Subsystem</th>
+      <th style="width:8%;">Why Pursue</th>
+      <th style="width:10%;">Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for item in items %}
+    <tr>
+      <td style="font-size:0.85em; white-space:nowrap;">{{ item.published_date or "—" }}</td>
+      <td>
+        {% if item.url %}<a href="{{ item.url }}" target="_blank">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}
+      </td>
+      <td><span class="badge badge-kind">{{ item.source_type }}</span></td>
+      <td><a href="/research/{{ item.concept_id }}">{{ item.concept_name }}</a></td>
+      <td style="font-size:0.85em; color:#444;">{{ item.summary }}</td>
+      <td>
+        {% for s in item.subsystems %}
+        <span class="badge" style="font-size:0.7em; padding:0.15em 0.4em; margin:0.1em; display:inline-block; background:#34495e; color:#fff; border-radius:3px;">{{ s }}</span>
+        {% endfor %}
+      </td>
+      <td>
+        {% for m in item.motivations %}
+        <span class="badge" style="font-size:0.7em; padding:0.15em 0.4em; margin:0.1em; display:inline-block; background:{{ {'SECURITY':'#e74c3c','STABILITY':'#e67e22','PERFORMANCE':'#f39c12','SCALABILITY':'#3498db','EFFICIENCY':'#2ecc71','HARDWARE ENABLEMENT':'#9b59b6','MAINTAINABILITY':'#7f8c8d'}.get(m,'#95a5a6') }}; color:#fff; border-radius:3px;">{{ m }}</span>
+        {% endfor %}
+      </td>
+      <td style="white-space:nowrap;">
+        <button onclick="previewCard('{{ item.source_id }}', this)" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#7f8c8d; color:#fff; border:none; border-radius:3px; font-size:0.8em;" title="Preview card text">Preview</button>
+        <button onclick="sendCard('{{ item.source_id }}', this)" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#2980b9; color:#fff; border:none; border-radius:3px; font-size:0.8em;" title="Send card via CLI command">Send</button>
+      </td>
+    </tr>
+    <tr id="preview-row-{{ item.source_id }}" style="display:none;">
+      <td colspan="8">
+        <pre style="white-space:pre-wrap; font-size:0.85em; background:#fafafa; padding:0.5rem; border:1px solid #eee; margin:0;"></pre>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
 {% else %}
 <p>No research publications found.</p>
-{% endfor %}
+{% endif %}
 
 <script>
-async function previewCard(dateStr, btn) {
-  var pre = document.getElementById('preview-' + dateStr);
-  if (pre.style.display !== 'none') {
-    pre.style.display = 'none';
+async function previewCard(sourceId, btn) {
+  var row = document.getElementById('preview-row-' + sourceId);
+  var pre = row.querySelector('pre');
+  if (row.style.display !== 'none') {
+    row.style.display = 'none';
     return;
   }
   try {
-    var resp = await fetch('/api/feed/card/' + encodeURIComponent(dateStr));
+    var resp = await fetch('/api/feed/card/' + encodeURIComponent(sourceId));
     var data = await resp.json();
     pre.textContent = data.card;
-    pre.style.display = 'block';
+    row.style.display = '';
   } catch(e) {
     pre.textContent = 'Error loading preview';
-    pre.style.display = 'block';
+    row.style.display = '';
   }
 }
 
-async function sendCard(dateStr, btn) {
+async function sendCard(sourceId, btn) {
   var cliTemplate = document.getElementById('cli-command').value.trim();
   var statusEl = document.getElementById('cli-status');
   if (!cliTemplate || cliTemplate.indexOf('<CARD>') === -1) {
@@ -88,35 +91,35 @@ async function sendCard(dateStr, btn) {
     return;
   }
   btn.disabled = true;
-  btn.textContent = 'Sending...';
+  btn.textContent = '...';
   statusEl.textContent = '';
   try {
-    var resp = await fetch('/api/feed/send/' + encodeURIComponent(dateStr), {
+    var resp = await fetch('/api/feed/send/' + encodeURIComponent(sourceId), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({cli_command: cliTemplate})
     });
     var result = await resp.json();
     if (result.status === 'ok') {
-      btn.textContent = 'Sent ✓';
+      btn.textContent = 'OK';
       btn.style.background = '#27ae60';
-      statusEl.textContent = 'Command executed successfully';
+      statusEl.textContent = 'Sent: ' + sourceId;
       statusEl.style.color = '#27ae60';
-      if (result.stdout) statusEl.textContent += ': ' + result.stdout.substring(0, 200);
+      if (result.stdout) statusEl.textContent += ' — ' + result.stdout.substring(0, 200);
     } else {
-      btn.textContent = 'Failed';
+      btn.textContent = 'Err';
       btn.style.background = '#c0392b';
       statusEl.textContent = 'Error: ' + (result.stderr || result.error || 'unknown');
       statusEl.style.color = '#c0392b';
     }
   } catch(e) {
-    btn.textContent = 'Failed';
+    btn.textContent = 'Err';
     btn.style.background = '#c0392b';
     statusEl.textContent = 'Network error: ' + e.message;
     statusEl.style.color = '#c0392b';
   }
   setTimeout(function() {
-    btn.textContent = 'Send card';
+    btn.textContent = 'Send';
     btn.style.background = '#2980b9';
     btn.disabled = false;
   }, 3000);

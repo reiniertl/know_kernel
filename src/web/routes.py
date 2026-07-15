@@ -853,7 +853,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
 
     @app.get("/feed", response_class=HTMLResponse)
     async def research_feed(request: Request):
-        """Daily research feed grouped by publication date."""
+        """Research feed as flat table ordered by publication date descending (ALG-KK-WEB-FEED-LIST)."""
         conn = request.app.state.conn
 
         rows = conn.execute(
@@ -873,13 +873,11 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
 
         motiv_cache: dict[str, list[str]] = {}
         subsys_cache: dict[str, list[str]] = {}
-        by_date: dict[str, list] = {}
+        items: list[dict] = []
         for row in rows:
             s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
             c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
-            pub_date = s_attrs.get("published_date", s_attrs.get("source_date", "unknown"))
-            if not pub_date:
-                pub_date = "unknown"
+            pub_date = s_attrs.get("published_date", s_attrs.get("source_date", ""))
             sid = row[0]
             cid = row[2]
             if sid not in motiv_cache:
@@ -887,23 +885,23 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             if cid not in subsys_cache:
                 subsys_cache[cid] = _get_concept_subsystems(conn, cid)
             desc = c_attrs.get("description", "")
-            entry = {
+            items.append({
                 "source_id": sid,
                 "title": s_attrs.get("title", sid),
                 "url": s_attrs.get("url", ""),
                 "source_type": s_attrs.get("source_type", ""),
+                "published_date": pub_date,
                 "concept_id": cid,
                 "concept_name": c_attrs.get("name", cid),
                 "motivations": motiv_cache[sid],
                 "summary": _truncate_words(desc, 100),
                 "subsystems": subsys_cache[cid],
-            }
-            by_date.setdefault(pub_date, []).append(entry)
+            })
 
         return templates.TemplateResponse(
             request,
             "feed.html",
-            {"by_date": by_date, "total": sum(len(v) for v in by_date.values())},
+            {"items": items, "total": len(items)},
         )
 
     def _truncate_words(text: str, max_words: int = 100) -> str:
@@ -946,89 +944,76 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
 
     _BASE_URL = "http://10.123.102.166:8000"
 
-    def _build_card_text(date_str: str, items: list[dict]) -> str:
-        lines = [f"\U0001f4e1 *Kernel Research — {date_str}*\n"]
-        lines.append(f"\U0001f4ca {len(items)} publication{'s' if len(items) != 1 else ''}\n")
-        for item in items:
-            emoji = _TYPE_EMOJI.get(item["source_type"], "\U0001f4c4")
-            lines.append(f"{emoji} *{item['concept']}*")
-            motivs = item.get("motivations", [])
-            if motivs:
-                tags = " ".join(
-                    f"{_MOTIV_EMOJI.get(m, '')}{m}" for m in motivs
-                )
-                lines.append(f"   {tags}")
-            subsystems = item.get("subsystems", [])
-            if subsystems:
-                sub_tags = " ".join(f"[{s}]" for s in subsystems)
-                lines.append(f"   \U0001f4c2 {sub_tags}")
-            summary = item.get("summary", "")
-            if summary:
-                lines.append(f"   _{summary}_")
-            concept_url = item.get("concept_url", "")
-            if concept_url:
-                lines.append(f"   \U0001f517 {concept_url}")
-            elif item.get("url"):
-                lines.append(f"   \U0001f517 {item['url']}")
+    def _build_single_card_text(item: dict) -> str:
+        """Build emoji card text for a single paper (ALG-KK-WEB-FEED-CARD)."""
+        emoji = _TYPE_EMOJI.get(item.get("source_type", ""), "\U0001f4c4")
+        lines = [f"{emoji} *{item.get('concept', '')}*"]
+        motivs = item.get("motivations", [])
+        if motivs:
+            tags = " ".join(
+                f"{_MOTIV_EMOJI.get(m, '')}{m}" for m in motivs
+            )
+            lines.append(f"   {tags}")
+        subsystems = item.get("subsystems", [])
+        if subsystems:
+            sub_tags = " ".join(f"[{s}]" for s in subsystems)
+            lines.append(f"   \U0001f4c2 {sub_tags}")
+        summary = item.get("summary", "")
+        if summary:
+            lines.append(f"   _{summary}_")
+        concept_url = item.get("concept_url", "")
+        if concept_url:
+            lines.append(f"   \U0001f517 {concept_url}")
+        elif item.get("url"):
+            lines.append(f"   \U0001f517 {item['url']}")
         return "\\n".join(lines).replace("\n", "\\n")
 
-    @app.get("/api/feed/card/{date_str}")
-    async def feed_card_json(request: Request, date_str: str):
-        """JSON card for a single day's research feed."""
+    @app.get("/api/feed/card/{source_id:path}")
+    async def feed_card_json(request: Request, source_id: str):
+        """JSON card for a single paper (ALG-KK-WEB-FEED-CARD)."""
         conn = request.app.state.conn
 
-        rows = conn.execute(
+        row = conn.execute(
             "SELECT s.id, s.attrs, c.id as concept_id, c.attrs as concept_attrs "
             "FROM nodes s "
             "JOIN edges se ON se.kind = 'sourced-from' AND se.target_id = s.id "
             "JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
             "JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
             "JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
-            "WHERE s.kind = 'Source' "
-            "AND json_extract(s.attrs, '$.source_type') IN "
-            "('paper','preprint','conference-paper','conference-proceedings') "
-            "AND json_extract(s.attrs, '$.published_date') = ? "
-            "ORDER BY s.id",
-            (date_str,),
-        ).fetchall()
+            "WHERE s.kind = 'Source' AND s.id = ? "
+            "LIMIT 1",
+            (source_id,),
+        ).fetchone()
+
+        if row is None:
+            return JSONResponse({"error": "Source not found"}, status_code=404)
 
         from graph.briefing import classify_source_motivations
 
-        motiv_cache: dict[str, list[str]] = {}
-        subsys_cache: dict[str, list[str]] = {}
-        items = []
-        for row in rows:
-            s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
-            c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
-            sid = row[0]
-            cid = row[2]
-            if sid not in motiv_cache:
-                motiv_cache[sid] = classify_source_motivations(conn, sid)
-            if cid not in subsys_cache:
-                subsys_cache[cid] = _get_concept_subsystems(conn, cid)
-            desc = c_attrs.get("description", "")
-            items.append({
-                "title": s_attrs.get("title", sid),
-                "url": s_attrs.get("url", ""),
-                "source_type": s_attrs.get("source_type", ""),
-                "concept": c_attrs.get("name", cid),
-                "concept_url": f"{_BASE_URL}/research/{cid}",
-                "summary": _truncate_words(desc, 100),
-                "subsystems": subsys_cache[cid],
-                "motivations": motiv_cache[sid],
-            })
+        s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
+        c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
+        cid = row[2]
+        item = {
+            "title": s_attrs.get("title", source_id),
+            "url": s_attrs.get("url", ""),
+            "source_type": s_attrs.get("source_type", ""),
+            "concept": c_attrs.get("name", cid),
+            "concept_url": f"{_BASE_URL}/research/{cid}",
+            "summary": _truncate_words(c_attrs.get("description", ""), 100),
+            "subsystems": _get_concept_subsystems(conn, cid),
+            "motivations": classify_source_motivations(conn, source_id),
+        }
 
-        card_text = _build_card_text(date_str, items)
+        card_text = _build_single_card_text(item)
         return JSONResponse({
-            "date": date_str,
-            "count": len(items),
+            "source_id": source_id,
             "card": card_text,
-            "items": items,
+            "item": item,
         })
 
-    @app.post("/api/feed/send/{date_str}")
-    async def feed_send_card(request: Request, date_str: str):
-        """Execute CLI command with card text replacing <CARD> placeholder."""
+    @app.post("/api/feed/send/{source_id:path}")
+    async def feed_send_card(request: Request, source_id: str):
+        """Execute CLI command with single-paper card text replacing <CARD> placeholder (ALG-KK-WEB-FEED-SEND)."""
         import subprocess
 
         body = await request.json()
@@ -1037,48 +1022,38 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             return JSONResponse({"error": "CLI command must contain <CARD> placeholder"}, status_code=400)
 
         conn = request.app.state.conn
-        rows = conn.execute(
+        row = conn.execute(
             "SELECT s.id, s.attrs, c.id as concept_id, c.attrs as concept_attrs "
             "FROM nodes s "
             "JOIN edges se ON se.kind = 'sourced-from' AND se.target_id = s.id "
             "JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
             "JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
             "JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
-            "WHERE s.kind = 'Source' "
-            "AND json_extract(s.attrs, '$.source_type') IN "
-            "('paper','preprint','conference-paper','conference-proceedings') "
-            "AND json_extract(s.attrs, '$.published_date') = ? "
-            "ORDER BY s.id",
-            (date_str,),
-        ).fetchall()
+            "WHERE s.kind = 'Source' AND s.id = ? "
+            "LIMIT 1",
+            (source_id,),
+        ).fetchone()
+
+        if row is None:
+            return JSONResponse({"error": "Source not found"}, status_code=404)
 
         from graph.briefing import classify_source_motivations
 
-        motiv_cache: dict[str, list[str]] = {}
-        subsys_cache: dict[str, list[str]] = {}
-        items = []
-        for row in rows:
-            s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
-            c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
-            sid = row[0]
-            cid = row[2]
-            if sid not in motiv_cache:
-                motiv_cache[sid] = classify_source_motivations(conn, sid)
-            if cid not in subsys_cache:
-                subsys_cache[cid] = _get_concept_subsystems(conn, cid)
-            desc = c_attrs.get("description", "")
-            items.append({
-                "title": s_attrs.get("title", sid),
-                "url": s_attrs.get("url", ""),
-                "source_type": s_attrs.get("source_type", ""),
-                "concept": c_attrs.get("name", cid),
-                "concept_url": f"{_BASE_URL}/research/{cid}",
-                "summary": _truncate_words(desc, 100),
-                "subsystems": subsys_cache[cid],
-                "motivations": motiv_cache[sid],
-            })
+        s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
+        c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
+        cid = row[2]
+        item = {
+            "title": s_attrs.get("title", source_id),
+            "url": s_attrs.get("url", ""),
+            "source_type": s_attrs.get("source_type", ""),
+            "concept": c_attrs.get("name", cid),
+            "concept_url": f"{_BASE_URL}/research/{cid}",
+            "summary": _truncate_words(c_attrs.get("description", ""), 100),
+            "subsystems": _get_concept_subsystems(conn, cid),
+            "motivations": classify_source_motivations(conn, source_id),
+        }
 
-        card_text = _build_card_text(date_str, items)
+        card_text = _build_single_card_text(item)
         full_command = cli_template.replace("<CARD>", card_text)
 
         try:
