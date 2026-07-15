@@ -1072,7 +1072,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
 
     @app.get("/radar", response_class=HTMLResponse)
     async def radar(request: Request):
-        """Research radar: papers grouped by kernel concept (ALG-KK-WEB-RADAR)."""
+        """Research radar: papers grouped by subsystem then concept (ALG-KK-WEB-RADAR)."""
         conn = request.app.state.conn
 
         rows = conn.execute(
@@ -1099,10 +1099,11 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             pub_date = s_attrs.get("published_date", s_attrs.get("source_date", ""))
 
             if cid not in by_concept:
+                subs = _get_concept_subsystems(conn, cid)
                 by_concept[cid] = {
                     "concept_id": cid,
                     "concept_name": c_attrs.get("name", cid),
-                    "subsystems": _get_concept_subsystems(conn, cid),
+                    "subsystem": subs[0] if subs else "Uncategorized",
                     "motivations_set": set(),
                     "latest_date": "",
                     "papers": [],
@@ -1123,14 +1124,32 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "published_date": pub_date,
             })
 
-        concepts = list(by_concept.values())
-        for c in concepts:
+        by_subsystem: dict[str, dict] = {}
+        for c in by_concept.values():
             c["motivations"] = sorted(c.pop("motivations_set"))
             c["paper_count"] = len(c["papers"])
-        concepts.sort(key=lambda x: x["paper_count"], reverse=True)
+            sub_name = c["subsystem"]
+            if sub_name not in by_subsystem:
+                by_subsystem[sub_name] = {
+                    "name": sub_name,
+                    "motivations_set": set(),
+                    "concepts": [],
+                    "total_papers": 0,
+                }
+            sub = by_subsystem[sub_name]
+            sub["concepts"].append(c)
+            sub["total_papers"] += c["paper_count"]
+            sub["motivations_set"].update(c["motivations"])
 
+        subsystems = list(by_subsystem.values())
+        for sub in subsystems:
+            sub["motivations"] = sorted(sub.pop("motivations_set"))
+            sub["concepts"].sort(key=lambda x: x["paper_count"], reverse=True)
+        subsystems.sort(key=lambda x: x["total_papers"], reverse=True)
+
+        total_papers = sum(s["total_papers"] for s in subsystems)
         return templates.TemplateResponse(
-            request, "radar.html", {"concepts": concepts, "total_papers": sum(c["paper_count"] for c in concepts)},
+            request, "radar.html", {"subsystems": subsystems, "total_papers": total_papers},
         )
 
     @app.get("/vulns", response_class=HTMLResponse)

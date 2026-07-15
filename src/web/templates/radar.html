@@ -1,56 +1,82 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Research Radar</h1>
-<p>{{ total_papers }} research paper{{ "s" if total_papers != 1 else "" }} across {{ concepts|length }} concept{{ "s" if concepts|length != 1 else "" }}</p>
+<p>{{ total_papers }} research paper{{ "s" if total_papers != 1 else "" }} across {{ subsystems|length }} subsystem{{ "s" if subsystems|length != 1 else "" }}</p>
 
-{% if concepts %}
+{% if subsystems %}
 <table style="width:100%;">
   <thead>
     <tr>
-      <th style="width:20%;">Concept</th>
+      <th style="width:25%;">Subsystem</th>
       <th style="width:8%;">Papers</th>
-      <th style="width:12%;">Subsystem</th>
-      <th style="width:15%;">Motivations</th>
-      <th style="width:10%;">Latest</th>
+      <th style="width:8%;">Concepts</th>
+      <th style="width:20%;">Motivations</th>
       <th style="width:5%;"></th>
     </tr>
   </thead>
   <tbody>
-  {% for c in concepts %}
-    <tr>
-      <td><a href="/research/{{ c.concept_id }}">{{ c.concept_name }}</a></td>
-      <td>{{ c.paper_count }}</td>
+  {% for sub in subsystems %}
+    <tr style="background:#f0f0f0; font-weight:bold;">
+      <td>{{ sub.name }}</td>
+      <td>{{ sub.total_papers }}</td>
+      <td>{{ sub.concepts|length }}</td>
       <td>
-        {% for s in c.subsystems %}
-        <span class="badge" style="font-size:0.7em; padding:0.15em 0.4em; margin:0.1em; display:inline-block; background:#34495e; color:#fff; border-radius:3px;">{{ s }}</span>
-        {% endfor %}
-      </td>
-      <td>
-        {% for m in c.motivations %}
+        {% for m in sub.motivations %}
         <span class="badge" style="font-size:0.7em; padding:0.15em 0.4em; margin:0.1em; display:inline-block; background:{{ {'SECURITY':'#e74c3c','STABILITY':'#e67e22','PERFORMANCE':'#f39c12','SCALABILITY':'#3498db','EFFICIENCY':'#2ecc71','HARDWARE ENABLEMENT':'#9b59b6','MAINTAINABILITY':'#7f8c8d'}.get(m,'#95a5a6') }}; color:#fff; border-radius:3px;">{{ m }}</span>
         {% endfor %}
       </td>
-      <td style="font-size:0.85em; white-space:nowrap;">{{ c.latest_date or "—" }}</td>
       <td>
-        <button onclick="togglePapers('{{ c.concept_id }}')" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#7f8c8d; color:#fff; border:none; border-radius:3px; font-size:0.8em;">+</button>
+        <button onclick="toggleSubsystem('{{ sub.name|replace(' ', '-')|replace('/', '-') }}')" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#2c3e50; color:#fff; border:none; border-radius:3px; font-size:0.8em;">+</button>
       </td>
     </tr>
-    <tr id="papers-{{ c.concept_id }}" style="display:none;">
-      <td colspan="6" style="padding:0.3rem 1rem;">
-        <table style="width:100%; font-size:0.85em;">
+    <tr id="sub-{{ sub.name|replace(' ', '-')|replace('/', '-') }}" style="display:none;">
+      <td colspan="5" style="padding:0;">
+        <table style="width:100%;">
           <thead>
             <tr>
-              <th>Title</th>
-              <th style="width:10%;">Type</th>
-              <th style="width:12%;">Date</th>
+              <th style="width:25%; padding-left:2rem;">Concept</th>
+              <th style="width:8%;">Papers</th>
+              <th style="width:20%;">Motivations</th>
+              <th style="width:10%;">Latest</th>
+              <th style="width:5%;"></th>
             </tr>
           </thead>
           <tbody>
-          {% for p in c.papers %}
+          {% for c in sub.concepts %}
             <tr>
-              <td>{% if p.url %}<a href="{{ p.url }}" target="_blank">{{ p.title }}</a>{% else %}{{ p.title }}{% endif %}</td>
-              <td><span class="badge badge-kind">{{ p.source_type }}</span></td>
-              <td>{{ p.published_date or "—" }}</td>
+              <td style="padding-left:2rem;"><a href="/research/{{ c.concept_id }}">{{ c.concept_name }}</a></td>
+              <td>{{ c.paper_count }}</td>
+              <td>
+                {% for m in c.motivations %}
+                <span class="badge" style="font-size:0.7em; padding:0.15em 0.4em; margin:0.1em; display:inline-block; background:{{ {'SECURITY':'#e74c3c','STABILITY':'#e67e22','PERFORMANCE':'#f39c12','SCALABILITY':'#3498db','EFFICIENCY':'#2ecc71','HARDWARE ENABLEMENT':'#9b59b6','MAINTAINABILITY':'#7f8c8d'}.get(m,'#95a5a6') }}; color:#fff; border-radius:3px;">{{ m }}</span>
+                {% endfor %}
+              </td>
+              <td style="font-size:0.85em; white-space:nowrap;">{{ c.latest_date or "—" }}</td>
+              <td>
+                <button onclick="toggleConcept('{{ c.concept_id }}')" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#7f8c8d; color:#fff; border:none; border-radius:3px; font-size:0.8em;">+</button>
+              </td>
+            </tr>
+            <tr id="concept-{{ c.concept_id }}" style="display:none;">
+              <td colspan="5" style="padding:0.3rem 2rem 0.3rem 3rem;">
+                <table style="width:100%; font-size:0.85em;">
+                  <thead>
+                    <tr>
+                      <th>Title</th>
+                      <th style="width:10%;">Type</th>
+                      <th style="width:12%;">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                  {% for p in c.papers %}
+                    <tr>
+                      <td>{% if p.url %}<a href="{{ p.url }}" target="_blank">{{ p.title }}</a>{% else %}{{ p.title }}{% endif %}</td>
+                      <td><span class="badge badge-kind">{{ p.source_type }}</span></td>
+                      <td>{{ p.published_date or "—" }}</td>
+                    </tr>
+                  {% endfor %}
+                  </tbody>
+                </table>
+              </td>
             </tr>
           {% endfor %}
           </tbody>
@@ -65,8 +91,16 @@
 {% endif %}
 
 <script>
-function togglePapers(conceptId) {
-  var row = document.getElementById('papers-' + conceptId);
+function toggleSubsystem(subId) {
+  var row = document.getElementById('sub-' + subId);
+  if (row.style.display === 'none') {
+    row.style.display = '';
+  } else {
+    row.style.display = 'none';
+  }
+}
+function toggleConcept(conceptId) {
+  var row = document.getElementById('concept-' + conceptId);
   if (row.style.display === 'none') {
     row.style.display = '';
   } else {
