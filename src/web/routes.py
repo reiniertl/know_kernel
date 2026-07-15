@@ -871,6 +871,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
 
         motiv_cache: dict[str, list[str]] = {}
         subsys_cache: dict[str, list[str]] = {}
+        seen_sources: dict[str, int] = {}
         items: list[dict] = []
         for row in rows:
             s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
@@ -882,6 +883,13 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 motiv_cache[sid] = classify_source_motivations(conn, sid)
             if cid not in subsys_cache:
                 subsys_cache[cid] = _get_concept_subsystems(conn, cid)
+            if sid in seen_sources:
+                idx = seen_sources[sid]
+                existing = items[idx]
+                if c_attrs.get("name", cid) not in existing["concept_name"]:
+                    existing["concept_name"] += f", {c_attrs.get('name', cid)}"
+                continue
+            seen_sources[sid] = len(items)
             desc = c_attrs.get("description", "")
             items.append({
                 "source_id": sid,
