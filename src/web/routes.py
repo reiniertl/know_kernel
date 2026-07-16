@@ -1079,121 +1079,151 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         except Exception as e:
             return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
-    def _build_research_card_text(brief: dict, item: dict) -> str:
-        """Build research card text from ResearchBrief (ALG-KK-WEB-FEED-RESEARCH-CARD)."""
-        lines = [f"\U0001f52c *{item.get('title', '')}*"]
-        paper_url = item.get("url", "")
-        if paper_url:
-            lines.append(f"   \U0001f4c4 {paper_url}")
-        key_ideas = brief.get("key_ideas", [])
-        if isinstance(key_ideas, str):
-            import json as _json
-            try:
-                key_ideas = _json.loads(key_ideas)
-            except (ValueError, TypeError):
-                key_ideas = [key_ideas]
-        if key_ideas:
-            lines.append("   *Key Ideas:*")
-            for i, idea in enumerate(key_ideas, 1):
-                lines.append(f"   {i}. {idea}")
-        relevance = brief.get("relevance", "")
-        if relevance:
-            lines.append(f"   *Relevance:* _{relevance}_")
-        methodology = brief.get("methodology", "")
-        if methodology:
-            lines.append(f"   \U0001f527 {methodology}")
-        concept_url = item.get("concept_url", "")
-        if concept_url:
-            lines.append(f"   \U0001f517 {concept_url}")
-        return "\\n".join(lines).replace("\n", "\\n")
+    @app.get("/paper/{source_id:path}", response_class=HTMLResponse)
+    async def paper_detail(request: Request, source_id: str):
+        """Paper detail page (ALG-KK-WEB-PAPER-DETAIL).
 
-    def _query_research_brief(conn, source_id: str):
-        """Query ResearchBrief for a given source_id. Returns (brief_attrs, item_dict) or (None, None)."""
+        INV-KK-WEB-PAPER-404-NON-SOURCE: 404 for missing or non-Source.
+        INV-KK-WEB-PAPER-CONCEPT-CHAIN: all concepts shown with links.
+        """
+        conn = request.app.state.conn
+
         row = conn.execute(
-            "SELECT rb.attrs as rb_attrs, s.attrs as s_attrs, c.id as concept_id, c.attrs as concept_attrs "
-            "FROM nodes s "
-            "JOIN edges se ON se.kind = 'sourced-from' AND se.target_id = s.id "
-            "JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
-            "JOIN edges re ON re.kind = 'extracted-from' AND re.source_id IN "
-            "  (SELECT id FROM nodes WHERE kind = 'ResearchBrief') AND re.target_id = ev.id "
-            "JOIN nodes rb ON rb.id = re.source_id AND rb.kind = 'ResearchBrief' "
-            "LEFT JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
-            "  AND ce.source_id IN (SELECT id FROM nodes WHERE kind = 'Concept') "
-            "LEFT JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
-            "WHERE s.kind = 'Source' AND s.id = ? "
-            "LIMIT 1",
-            (source_id,),
+            "SELECT id, kind, attrs FROM nodes WHERE id = ?", (source_id,),
         ).fetchone()
         if row is None:
-            return None, None
-        rb_attrs = json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
-        s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
-        c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
-        cid = row[2] or ""
-        item = {
-            "title": s_attrs.get("title", source_id),
-            "url": s_attrs.get("url", ""),
-            "concept_url": f"{_BASE_URL}/research/{cid}" if cid else "",
+            raise HTTPException(status_code=404, detail="Paper not found")
+        node = _rows_to_dicts([row])[0]
+        if node["kind"] != "Source":
+            raise HTTPException(status_code=404, detail="Not a Source node")
+        s_attrs = node.get("attrs") or {}
+
+        ev_rows = conn.execute(
+            "SELECT ev.id, ev.attrs FROM nodes ev "
+            "JOIN edges se ON se.kind = 'sourced-from' AND se.source_id = ev.id "
+            "AND se.target_id = ? WHERE ev.kind = 'Evidence'",
+            (source_id,),
+        ).fetchall()
+        evidence_ids = [r[0] for r in ev_rows]
+
+        research_brief = None
+        if evidence_ids:
+            placeholders = ",".join("?" for _ in evidence_ids)
+            rb_row = conn.execute(
+                f"SELECT rb.attrs FROM nodes rb "
+                f"JOIN edges re ON re.kind = 'extracted-from' "
+                f"AND re.source_id = rb.id AND re.target_id IN ({placeholders}) "
+                f"WHERE rb.kind = 'ResearchBrief' LIMIT 1",
+                evidence_ids,
+            ).fetchone()
+            if rb_row:
+                rb_attrs = json.loads(rb_row[0]) if isinstance(rb_row[0], str) else (rb_row[0] or {})
+                key_ideas = rb_attrs.get("key_ideas", [])
+                if isinstance(key_ideas, str):
+                    try:
+                        key_ideas = json.loads(key_ideas)
+                    except (ValueError, TypeError):
+                        key_ideas = [key_ideas]
+                research_brief = {
+                    "key_ideas": key_ideas,
+                    "relevance": rb_attrs.get("relevance", ""),
+                    "methodology": rb_attrs.get("methodology", ""),
+                }
+
+        concepts = []
+        all_motivations: dict[str, dict] = {}
+        all_subsystems: set[str] = set()
+
+        if evidence_ids:
+            concept_rows = conn.execute(
+                f"SELECT DISTINCT c.id, c.attrs FROM nodes c "
+                f"JOIN edges ce ON ce.kind = 'extracted-from' "
+                f"AND ce.source_id = c.id AND ce.target_id IN ({placeholders}) "
+                f"WHERE c.kind = 'Concept'",
+                evidence_ids,
+            ).fetchall()
+
+            for crow in concept_rows:
+                cid = crow[0]
+                c_attrs = json.loads(crow[1]) if isinstance(crow[1], str) else (crow[1] or {})
+
+                brief = build_concept_brief(conn, cid)
+                motivs = classify_motivations(brief)
+                rs = research_score(conn, cid)
+
+                sub_name = ""
+                if brief.get("subsystem"):
+                    sub_name = brief["subsystem"].get("name", "")
+                    if sub_name:
+                        all_subsystems.add(sub_name)
+
+                concepts.append({
+                    "id": cid,
+                    "name": c_attrs.get("name", cid),
+                    "description": _truncate_words(c_attrs.get("description", ""), 100),
+                    "research_score": rs,
+                    "subsystem": sub_name,
+                })
+
+                for m in motivs:
+                    cat = m["category"]
+                    if cat not in all_motivations:
+                        all_motivations[cat] = m
+                    else:
+                        existing = all_motivations[cat]
+                        existing["evidence"] = existing.get("evidence", []) + m.get("evidence", [])
+                        if m.get("blast_radius") and m["blast_radius"].get("count", 0) > 0:
+                            if not existing.get("blast_radius"):
+                                existing["blast_radius"] = m["blast_radius"]
+                            else:
+                                seen_ids = {c["id"] for c in existing["blast_radius"].get("components", [])}
+                                for comp in m["blast_radius"].get("components", []):
+                                    if comp["id"] not in seen_ids:
+                                        existing["blast_radius"]["components"].append(comp)
+                                existing["blast_radius"]["count"] = len(existing["blast_radius"]["components"])
+
+        merged_motivations = list(all_motivations.values())
+
+        _CLAIM_KINDS = ("Problem", "Observation", "Discussion", "Benchmark", "Proposal", "Rejection")
+        _TEXT_FIELD = {
+            "Problem": "title", "Observation": "claim",
+            "Discussion": "title", "Benchmark": "result_summary",
+            "Proposal": "name", "Rejection": "proposal_title",
         }
-        return rb_attrs, item
+        paper_evidence: list[dict] = []
+        if evidence_ids:
+            ev_ph = ",".join("?" for _ in evidence_ids)
+            ck_ph = ",".join("?" for _ in _CLAIM_KINDS)
+            claim_rows = conn.execute(
+                f"SELECT n.id, n.kind, n.attrs FROM nodes n "
+                f"JOIN edges e ON e.kind = 'extracted-from' "
+                f"AND e.source_id = n.id AND e.target_id IN ({ev_ph}) "
+                f"WHERE n.kind IN ({ck_ph})",
+                evidence_ids + list(_CLAIM_KINDS),
+            ).fetchall()
+            for cr in claim_rows:
+                ca = json.loads(cr[2]) if isinstance(cr[2], str) else (cr[2] or {})
+                paper_evidence.append({
+                    "id": cr[0],
+                    "kind": cr[1],
+                    "text": ca.get(_TEXT_FIELD.get(cr[1], "title"), ""),
+                    "source_date": ca.get("source_date", ""),
+                })
+            paper_evidence.sort(key=lambda x: x.get("source_date") or "", reverse=True)
 
-    @app.get("/api/feed/research-card/{source_id:path}")
-    async def feed_research_card_json(request: Request, source_id: str):
-        """JSON research card for a single paper (ALG-KK-WEB-FEED-RESEARCH-CARD)."""
-        conn = request.app.state.conn
-        rb_attrs, item = _query_research_brief(conn, source_id)
-        if rb_attrs is None:
-            return JSONResponse({"error": "No research brief for this paper"}, status_code=404)
-        card_text = _build_research_card_text(rb_attrs, item)
-        key_ideas = rb_attrs.get("key_ideas", [])
-        if isinstance(key_ideas, str):
-            try:
-                key_ideas = json.loads(key_ideas)
-            except (ValueError, TypeError):
-                key_ideas = [key_ideas]
-        return JSONResponse({
-            "source_id": source_id,
-            "card": card_text,
-            "brief": {
-                "key_ideas": key_ideas,
-                "relevance": rb_attrs.get("relevance", ""),
-                "methodology": rb_attrs.get("methodology", ""),
+        return templates.TemplateResponse(
+            request,
+            "paper_detail.html",
+            {
+                "source": node,
+                "s_attrs": s_attrs,
+                "research_brief": research_brief,
+                "concepts": concepts,
+                "motivations": merged_motivations,
+                "subsystems": sorted(all_subsystems),
+                "paper_evidence": paper_evidence,
             },
-        })
-
-    @app.post("/api/feed/send-research/{source_id:path}")
-    async def feed_send_research_card(request: Request, source_id: str):
-        """Send research card via CLI (ALG-KK-WEB-FEED-RESEARCH-CARD)."""
-        import subprocess
-
-        body = await request.json()
-        cli_template = body.get("cli_command", "")
-        if not cli_template or "<CARD>" not in cli_template:
-            return JSONResponse({"error": "CLI command must contain <CARD> placeholder"}, status_code=400)
-
-        conn = request.app.state.conn
-        rb_attrs, item = _query_research_brief(conn, source_id)
-        if rb_attrs is None:
-            return JSONResponse({"error": "No research brief for this paper"}, status_code=404)
-
-        card_text = _build_research_card_text(rb_attrs, item)
-        full_command = cli_template.replace("<CARD>", card_text)
-
-        try:
-            result = subprocess.run(
-                full_command, shell=True, capture_output=True, text=True, timeout=30,
-            )
-            return JSONResponse({
-                "status": "ok" if result.returncode == 0 else "error",
-                "returncode": result.returncode,
-                "stdout": result.stdout[:500],
-                "stderr": result.stderr[:500],
-                "command_preview": full_command[:200],
-            })
-        except subprocess.TimeoutExpired:
-            return JSONResponse({"status": "timeout", "error": "Command timed out after 30s"}, status_code=504)
-        except Exception as e:
-            return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+        )
 
     @app.get("/radar", response_class=HTMLResponse)
     async def radar(request: Request):
@@ -1241,23 +1271,12 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             if pub_date and pub_date > entry["latest_date"]:
                 entry["latest_date"] = pub_date
 
-            has_rb = conn.execute(
-                "SELECT 1 FROM edges re "
-                "JOIN nodes rb ON rb.id = re.source_id AND rb.kind = 'ResearchBrief' "
-                "JOIN edges se ON se.kind = 'sourced-from' AND se.target_id = ? "
-                "JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
-                "WHERE re.kind = 'extracted-from' AND re.target_id = ev.id "
-                "LIMIT 1",
-                (sid,),
-            ).fetchone() is not None
-
             entry["papers"].append({
                 "source_id": sid,
                 "title": s_attrs.get("title", sid),
                 "url": s_attrs.get("url", ""),
                 "source_type": s_attrs.get("source_type", ""),
                 "published_date": pub_date,
-                "has_research_brief": has_rb,
             })
 
         by_subsystem: dict[str, dict] = {}

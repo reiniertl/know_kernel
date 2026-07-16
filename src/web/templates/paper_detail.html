@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/feed">&larr; Back to Feed</a></p>
+
+<div style="display:flex;justify-content:space-between;align-items:baseline;">
+  <h1 style="margin:0;">{{ s_attrs.title or source.id }}</h1>
+  <div>
+    <span class="badge badge-kind">{{ s_attrs.source_type }}</span>
+    {% for sub in subsystems %}
+    <span class="badge" style="background:#2980b9;">{{ sub }}</span>
+    {% endfor %}
+  </div>
+</div>
+
+<p style="color:#888;">
+  {{ s_attrs.published_date or "" }}
+  {% if s_attrs.url %}
+  &middot; <a href="{{ s_attrs.url }}" target="_blank">source paper &rarr;</a>
+  {% endif %}
+</p>
+
+{# --- RESEARCH BRIEF --- #}
+<div class="attrs-section">
+  <h3>Research Brief</h3>
+  {% if research_brief %}
+  <div>
+    <h4>Key Ideas</h4>
+    <ol>
+      {% for idea in research_brief.key_ideas %}
+      <li>{{ idea }}</li>
+      {% endfor %}
+    </ol>
+    {% if research_brief.relevance %}
+    <h4>Relevance</h4>
+    <p>{{ research_brief.relevance }}</p>
+    {% endif %}
+    {% if research_brief.methodology %}
+    <p><span class="badge badge-kind">{{ research_brief.methodology }}</span></p>
+    {% endif %}
+  </div>
+  {% else %}
+  <p style="color:#888;">No research brief extracted yet.</p>
+  {% endif %}
+</div>
+
+{# --- CONNECTED CONCEPTS --- #}
+{% if concepts %}
+<div class="attrs-section">
+  <h3>Connected Concepts</h3>
+  <div style="display:flex;gap:1rem;flex-wrap:wrap;">
+    {% for c in concepts %}
+    <div class="card" style="flex:1;min-width:200px;max-width:300px;">
+      <h4 style="margin:0 0 0.3em 0;"><a href="/research/{{ c.id }}">{{ c.name }}</a></h4>
+      <p style="font-size:0.85em; margin:0.2em 0;">Research Score: {{ "%.1f"|format(c.research_score) }}</p>
+      {% if c.subsystem %}
+      <span class="badge" style="background:#2980b9;font-size:0.75em;">{{ c.subsystem }}</span>
+      {% endif %}
+      {% if c.description %}
+      <p style="font-size:0.85em;color:#666;margin:0.3em 0 0 0;">{{ c.description }}</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{# --- WHY THIS MATTERS (aggregated motivations) --- #}
+{% if motivations %}
+<div class="attrs-section">
+  <h3>Why This Matters</h3>
+  {% for m in motivations %}
+  <div id="{{ m.category }}" style="margin-bottom:1.5em; padding:0.8em; border-left:3px solid
+    {% if m.category == 'security' %}#c0392b
+    {% elif m.category == 'stability' %}#e67e22
+    {% elif m.category == 'performance' %}#2980b9
+    {% elif m.category == 'scalability' %}#8e44ad
+    {% elif m.category == 'efficiency' %}#27ae60
+    {% elif m.category == 'hardware_enablement' %}#2c3e50
+    {% elif m.category == 'maintainability' %}#7f8c8d
+    {% endif %}; background:rgba(0,0,0,0.02);">
+
+    <h4 style="margin:0 0 0.3em 0;">{{ m.icon }} {{ m.label }}</h4>
+    <p style="margin:0.3em 0;">{{ m.headline }}</p>
+
+    <p style="margin:0.3em 0; font-style:italic; color:#2c3e50;">If addressed: {{ m.actionable }}</p>
+
+    {% if m.blast_radius and m.blast_radius.count > 0 %}
+    <p style="margin:0.3em 0; font-size:0.9em;">
+      Blast radius: <strong>{{ m.blast_radius.count }}</strong> dependent component{{ "s" if m.blast_radius.count != 1 else "" }}
+      &mdash;
+      {% for comp in m.blast_radius.components %}
+        <a href="/concepts/{{ comp.id }}">{{ comp.name }}</a>{% if not loop.last %}, {% endif %}
+      {% endfor %}
+    </p>
+    {% endif %}
+
+    {% if m.cross_links %}
+    <p style="margin:0.3em 0; font-size:0.85em; color:#666;">
+      See also:
+      {% for cl in m.cross_links %}
+        <a href="#{{ cl }}">{{ cl|upper|replace("_", " ") }}</a>{% if not loop.last %}, {% endif %}
+      {% endfor %}
+    </p>
+    {% endif %}
+
+    {% for ev in m.evidence %}
+      <div style="margin-left:1em; margin-top:0.4em; font-size:0.9em; color:#555;">
+        {% if ev.type == 'vulnerability' %}
+          <span class="badge" style="background:{% if ev.severity == 'critical' %}#c0392b{% elif ev.severity == 'high' %}#e67e22{% elif ev.severity == 'medium' %}#f1c40f;color:#333{% else %}#95a5a6{% endif %};">{{ ev.severity }}</span>
+          {{ ev.text }}{% if ev.cvss %} (CVSS {{ ev.cvss }}){% endif %}
+          {% if ev.affected_versions %}<small> &middot; {{ ev.affected_versions }}</small>{% endif %}
+          {% if ev.status %}<small> &middot; {{ ev.status }}</small>{% endif %}
+        {% elif ev.type == 'failure_mode' %}
+          &ldquo;{{ ev.text }}&rdquo; (blast radius: {{ ev.blast_radius }}{% if ev.recoverability %}, {{ ev.recoverability }}{% endif %})
+        {% elif ev.type == 'invariant' %}
+          <code>{{ ev.text }}</code>
+          {% if ev.strength %}<small> &middot; {{ ev.strength }}</small>{% endif %}
+          {% if ev.scope %}<small> &middot; {{ ev.scope }}</small>{% endif %}
+        {% elif ev.type == 'problem' %}
+          <span class="badge" style="background:{% if ev.severity == 'critical' %}#c0392b{% elif ev.severity == 'high' %}#e67e22{% elif ev.severity == 'medium' %}#f1c40f;color:#333{% else %}#95a5a6{% endif %};">{{ ev.severity }}</span>
+          <strong>{{ ev.text }}</strong>
+          {% if ev.description %}<br><small style="margin-left:2em;">{{ ev.description }}</small>{% endif %}
+        {% elif ev.type == 'profile' %}
+          {{ ev.text }}
+          {% if ev.complexity %}<small> &middot; {{ ev.complexity }}</small>{% endif %}
+        {% elif ev.type == 'benchmark' %}
+          {{ ev.text }}
+          {% if ev.conditions %}<small> &middot; {{ ev.conditions }}</small>{% endif %}
+        {% elif ev.type == 'fix' %}
+          {% if ev.fix_type %}<span class="badge badge-kind">{{ ev.fix_type }}</span>{% endif %}
+          {{ ev.text }}
+          {% if ev.commit %}<code>{{ ev.commit }}</code>{% endif %}
+          {% if ev.source_date %}<small> &middot; {{ ev.source_date }}</small>{% endif %}
+        {% else %}
+          &ldquo;{{ ev.text }}&rdquo;
+          {% if ev.type %}<small>({{ ev.type }})</small>{% endif %}
+        {% endif %}
+
+        {% if ev.source_url %}
+          <a href="{{ ev.source_url }}" target="_blank" style="margin-left:0.3em; font-size:0.85em;">source &rarr;</a>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# --- PAPER EVIDENCE --- #}
+{% if paper_evidence %}
+<div class="attrs-section">
+  <h3>Paper Evidence</h3>
+  <table>
+    <thead><tr><th>Date</th><th>Type</th><th>Evidence</th></tr></thead>
+    <tbody>
+    {% for ev in paper_evidence %}
+    <tr>
+      <td style="white-space:nowrap;">{{ ev.source_date or "&mdash;" }}</td>
+      <td><span class="badge badge-kind"
+        {% if ev.kind == 'Problem' %}style="background:#f1c40f;color:#333;"
+        {% elif ev.kind == 'Discussion' %}style="background:#2980b9;"
+        {% elif ev.kind == 'Observation' %}style="background:#27ae60;"
+        {% elif ev.kind == 'Benchmark' %}style="background:#e67e22;"
+        {% elif ev.kind == 'Proposal' %}style="background:#8e44ad;"
+        {% elif ev.kind == 'Rejection' %}style="background:#c0392b;"
+        {% endif %}>{{ ev.kind }}</span></td>
+      <td>{{ ev.text }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% endblock %}

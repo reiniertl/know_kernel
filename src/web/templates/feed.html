@@ -31,7 +31,8 @@
     <tr>
       <td style="font-size:0.85em; white-space:nowrap;">{{ item.published_date or "—" }}</td>
       <td>
-        {% if item.url %}<a href="{{ item.url }}" target="_blank">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}
+        <a href="/paper/{{ item.source_id }}">{{ item.title }}</a>
+        {% if item.url %}<a href="{{ item.url }}" target="_blank" style="font-size:0.8em; margin-left:0.3em;">source &rarr;</a>{% endif %}
       </td>
       <td><span class="badge badge-kind">{{ item.source_type }}</span></td>
       <td><a href="/research/{{ item.concept_id }}">{{ item.concept_name }}</a></td>
@@ -49,8 +50,6 @@
       <td style="white-space:nowrap;">
         <button onclick="previewCard('{{ item.source_id }}', this)" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#7f8c8d; color:#fff; border:none; border-radius:3px; font-size:0.8em;" title="Preview card text">Preview</button>
         <button onclick="sendCard('{{ item.source_id }}', this)" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#2980b9; color:#fff; border:none; border-radius:3px; font-size:0.8em;" title="Send card via CLI command">Send</button>
-        <button onclick="previewResearchCard('{{ item.source_id }}', this)" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#8e44ad; color:#fff; border:none; border-radius:3px; font-size:0.8em;" title="Preview research card">Research</button>
-        <button onclick="sendResearchCard('{{ item.source_id }}', this)" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#2c3e50; color:#fff; border:none; border-radius:3px; font-size:0.8em;" title="Send research card">Send Research</button>
       </td>
     </tr>
     <tr id="preview-row-{{ item.source_id }}" style="display:none;">
@@ -127,83 +126,5 @@ async function sendCard(sourceId, btn) {
   }, 3000);
 }
 
-async function previewResearchCard(sourceId, btn) {
-  var row = document.getElementById('preview-row-' + sourceId);
-  var pre = row.querySelector('pre');
-  if (row.style.display !== 'none' && pre.dataset.mode === 'research') {
-    row.style.display = 'none';
-    return;
-  }
-  try {
-    var resp = await fetch('/api/feed/research-card/' + encodeURIComponent(sourceId));
-    var data = await resp.json();
-    if (resp.status === 404) {
-      pre.textContent = 'No research brief for this paper';
-    } else {
-      var lines = [];
-      if (data.brief) {
-        lines.push('Key Ideas:');
-        (data.brief.key_ideas || []).forEach(function(idea, i) {
-          lines.push('  ' + (i+1) + '. ' + idea);
-        });
-        lines.push('');
-        lines.push('Relevance: ' + (data.brief.relevance || ''));
-        lines.push('Methodology: ' + (data.brief.methodology || ''));
-        lines.push('');
-        lines.push('Card text:');
-        lines.push(data.card || '');
-      }
-      pre.textContent = lines.join('\n');
-    }
-    pre.dataset.mode = 'research';
-    row.style.display = '';
-  } catch(e) {
-    pre.textContent = 'Error loading research brief';
-    pre.dataset.mode = 'research';
-    row.style.display = '';
-  }
-}
-
-async function sendResearchCard(sourceId, btn) {
-  var cliTemplate = document.getElementById('cli-command').value.trim();
-  var statusEl = document.getElementById('cli-status');
-  if (!cliTemplate || cliTemplate.indexOf('<CARD>') === -1) {
-    statusEl.textContent = 'Error: CLI command must contain <CARD> placeholder';
-    statusEl.style.color = '#c0392b';
-    return;
-  }
-  btn.disabled = true;
-  btn.textContent = '...';
-  statusEl.textContent = '';
-  try {
-    var resp = await fetch('/api/feed/send-research/' + encodeURIComponent(sourceId), {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({cli_command: cliTemplate})
-    });
-    var result = await resp.json();
-    if (result.status === 'ok') {
-      btn.textContent = 'OK';
-      btn.style.background = '#27ae60';
-      statusEl.textContent = 'Research sent: ' + sourceId;
-      statusEl.style.color = '#27ae60';
-    } else {
-      btn.textContent = 'Err';
-      btn.style.background = '#c0392b';
-      statusEl.textContent = 'Error: ' + (result.error || 'unknown');
-      statusEl.style.color = '#c0392b';
-    }
-  } catch(e) {
-    btn.textContent = 'Err';
-    btn.style.background = '#c0392b';
-    statusEl.textContent = 'Network error: ' + e.message;
-    statusEl.style.color = '#c0392b';
-  }
-  setTimeout(function() {
-    btn.textContent = 'Send Research';
-    btn.style.background = '#2c3e50';
-    btn.disabled = false;
-  }, 3000);
-}
 </script>
 {% endblock %}
