@@ -69,10 +69,22 @@
                   <tbody>
                   {% for p in c.papers %}
                     <tr>
-                      <td>{% if p.url %}<a href="{{ p.url }}" target="_blank">{{ p.title }}</a>{% else %}{{ p.title }}{% endif %}</td>
+                      <td>
+                        {% if p.url %}<a href="{{ p.url }}" target="_blank">{{ p.title }}</a>{% else %}{{ p.title }}{% endif %}
+                        {% if p.has_research_brief %}
+                        <a href="#" onclick="previewRadarResearch('{{ p.source_id }}', this); return false;" title="View research brief" style="text-decoration:none; margin-left:0.3em;">🔬</a>
+                        {% endif %}
+                      </td>
                       <td><span class="badge badge-kind">{{ p.source_type }}</span></td>
                       <td>{{ p.published_date or "—" }}</td>
                     </tr>
+                    {% if p.has_research_brief %}
+                    <tr id="radar-rb-{{ p.source_id }}" style="display:none;">
+                      <td colspan="3">
+                        <pre style="white-space:pre-wrap; font-size:0.85em; background:#fafafa; padding:0.5rem; border:1px solid #eee; margin:0;"></pre>
+                      </td>
+                    </tr>
+                    {% endif %}
                   {% endfor %}
                   </tbody>
                 </table>
@@ -105,6 +117,38 @@ function toggleConcept(conceptId) {
     row.style.display = '';
   } else {
     row.style.display = 'none';
+  }
+}
+async function previewRadarResearch(sourceId, link) {
+  var row = document.getElementById('radar-rb-' + sourceId);
+  if (!row) return;
+  var pre = row.querySelector('pre');
+  if (row.style.display !== 'none') {
+    row.style.display = 'none';
+    return;
+  }
+  try {
+    var resp = await fetch('/api/feed/research-card/' + encodeURIComponent(sourceId));
+    var data = await resp.json();
+    if (resp.status === 404) {
+      pre.textContent = 'No research brief available';
+    } else {
+      var lines = [];
+      if (data.brief) {
+        lines.push('Key Ideas:');
+        (data.brief.key_ideas || []).forEach(function(idea, i) {
+          lines.push('  ' + (i+1) + '. ' + idea);
+        });
+        lines.push('');
+        lines.push('Relevance: ' + (data.brief.relevance || ''));
+        lines.push('Methodology: ' + (data.brief.methodology || ''));
+      }
+      pre.textContent = lines.join('\n');
+    }
+    row.style.display = '';
+  } catch(e) {
+    pre.textContent = 'Error loading research brief';
+    row.style.display = '';
   }
 }
 </script>

@@ -1241,12 +1241,23 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             if pub_date and pub_date > entry["latest_date"]:
                 entry["latest_date"] = pub_date
 
+            has_rb = conn.execute(
+                "SELECT 1 FROM edges re "
+                "JOIN nodes rb ON rb.id = re.source_id AND rb.kind = 'ResearchBrief' "
+                "JOIN edges se ON se.kind = 'sourced-from' AND se.target_id = ? "
+                "JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
+                "WHERE re.kind = 'extracted-from' AND re.target_id = ev.id "
+                "LIMIT 1",
+                (sid,),
+            ).fetchone() is not None
+
             entry["papers"].append({
                 "source_id": sid,
                 "title": s_attrs.get("title", sid),
                 "url": s_attrs.get("url", ""),
                 "source_type": s_attrs.get("source_type", ""),
                 "published_date": pub_date,
+                "has_research_brief": has_rb,
             })
 
         by_subsystem: dict[str, dict] = {}
