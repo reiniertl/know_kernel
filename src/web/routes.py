@@ -967,11 +967,12 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         summary = item.get("summary", "")
         if summary:
             lines.append(f"   _{summary}_")
+        paper_url = item.get("url", "")
+        if paper_url:
+            lines.append(f"   \U0001f4c4 {paper_url}")
         concept_url = item.get("concept_url", "")
         if concept_url:
             lines.append(f"   \U0001f517 {concept_url}")
-        elif item.get("url"):
-            lines.append(f"   \U0001f517 {item['url']}")
         return "\\n".join(lines).replace("\n", "\\n")
 
     @app.get("/api/feed/card/{source_id:path}")
@@ -1060,6 +1061,122 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         }
 
         card_text = _build_single_card_text(item)
+        full_command = cli_template.replace("<CARD>", card_text)
+
+        try:
+            result = subprocess.run(
+                full_command, shell=True, capture_output=True, text=True, timeout=30,
+            )
+            return JSONResponse({
+                "status": "ok" if result.returncode == 0 else "error",
+                "returncode": result.returncode,
+                "stdout": result.stdout[:500],
+                "stderr": result.stderr[:500],
+                "command_preview": full_command[:200],
+            })
+        except subprocess.TimeoutExpired:
+            return JSONResponse({"status": "timeout", "error": "Command timed out after 30s"}, status_code=504)
+        except Exception as e:
+            return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+
+    def _build_research_card_text(brief: dict, item: dict) -> str:
+        """Build research card text from ResearchBrief (ALG-KK-WEB-FEED-RESEARCH-CARD)."""
+        lines = [f"\U0001f52c *{item.get('title', '')}*"]
+        paper_url = item.get("url", "")
+        if paper_url:
+            lines.append(f"   \U0001f4c4 {paper_url}")
+        key_ideas = brief.get("key_ideas", [])
+        if isinstance(key_ideas, str):
+            import json as _json
+            try:
+                key_ideas = _json.loads(key_ideas)
+            except (ValueError, TypeError):
+                key_ideas = [key_ideas]
+        if key_ideas:
+            lines.append("   *Key Ideas:*")
+            for i, idea in enumerate(key_ideas, 1):
+                lines.append(f"   {i}. {idea}")
+        relevance = brief.get("relevance", "")
+        if relevance:
+            lines.append(f"   *Relevance:* _{relevance}_")
+        methodology = brief.get("methodology", "")
+        if methodology:
+            lines.append(f"   \U0001f527 {methodology}")
+        concept_url = item.get("concept_url", "")
+        if concept_url:
+            lines.append(f"   \U0001f517 {concept_url}")
+        return "\\n".join(lines).replace("\n", "\\n")
+
+    def _query_research_brief(conn, source_id: str):
+        """Query ResearchBrief for a given source_id. Returns (brief_attrs, item_dict) or (None, None)."""
+        row = conn.execute(
+            "SELECT rb.attrs as rb_attrs, s.attrs as s_attrs, c.id as concept_id, c.attrs as concept_attrs "
+            "FROM nodes s "
+            "JOIN edges se ON se.kind = 'sourced-from' AND se.target_id = s.id "
+            "JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
+            "JOIN edges re ON re.kind = 'extracted-from' AND re.source_id IN "
+            "  (SELECT id FROM nodes WHERE kind = 'ResearchBrief') AND re.target_id = ev.id "
+            "JOIN nodes rb ON rb.id = re.source_id AND rb.kind = 'ResearchBrief' "
+            "LEFT JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
+            "  AND ce.source_id IN (SELECT id FROM nodes WHERE kind = 'Concept') "
+            "LEFT JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
+            "WHERE s.kind = 'Source' AND s.id = ? "
+            "LIMIT 1",
+            (source_id,),
+        ).fetchone()
+        if row is None:
+            return None, None
+        rb_attrs = json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
+        s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
+        c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
+        cid = row[2] or ""
+        item = {
+            "title": s_attrs.get("title", source_id),
+            "url": s_attrs.get("url", ""),
+            "concept_url": f"{_BASE_URL}/research/{cid}" if cid else "",
+        }
+        return rb_attrs, item
+
+    @app.get("/api/feed/research-card/{source_id:path}")
+    async def feed_research_card_json(request: Request, source_id: str):
+        """JSON research card for a single paper (ALG-KK-WEB-FEED-RESEARCH-CARD)."""
+        conn = request.app.state.conn
+        rb_attrs, item = _query_research_brief(conn, source_id)
+        if rb_attrs is None:
+            return JSONResponse({"error": "No research brief for this paper"}, status_code=404)
+        card_text = _build_research_card_text(rb_attrs, item)
+        key_ideas = rb_attrs.get("key_ideas", [])
+        if isinstance(key_ideas, str):
+            try:
+                key_ideas = json.loads(key_ideas)
+            except (ValueError, TypeError):
+                key_ideas = [key_ideas]
+        return JSONResponse({
+            "source_id": source_id,
+            "card": card_text,
+            "brief": {
+                "key_ideas": key_ideas,
+                "relevance": rb_attrs.get("relevance", ""),
+                "methodology": rb_attrs.get("methodology", ""),
+            },
+        })
+
+    @app.post("/api/feed/send-research/{source_id:path}")
+    async def feed_send_research_card(request: Request, source_id: str):
+        """Send research card via CLI (ALG-KK-WEB-FEED-RESEARCH-CARD)."""
+        import subprocess
+
+        body = await request.json()
+        cli_template = body.get("cli_command", "")
+        if not cli_template or "<CARD>" not in cli_template:
+            return JSONResponse({"error": "CLI command must contain <CARD> placeholder"}, status_code=400)
+
+        conn = request.app.state.conn
+        rb_attrs, item = _query_research_brief(conn, source_id)
+        if rb_attrs is None:
+            return JSONResponse({"error": "No research brief for this paper"}, status_code=404)
+
+        card_text = _build_research_card_text(rb_attrs, item)
         full_command = cli_template.replace("<CARD>", card_text)
 
         try:
