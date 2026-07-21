@@ -855,69 +855,83 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         page: int = Query(1, ge=1),
         per_page: int = Query(50, ge=10, le=200),
     ):
-        """Research feed as paginated flat table ordered by publication date descending (ALG-KK-WEB-FEED-LIST)."""
+        """Research feed as paginated flat table (ALG-KK-WEB-FEED-LIST).
+
+        INV-KK-WEB-QUERY-BOUNDED: SQL-level LIMIT/OFFSET; enrichment
+        only for current page's papers.
+        """
         conn = request.app.state.conn
 
-        rows = conn.execute(
-            "SELECT s.id, s.attrs, c.id as concept_id, c.attrs as concept_attrs "
+        _RESEARCH_TYPES = "('paper','preprint','conference-paper','conference-proceedings')"
+        _BASE_WHERE = (
             "FROM nodes s "
             "JOIN edges se ON se.kind = 'sourced-from' AND se.target_id = s.id "
             "JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
             "JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
             "JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
             "WHERE s.kind = 'Source' "
-            "AND json_extract(s.attrs, '$.source_type') IN "
-            "('paper','preprint','conference-paper','conference-proceedings') "
-            "ORDER BY json_extract(s.attrs, '$.published_date') DESC, s.id"
+            f"AND json_extract(s.attrs, '$.source_type') IN {_RESEARCH_TYPES}"
+        )
+
+        total = conn.execute(f"SELECT COUNT(DISTINCT s.id) {_BASE_WHERE}").fetchone()[0]
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = min(page, total_pages)
+
+        page_sources = conn.execute(
+            f"SELECT DISTINCT s.id, s.attrs {_BASE_WHERE} "
+            "ORDER BY json_extract(s.attrs, '$.published_date') DESC, s.id "
+            "LIMIT ? OFFSET ?",
+            (per_page, (page - 1) * per_page),
         ).fetchall()
 
         from graph.briefing import classify_source_motivations
 
-        motiv_cache: dict[str, list[str]] = {}
-        subsys_cache: dict[str, list[str]] = {}
-        seen_sources: dict[str, int] = {}
         items: list[dict] = []
-        for row in rows:
-            s_attrs = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
-            c_attrs = json.loads(row[3]) if isinstance(row[3], str) else (row[3] or {})
-            pub_date = s_attrs.get("published_date", s_attrs.get("source_date", ""))
-            sid = row[0]
-            cid = row[2]
-            if sid not in motiv_cache:
-                motiv_cache[sid] = classify_source_motivations(conn, sid)
-            if cid not in subsys_cache:
-                subsys_cache[cid] = _get_concept_subsystems(conn, cid)
-            if sid in seen_sources:
-                idx = seen_sources[sid]
-                existing = items[idx]
-                if c_attrs.get("name", cid) not in existing["concept_name"]:
-                    existing["concept_name"] += f", {c_attrs.get('name', cid)}"
-                continue
-            seen_sources[sid] = len(items)
-            desc = c_attrs.get("description", "")
+        for s_row in page_sources:
+            sid = s_row[0]
+            s_attrs = json.loads(s_row[1]) if isinstance(s_row[1], str) else (s_row[1] or {})
+
+            concept_rows = conn.execute(
+                "SELECT DISTINCT c.id, c.attrs "
+                "FROM edges se JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
+                "JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
+                "JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
+                "WHERE se.kind = 'sourced-from' AND se.target_id = ?",
+                (sid,),
+            ).fetchall()
+
+            concept_names = []
+            first_cid = ""
+            first_desc = ""
+            subsystems: list[str] = []
+            for crow in concept_rows:
+                cid = crow[0]
+                c_attrs = json.loads(crow[1]) if isinstance(crow[1], str) else (crow[1] or {})
+                concept_names.append(c_attrs.get("name", cid))
+                if not first_cid:
+                    first_cid = cid
+                    first_desc = c_attrs.get("description", "")
+                for s in _get_concept_subsystems(conn, cid):
+                    if s not in subsystems:
+                        subsystems.append(s)
+
             items.append({
                 "source_id": sid,
                 "title": s_attrs.get("title", sid),
                 "url": s_attrs.get("url", ""),
                 "source_type": s_attrs.get("source_type", ""),
-                "published_date": pub_date,
-                "concept_id": cid,
-                "concept_name": c_attrs.get("name", cid),
-                "motivations": motiv_cache[sid],
-                "summary": _truncate_words(desc, 100),
-                "subsystems": subsys_cache[cid],
+                "published_date": s_attrs.get("published_date", s_attrs.get("source_date", "")),
+                "concept_id": first_cid,
+                "concept_name": ", ".join(concept_names) if concept_names else "",
+                "motivations": classify_source_motivations(conn, sid),
+                "summary": _truncate_words(first_desc, 100),
+                "subsystems": subsystems,
             })
-
-        total = len(items)
-        total_pages = max(1, (total + per_page - 1) // per_page)
-        page = min(page, total_pages)
-        start = (page - 1) * per_page
-        page_items = items[start:start + per_page]
 
         return templates.TemplateResponse(
             request,
             "feed.html",
-            {"items": page_items, "total": total, "page": page, "per_page": per_page, "total_pages": total_pages},
+            {"items": items, "total": total, "page": page, "per_page": per_page, "total_pages": total_pages},
         )
 
     def _truncate_words(text: str, max_words: int = 100) -> str:
