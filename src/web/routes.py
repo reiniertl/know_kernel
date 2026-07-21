@@ -863,50 +863,59 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         conn = request.app.state.conn
 
         _RESEARCH_TYPES = "('paper','preprint','conference-paper','conference-proceedings')"
-        _BASE_WHERE = (
-            "FROM nodes s "
-            "JOIN edges se ON se.kind = 'sourced-from' AND se.target_id = s.id "
-            "JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
-            "JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
-            "JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
-            "WHERE s.kind = 'Source' "
-            f"AND json_extract(s.attrs, '$.source_type') IN {_RESEARCH_TYPES}"
+        _SOURCE_WHERE = (
+            "FROM nodes WHERE kind = 'Source' "
+            f"AND json_extract(attrs, '$.source_type') IN {_RESEARCH_TYPES}"
         )
 
-        total = conn.execute(f"SELECT COUNT(DISTINCT s.id) {_BASE_WHERE}").fetchone()[0]
+        total = conn.execute(f"SELECT COUNT(*) {_SOURCE_WHERE}").fetchone()[0]
         total_pages = max(1, (total + per_page - 1) // per_page)
         page = min(page, total_pages)
 
         page_sources = conn.execute(
-            f"SELECT DISTINCT s.id, s.attrs {_BASE_WHERE} "
-            "ORDER BY json_extract(s.attrs, '$.published_date') DESC, s.id "
+            f"SELECT id, attrs {_SOURCE_WHERE} "
+            "ORDER BY json_extract(attrs, '$.published_date') DESC, id "
             "LIMIT ? OFFSET ?",
             (per_page, (page - 1) * per_page),
         ).fetchall()
 
         from graph.briefing import classify_source_motivations
 
-        items: list[dict] = []
-        for s_row in page_sources:
-            sid = s_row[0]
-            s_attrs = json.loads(s_row[1]) if isinstance(s_row[1], str) else (s_row[1] or {})
+        page_sids = [r[0] for r in page_sources]
+        page_attrs_map = {}
+        for r in page_sources:
+            page_attrs_map[r[0]] = json.loads(r[1]) if isinstance(r[1], str) else (r[1] or {})
 
+        concepts_by_source: dict[str, list[tuple[str, dict]]] = {sid: [] for sid in page_sids}
+        if page_sids:
+            ph = ",".join("?" for _ in page_sids)
             concept_rows = conn.execute(
-                "SELECT DISTINCT c.id, c.attrs "
-                "FROM edges se JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
-                "JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
-                "JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
-                "WHERE se.kind = 'sourced-from' AND se.target_id = ?",
-                (sid,),
+                f"SELECT se.target_id as source_id, c.id, c.attrs "
+                f"FROM edges se "
+                f"JOIN nodes ev ON ev.id = se.source_id AND ev.kind = 'Evidence' "
+                f"JOIN edges ce ON ce.kind = 'extracted-from' AND ce.target_id = ev.id "
+                f"JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
+                f"WHERE se.kind = 'sourced-from' AND se.target_id IN ({ph})",
+                page_sids,
             ).fetchall()
+            for src_id, cid, c_raw in concept_rows:
+                c_attrs = json.loads(c_raw) if isinstance(c_raw, str) else (c_raw or {})
+                concepts_by_source[src_id].append((cid, c_attrs))
+
+        items: list[dict] = []
+        for sid in page_sids:
+            s_attrs = page_attrs_map[sid]
+            crows = concepts_by_source.get(sid, [])
 
             concept_names = []
             first_cid = ""
             first_desc = ""
             subsystems: list[str] = []
-            for crow in concept_rows:
-                cid = crow[0]
-                c_attrs = json.loads(crow[1]) if isinstance(crow[1], str) else (crow[1] or {})
+            seen_cids: set[str] = set()
+            for cid, c_attrs in crows:
+                if cid in seen_cids:
+                    continue
+                seen_cids.add(cid)
                 concept_names.append(c_attrs.get("name", cid))
                 if not first_cid:
                     first_cid = cid
