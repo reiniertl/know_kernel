@@ -1260,9 +1260,47 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             },
         )
 
+    def _classify_concept_motivations_fast(name: str, description: str, subsystem: str) -> list[str]:
+        """Keyword-based motivation classification — pure Python, no DB (INV-KK-WEB-QUERY-BOUNDED)."""
+        text = f"{name} {description}".lower()
+        labels = []
+
+        _PERF_KW = {"latency", "throughput", "overhead", "bottleneck", "faster", "slower",
+                     "speedup", "bandwidth", "iops", "cycles", "cache miss", "tlb miss", "context switch"}
+        _SCALE_KW = {"numa", "scalab", "contention", "lock contention", "per-cpu", "per-node",
+                      "cache line bouncing", "false sharing", "thundering herd", "multi-socket"}
+        _EFF_KW = {"memory overhead", "memory footprint", "power consumption", "energy",
+                    "cpu utilization", "footprint", "bloat", "fragmentation", "metadata overhead"}
+        _HW_KW = {"hardware", "cxl", "pcie", "nvme", "accelerat", "fpga", "gpu", "dpu",
+                   "tdx", "sev", "persistent memory", "pmem", "ddr5", "hbm"}
+        _HW_SUBS = {"Device Drivers", "Virtualization", "Storage Stack", "Firmware Interface", "Cryptography"}
+        _SEC_KW = {"security", "vulnerab", "exploit", "attack", "access control", "sandbox",
+                    "isolation", "seccomp", "selinux", "capability", "privilege"}
+
+        if any(kw in text for kw in _SEC_KW) or subsystem == "Security":
+            labels.append("SECURITY")
+        if any(kw in text for kw in {"crash", "fault", "failure", "reliability", "stability", "recovery"}):
+            labels.append("STABILITY")
+        if any(kw in text for kw in _PERF_KW):
+            labels.append("PERFORMANCE")
+        if any(kw in text for kw in _SCALE_KW):
+            labels.append("SCALABILITY")
+        if any(kw in text for kw in _EFF_KW):
+            labels.append("EFFICIENCY")
+        if any(kw in text for kw in _HW_KW) or subsystem in _HW_SUBS:
+            labels.append("HARDWARE ENABLEMENT")
+        if any(kw in text for kw in {"maintainab", "complexity", "technical debt", "refactor", "modular"}):
+            labels.append("MAINTAINABILITY")
+
+        return labels
+
     @app.get("/radar", response_class=HTMLResponse)
     async def radar(request: Request):
-        """Research radar: papers grouped by subsystem then concept (ALG-KK-WEB-RADAR)."""
+        """Research radar: papers grouped by subsystem then concept (ALG-KK-WEB-RADAR).
+
+        INV-KK-WEB-QUERY-BOUNDED: no per-paper enrichment queries.
+        Motivations via keyword matching on concept attrs.
+        """
         conn = request.app.state.conn
 
         rows = conn.execute(
@@ -1278,7 +1316,20 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "ORDER BY c.id, json_extract(s.attrs, '$.published_date') DESC"
         ).fetchall()
 
-        from graph.briefing import classify_source_motivations
+        concept_ids = list({row[2] for row in rows})
+        subsystem_map: dict[str, str] = {}
+        if concept_ids:
+            ph = ",".join("?" for _ in concept_ids)
+            sub_rows = conn.execute(
+                f"SELECT e.source_id, json_extract(n.attrs, '$.name') "
+                f"FROM edges e JOIN nodes n ON e.target_id = n.id "
+                f"WHERE e.kind = 'belongs-to' AND n.kind = 'Subsystem' "
+                f"AND e.source_id IN ({ph})",
+                concept_ids,
+            ).fetchall()
+            for cid, sname in sub_rows:
+                if sname:
+                    subsystem_map[cid] = sname
 
         by_concept: dict[str, dict] = {}
         for row in rows:
@@ -1289,20 +1340,20 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             pub_date = s_attrs.get("published_date", s_attrs.get("source_date", ""))
 
             if cid not in by_concept:
-                subs = _get_concept_subsystems(conn, cid)
+                sub_name = subsystem_map.get(cid, "Uncategorized")
+                motivs = _classify_concept_motivations_fast(
+                    c_attrs.get("name", ""), c_attrs.get("description", ""), sub_name,
+                )
                 by_concept[cid] = {
                     "concept_id": cid,
                     "concept_name": c_attrs.get("name", cid),
-                    "subsystem": subs[0] if subs else "Uncategorized",
-                    "motivations_set": set(),
+                    "subsystem": sub_name,
+                    "motivations": sorted(motivs),
                     "latest_date": "",
                     "papers": [],
                 }
 
             entry = by_concept[cid]
-            motivs = classify_source_motivations(conn, sid)
-            entry["motivations_set"].update(motivs)
-
             if pub_date and pub_date > entry["latest_date"]:
                 entry["latest_date"] = pub_date
 
@@ -1316,7 +1367,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
 
         by_subsystem: dict[str, dict] = {}
         for c in by_concept.values():
-            c["motivations"] = sorted(c.pop("motivations_set"))
             c["paper_count"] = len(c["papers"])
             sub_name = c["subsystem"]
             if sub_name not in by_subsystem:
