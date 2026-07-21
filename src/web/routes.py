@@ -850,8 +850,12 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         )
 
     @app.get("/feed", response_class=HTMLResponse)
-    async def research_feed(request: Request):
-        """Research feed as flat table ordered by publication date descending (ALG-KK-WEB-FEED-LIST)."""
+    async def research_feed(
+        request: Request,
+        page: int = Query(1, ge=1),
+        per_page: int = Query(50, ge=10, le=200),
+    ):
+        """Research feed as paginated flat table ordered by publication date descending (ALG-KK-WEB-FEED-LIST)."""
         conn = request.app.state.conn
 
         rows = conn.execute(
@@ -904,10 +908,16 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "subsystems": subsys_cache[cid],
             })
 
+        total = len(items)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = min(page, total_pages)
+        start = (page - 1) * per_page
+        page_items = items[start:start + per_page]
+
         return templates.TemplateResponse(
             request,
             "feed.html",
-            {"items": items, "total": len(items)},
+            {"items": page_items, "total": total, "page": page, "per_page": per_page, "total_pages": total_pages},
         )
 
     def _truncate_words(text: str, max_words: int = 100) -> str:

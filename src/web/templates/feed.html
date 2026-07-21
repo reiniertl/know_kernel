@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Research Feed</h1>
-<p>{{ total }} research publication{{ "s" if total != 1 else "" }}</p>
+<p>{{ total }} research publication{{ "s" if total != 1 else "" }} (page {{ page }} of {{ total_pages }})</p>
 
 <div style="margin-bottom:1.5rem; padding:0.8rem; background:#f5f5f5; border:1px solid #ddd; border-radius:4px;">
   <label style="font-weight:bold;">CLI Command Template</label>
@@ -62,6 +62,18 @@
 </table>
 {% else %}
 <p>No research publications found.</p>
+{% endif %}
+
+{% if total_pages > 1 %}
+<div style="margin-top:1rem; text-align:center; font-size:0.95em;">
+  {% if page > 1 %}
+  <a href="/feed?page={{ page - 1 }}&per_page={{ per_page }}" style="margin-right:1rem;">&larr; Prev</a>
+  {% endif %}
+  Page {{ page }} of {{ total_pages }}
+  {% if page < total_pages %}
+  <a href="/feed?page={{ page + 1 }}&per_page={{ per_page }}" style="margin-left:1rem;">Next &rarr;</a>
+  {% endif %}
+</div>
 {% endif %}
 
 <script>
