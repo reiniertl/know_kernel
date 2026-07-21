@@ -970,9 +970,9 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         paper_url = item.get("url", "")
         if paper_url:
             lines.append(f"   \U0001f4c4 {paper_url}")
-        concept_url = item.get("concept_url", "")
-        if concept_url:
-            lines.append(f"   \U0001f517 {concept_url}")
+        research_card_url = item.get("research_card_url", "")
+        if research_card_url:
+            lines.append(f"   \U0001f517 {research_card_url}")
         return "\\n".join(lines).replace("\n", "\\n")
 
     @app.get("/api/feed/card/{source_id:path}")
@@ -1006,6 +1006,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "source_type": s_attrs.get("source_type", ""),
             "concept": c_attrs.get("name", cid),
             "concept_url": f"{_BASE_URL}/research/{cid}",
+            "research_card_url": f"{_BASE_URL}/paper/{source_id}",
             "summary": _truncate_words(c_attrs.get("description", ""), 100),
             "subsystems": _get_concept_subsystems(conn, cid),
             "motivations": classify_source_motivations(conn, source_id),
@@ -1055,6 +1056,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "source_type": s_attrs.get("source_type", ""),
             "concept": c_attrs.get("name", cid),
             "concept_url": f"{_BASE_URL}/research/{cid}",
+            "research_card_url": f"{_BASE_URL}/paper/{source_id}",
             "summary": _truncate_words(c_attrs.get("description", ""), 100),
             "subsystems": _get_concept_subsystems(conn, cid),
             "motivations": classify_source_motivations(conn, source_id),
