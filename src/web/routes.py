@@ -1246,6 +1246,22 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 })
             paper_evidence.sort(key=lambda x: x.get("source_date") or "", reverse=True)
 
+        review_rows = conn.execute(
+            "SELECT n.attrs FROM edges e JOIN nodes n ON e.target_id = n.id "
+            "WHERE e.kind = 'reviewed-by' AND e.source_id = ? AND n.kind = 'HumanReview'",
+            (source_id,),
+        ).fetchall()
+        existing_reviews = []
+        for rr in review_rows:
+            r_attrs = json.loads(rr[0]) if isinstance(rr[0], str) else (rr[0] or {})
+            existing_reviews.append({
+                "reviewer": r_attrs.get("reviewer", ""),
+                "score": r_attrs.get("score", 0),
+                "verdict": r_attrs.get("verdict", ""),
+                "rationale": r_attrs.get("rationale", ""),
+                "review_date": r_attrs.get("review_date", ""),
+            })
+
         return templates.TemplateResponse(
             request,
             "paper_detail.html",
@@ -1257,6 +1273,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "motivations": merged_motivations,
                 "subsystems": sorted(all_subsystems),
                 "paper_evidence": paper_evidence,
+                "existing_reviews": existing_reviews,
             },
         )
 
@@ -1608,3 +1625,60 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
     @app.get("/viz", response_class=HTMLResponse)
     async def viz(request: Request):
         return templates.TemplateResponse(request, "graph_viz.html", {})
+
+    @app.post("/api/review/{source_id:path}")
+    async def submit_review(request: Request, source_id: str):
+        """Submit a human review for a paper (ALG-KK-WEB-REVIEW-SUBMIT).
+
+        INV-KK-WEB-REVIEW-WRITE-SCOPED: only /api/review/* accepts POST.
+        """
+        from ingest.paper_scorer import review_paper
+        import dataclasses
+
+        conn = request.app.state.conn
+        body = await request.json()
+        try:
+            result = review_paper(
+                conn, source_id,
+                body["reviewer"], body["score"],
+                body["verdict"], body["rationale"],
+            )
+            conn.commit()
+            return JSONResponse(dataclasses.asdict(result), status_code=201)
+        except ValueError as exc:
+            msg = str(exc)
+            if "does not exist" in msg:
+                return JSONResponse({"error": msg}, status_code=404)
+            if "already reviewed" in msg:
+                return JSONResponse({"error": msg}, status_code=409)
+            return JSONResponse({"error": msg}, status_code=422)
+        except KeyError as exc:
+            return JSONResponse({"error": f"Missing field: {exc}"}, status_code=422)
+
+    @app.get("/api/review/{source_id:path}")
+    async def review_status(request: Request, source_id: str):
+        """Return existing reviews for a paper (ALG-KK-WEB-REVIEW-STATUS)."""
+        conn = request.app.state.conn
+        source = conn.execute(
+            "SELECT id FROM nodes WHERE id = ? AND kind = 'Source'",
+            (source_id,),
+        ).fetchone()
+        if source is None:
+            return JSONResponse({"error": "Source not found"}, status_code=404)
+
+        rows = conn.execute(
+            "SELECT n.attrs FROM edges e JOIN nodes n ON e.target_id = n.id "
+            "WHERE e.kind = 'reviewed-by' AND e.source_id = ? AND n.kind = 'HumanReview'",
+            (source_id,),
+        ).fetchall()
+        reviews = []
+        for r in rows:
+            r_attrs = json.loads(r[0]) if isinstance(r[0], str) else (r[0] or {})
+            reviews.append({
+                "reviewer": r_attrs.get("reviewer", ""),
+                "score": r_attrs.get("score", 0),
+                "verdict": r_attrs.get("verdict", ""),
+                "rationale": r_attrs.get("rationale", ""),
+                "review_date": r_attrs.get("review_date", ""),
+            })
+        return JSONResponse(reviews)

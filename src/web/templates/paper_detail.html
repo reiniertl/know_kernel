@@ -172,4 +172,96 @@
 </div>
 {% endif %}
 
+{# --- HUMAN REVIEW (ALG-KK-WEB-PAPER-DETAIL-REVIEW) --- #}
+<div class="attrs-section">
+  <h3>Human Review</h3>
+  {% if existing_reviews %}
+    {% for rev in existing_reviews %}
+    <div class="card" style="margin-bottom:0.5rem;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;">
+        <span>
+          <span class="badge" style="background:
+            {% if rev.verdict == 'accept' %}#27ae60
+            {% elif rev.verdict == 'reject' %}#c0392b
+            {% else %}#7f8c8d{% endif %};">{{ rev.verdict }}</span>
+          <strong>{{ rev.score }}/5</strong>
+        </span>
+        <span style="font-size:0.85em;color:#888;">
+          {{ rev.reviewer }} &middot; {{ rev.review_date }}
+        </span>
+      </div>
+      <p style="margin:0.3em 0 0 0;font-size:0.9em;">{{ rev.rationale }}</p>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p style="color:#888;">No reviews yet.</p>
+  {% endif %}
+
+  <details style="margin-top:1rem;">
+    <summary style="cursor:pointer;font-weight:bold;">Submit Review</summary>
+    <form id="review-form" style="margin-top:0.5rem;">
+      <div style="margin-bottom:0.5rem;">
+        <label>Reviewer:</label>
+        <input type="text" name="reviewer" required
+               style="font-family:monospace;padding:0.2rem 0.4rem;width:100%;">
+      </div>
+      <div style="margin-bottom:0.5rem;">
+        <label>Impact Score:</label>
+        <input type="range" name="score" min="1" max="5" value="3"
+               id="score-slider"
+               oninput="document.getElementById('score-display').textContent=this.value">
+        <span id="score-display">3</span>/5
+      </div>
+      <div style="margin-bottom:0.5rem;">
+        <label>Verdict:</label>
+        <label style="margin-left:0.5rem;"><input type="radio" name="verdict" value="accept"> Accept</label>
+        <label style="margin-left:0.5rem;"><input type="radio" name="verdict" value="reject"> Reject</label>
+        <label style="margin-left:0.5rem;"><input type="radio" name="verdict" value="skip"> Skip</label>
+      </div>
+      <div style="margin-bottom:0.5rem;">
+        <label>Rationale:</label>
+        <textarea name="rationale" rows="3" required
+                  style="font-family:monospace;width:100%;padding:0.3rem;box-sizing:border-box;"></textarea>
+      </div>
+      <button type="submit" style="padding:0.3rem 1rem;">Submit</button>
+      <span id="review-status" style="margin-left:0.5rem;font-size:0.85em;"></span>
+    </form>
+  </details>
+</div>
+
+<script>
+document.getElementById('review-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  var form = e.target;
+  var status = document.getElementById('review-status');
+  var verdictEl = form.querySelector('input[name="verdict"]:checked');
+  if (!verdictEl) { status.textContent = 'Select a verdict'; status.style.color = '#c0392b'; return; }
+  var data = {
+    reviewer: form.reviewer.value,
+    score: parseInt(document.getElementById('score-slider').value),
+    verdict: verdictEl.value,
+    rationale: form.rationale.value
+  };
+  try {
+    var resp = await fetch('/api/review/{{ source.id }}', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    var result = await resp.json();
+    if (resp.ok) {
+      status.textContent = 'Saved';
+      status.style.color = '#27ae60';
+      setTimeout(function(){ location.reload(); }, 1000);
+    } else {
+      status.textContent = result.error || 'Error';
+      status.style.color = '#c0392b';
+    }
+  } catch (err) {
+    status.textContent = 'Network error';
+    status.style.color = '#c0392b';
+  }
+});
+</script>
+
 {% endblock %}
