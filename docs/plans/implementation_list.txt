@@ -1,0 +1,427 @@
+================================================================================
+ Human Paper Scoring — /cb-green Implementation Prompts
+ Generated from: docs/plans/human-paper-scoring-implementation.md
+ Date: 2026-07-27
+================================================================================
+
+4 skill invocations. Phase 1 merges spec+code (tightly coupled schema
+extension). Phase 3 blocked on DECISION (Option A/B/C for POST endpoints).
+
+================================================================================
+PROMPT 1 of 4 — Phase 1: HumanReview data model, domain logic, CLI, tests
+================================================================================
+
+/cb-green — Phase 1: Add HumanReview node kind with reviewed-by edge, domain logic, CLI, and tests
+
+  - What: Create the MOD-KK-REVIEW module with 11 spec nodes, then implement
+    the full Phase 1 code surface in a single pass.
+
+    SPEC AUTHORING (via ril apply-batch):
+    Create module MOD-KK-REVIEW (kind=module, language=py, description="Human
+    review subsystem: CLI and batch interfaces for scoring papers, storing
+    reviewer judgments as graph nodes.").
+    Create interfaces IFC-KK-HUMAN-REVIEW (HumanReview node schema: reviewer,
+    score 1-5, verdict accept|reject|skip, rationale, review_date, artifact_class;
+    linked via reviewed-by edge) and IFC-KK-REVIEW-RESULT (return type from
+    review_paper(): review_id, source_id, reviewer, score, verdict, rationale).
+    Create 5 invariants:
+      INV-KK-REVIEW-SCORE-RANGE (predicate: forall r:HumanReview. r.score in {1..5}, strong, runtime, enforced:{})
+      INV-KK-REVIEW-VERDICT-ENUM (predicate: forall r:HumanReview. r.verdict in {accept,reject,skip}, strong, runtime, enforced:{})
+      INV-KK-REVIEW-SINGLE-PER-REVIEWER (predicate: forall (s:Source, reviewer:string). count(reviewed-by from s where target.reviewer=reviewer) <= 1, strong, runtime, enforced:{})
+      INV-KK-REVIEW-SOURCE-EXISTS (predicate: forall r:HumanReview. exists s:Source. edge(reviewed-by, s, r), strong, runtime, enforced:{})
+      INV-KK-REVIEW-RATIONALE-REQUIRED (predicate: forall r:HumanReview. r.rationale.strip() != "", strong, runtime, enforced:{})
+    Create algorithms:
+      ALG-KK-REVIEW-PAPER (pre: source exists, score 1-5, verdict in enum, rationale non-empty, no dup by reviewer; post: HumanReview node + reviewed-by edge created, PaperReviewResult returned, all 5 invariants enforced)
+      ALG-KK-REVIEW-CLI (pre: valid CLI args --db --source-id --score --verdict --rationale --reviewer; post: JSON to stdout, exit 0/1/2)
+    Create 14 edges:
+      MOD-KK-REVIEW --contains--> IFC-KK-HUMAN-REVIEW, IFC-KK-REVIEW-RESULT,
+        INV-KK-REVIEW-SCORE-RANGE, INV-KK-REVIEW-VERDICT-ENUM,
+        INV-KK-REVIEW-SINGLE-PER-REVIEWER, INV-KK-REVIEW-SOURCE-EXISTS,
+        INV-KK-REVIEW-RATIONALE-REQUIRED, ALG-KK-REVIEW-PAPER, ALG-KK-REVIEW-CLI
+      ALG-KK-REVIEW-PAPER --enforces--> INV-KK-REVIEW-SCORE-RANGE,
+        INV-KK-REVIEW-VERDICT-ENUM, INV-KK-REVIEW-SINGLE-PER-REVIEWER,
+        INV-KK-REVIEW-SOURCE-EXISTS, INV-KK-REVIEW-RATIONALE-REQUIRED
+
+    CODE IMPLEMENTATION:
+    1. Modify src/graph/schema.py: append "HumanReview" to NODE_KINDS tuple,
+       add REQUIRED_ATTRS["HumanReview"] = ("reviewer","score","verdict","rationale","review_date","artifact_class"),
+       add ID_PREFIXES["HumanReview"] = "hrev-", append "reviewed-by" to EDGE_KINDS tuple,
+       add EDGE_VALID_PAIRS["reviewed-by"] = ("Source","HumanReview"),
+       add "review_date" to DATE_ATTRS frozenset.
+    2. Create src/ingest/paper_scorer.py: PaperReviewResult dataclass + review_paper()
+       function following the reviewer.py pattern (validate inputs, check source exists,
+       check no dup, add_node, add_edge, validate_node, return result).
+       Import from graph.engine (add_node, add_edge) and graph.rules (validate_node).
+       review_paper() signature: (conn, source_id, reviewer, score, verdict, rationale) -> PaperReviewResult.
+       Validation order: score range, verdict enum, rationale non-empty, source exists, dup check.
+       Dup check SQL: SELECT 1 FROM edges e JOIN nodes n ON e.target_id = n.id WHERE e.kind = 'reviewed-by' AND e.source_id = ? AND n.kind = 'HumanReview' AND json_extract(n.attrs, '$.reviewer') = ? LIMIT 1.
+       ID generation: f"hrev-{uuid.uuid4().hex[:12]}".
+       Node attrs: reviewer, score, verdict, rationale (stripped), review_date (date.today().isoformat()), artifact_class="human-review".
+    3. Create src/ingest/cli_score.py: argparse with --db --source-id --score --verdict
+       --rationale --reviewer. Calls init_db(), review_paper(), conn.commit(), prints JSON.
+       Exit codes: 0 success, 1 ValueError, 2 other Exception.
+    4. Create tests/test_paper_scorer.py: 6 test cases covering happy path + each of
+       the 5 invariants. Use init_db(":memory:"), pre-insert Source node with required
+       attrs (url, source_type, license).
+
+  - Spec areas:
+    NEW: MOD-KK-REVIEW, IFC-KK-HUMAN-REVIEW, IFC-KK-REVIEW-RESULT,
+         INV-KK-REVIEW-SCORE-RANGE, INV-KK-REVIEW-VERDICT-ENUM,
+         INV-KK-REVIEW-SINGLE-PER-REVIEWER, INV-KK-REVIEW-SOURCE-EXISTS,
+         INV-KK-REVIEW-RATIONALE-REQUIRED, ALG-KK-REVIEW-PAPER, ALG-KK-REVIEW-CLI
+    EXISTING (not modified): graph.engine add_node/add_edge (kind-agnostic, no changes)
+
+  - Code path:
+    MODIFY: src/graph/schema.py (NODE_KINDS, EDGE_KINDS, REQUIRED_ATTRS, EDGE_VALID_PAIRS, ID_PREFIXES, DATE_ATTRS)
+    NEW:    src/ingest/paper_scorer.py (review_paper, PaperReviewResult, VALID_VERDICTS, VALID_SCORES)
+    NEW:    src/ingest/cli_score.py (main)
+    NEW:    tests/test_paper_scorer.py (6 test cases)
+
+  - Pre-commit hook: spec mutations (.cbm files) + schema.py + paper_scorer.py + cli_score.py + test_paper_scorer.py
+
+  - Test: tests/test_paper_scorer.py — test_happy_path, test_score_range_invalid, test_verdict_invalid, test_rationale_empty, test_source_not_found, test_duplicate_reviewer
+
+  >>> The following are general instructions. Copy verbatim to each prompt and do not use to generate the prompt body <<<
+  - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
+  - IMPORTANT: COMMIT TO WORK. REDUCE TURNS
+  - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
+  - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
+  - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
+  - CRITICAL: DO NOT EMIT P3_SKIPPED. I WILL STOP YOU AND MAKE YOU GO BACK. If you do not need to modify the specification you must submit a reason
+  - FORBIDDEN: MULTI-AGENT execution is not allowed. DO NOT SPAWN MULTIPLE AGENTS
+  - CRITICAL: The triage should report the specification surface. The triage specification surface is deterministic.
+  - WHEN TO COMMIT: Before "silk run finalize"
+  - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
+
+
+================================================================================
+PROMPT 2 of 4 — Phase 2: Batch import/export for paper_review_list.txt
+================================================================================
+
+/cb-green — Phase 2: Batch import/export bridging paper_review_list.txt and the graph
+
+  - What: Create 4 spec nodes for the batch subsystem, then implement batch_score.py.
+
+    SPEC AUTHORING (via ril apply-batch):
+    Create interface IFC-KK-REVIEW-BATCH-REPORT (return type: imported int, skipped int,
+    errors list of {title, reason}).
+    Create invariant INV-KK-REVIEW-BATCH-IDEMPOTENT (predicate: forall batch_import(file).
+    batch_import(file);batch_import(file) = batch_import(file). Duplicate reviews skipped.
+    strong, runtime, enforced:{}).
+    Create algorithms:
+      ALG-KK-REVIEW-BATCH-IMPORT (pre: file exists, DB open, reviewer provided; post:
+        BatchImportReport returned, marked papers get HumanReview nodes, dups skipped,
+        unmatched titles in errors)
+      ALG-KK-REVIEW-BATCH-EXPORT (pre: DB open, output path writable; post: text file
+        in paper_review_list.txt format, reviewed papers show filled Decision/Notes)
+    Create 4 edges:
+      MOD-KK-REVIEW --contains--> IFC-KK-REVIEW-BATCH-REPORT,
+        INV-KK-REVIEW-BATCH-IDEMPOTENT, ALG-KK-REVIEW-BATCH-IMPORT,
+        ALG-KK-REVIEW-BATCH-EXPORT
+
+    CODE IMPLEMENTATION:
+    Create src/ingest/batch_score.py with:
+    1. BatchImportReport dataclass (imported, skipped, errors)
+    2. parse_review_list(file_path): parse paper_review_list.txt format.
+       Paper blocks delimited by "--- Paper N/M ---" headers, ending at
+       80-char dash separator. Extract Title: line value (strip after colon).
+       Decision line: [X] ACCEPT means verdict="accept", [X] REJECT means
+       verdict="reject". Skip papers with no [X] mark.
+       Notes: multiline text until separator. May contain "Score: N" for
+       explicit score (N in 1-5); otherwise derive: accept=4, reject=1, skip=3.
+       Notes text (minus Score: prefix) becomes rationale.
+       Return list of {"title": str, "verdict": str, "notes": str, "score": int}.
+    3. import_reviews(conn, file_path, reviewer): call parse_review_list(), for each
+       entry look up Source by title:
+       SELECT id FROM nodes WHERE kind = 'Source' AND json_extract(attrs, '$.title') = ?
+       If no Source found: add {"title": ..., "reason": "Source not found by title"} to errors.
+       If Source found: call review_paper(conn, source_id, reviewer, score, verdict, rationale).
+       Catch ValueError (duplicate review) -> increment skipped (idempotent).
+       Return BatchImportReport(imported, skipped, errors).
+    4. export_review_list(conn, output_path): query research-type Sources:
+       SELECT id, attrs FROM nodes WHERE kind = 'Source' AND json_extract(attrs, '$.source_type')
+       IN ('paper','preprint','conference-paper','conference-proceedings')
+       ORDER BY json_extract(attrs, '$.published_date') DESC.
+       For each Source, check reviewed-by edges:
+       SELECT n.attrs FROM edges e JOIN nodes n ON e.target_id = n.id
+       WHERE e.kind = 'reviewed-by' AND e.source_id = ? AND n.kind = 'HumanReview' LIMIT 1.
+       Write in paper_review_list.txt format: reviewed papers get [X] ACCEPT/REJECT
+       with Score: N and rationale in Notes. Unreviewed papers get empty checkboxes.
+    5. CLI main() with argparse subparsers:
+       "import --db --file --reviewer" calls import_reviews, prints JSON report.
+       "export --db --output" calls export_review_list, prints confirmation.
+
+  - Spec areas:
+    NEW: IFC-KK-REVIEW-BATCH-REPORT, INV-KK-REVIEW-BATCH-IDEMPOTENT,
+         ALG-KK-REVIEW-BATCH-IMPORT, ALG-KK-REVIEW-BATCH-EXPORT
+    EXISTING (parent): MOD-KK-REVIEW (created in Phase 1, receives contains edges)
+    DEPENDS ON: ALG-KK-REVIEW-PAPER (called by import_reviews)
+
+  - Code path:
+    NEW: src/ingest/batch_score.py (parse_review_list, import_reviews, export_review_list, BatchImportReport, main)
+    READ ONLY: data/paper_review_list.txt (reference format, not modified by this prompt)
+
+  - Pre-commit hook: spec mutations (.cbm files) + batch_score.py
+
+  - Test: manual verification via CLI. Optionally add tests/test_batch_score.py with
+    a synthetic review list string parsed against parse_review_list().
+
+  >>> The following are general instructions. Copy verbatim to each prompt and do not use to generate the prompt body <<<
+  - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
+  - IMPORTANT: COMMIT TO WORK. REDUCE TURNS
+  - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
+  - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
+  - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
+  - CRITICAL: DO NOT EMIT P3_SKIPPED. I WILL STOP YOU AND MAKE YOU GO BACK. If you do not need to modify the specification you must submit a reason
+  - FORBIDDEN: MULTI-AGENT execution is not allowed. DO NOT SPAWN MULTIPLE AGENTS
+  - CRITICAL: The triage should report the specification surface. The triage specification surface is deterministic.
+  - WHEN TO COMMIT: Before "silk run finalize"
+  - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
+
+
+================================================================================
+*** DECISION GATE — Resolve before Prompt 3 ***
+================================================================================
+
+The web layer has zero POST endpoints. Phase 3 introduces POST /api/review/{source_id}.
+INV-KK-WEB-READ-ONLY is referenced in code comments but does NOT exist as a formal
+spec node in the DAG. Options:
+
+  A. Add INV-KK-WEB-REVIEW-WRITE-SCOPED (permits POST only at /api/review/*)
+  B. Skip Phase 3 entirely (CLI-only scoring, Phases 1+2+4 still work)
+  C. Separate write app on different port
+
+Decision must be made before executing Prompt 3.
+
+================================================================================
+PROMPT 3 of 4 — Phase 3: Web review endpoints and paper detail review UI
+================================================================================
+
+/cb-green — Phase 3: Add web review endpoints (POST/GET) and paper detail review section
+
+  - What: Create 4 spec nodes for the web review surface, then implement the
+    POST/GET review endpoints and paper detail review section.
+
+    SPEC AUTHORING (via ril apply-batch):
+    Create invariant INV-KK-WEB-REVIEW-WRITE-SCOPED in MOD-KK-WEB (predicate:
+    forall POST endpoint in MOD-KK-WEB. endpoint.path matches "/api/review/*".
+    Only review POST endpoints permitted, all other routes remain GET-only.
+    strong, structural, enforced:{}).
+    Create algorithms in MOD-KK-WEB:
+      ALG-KK-WEB-REVIEW-SUBMIT (pre: valid JSON body {score 1-5, verdict
+        accept|reject|skip, rationale non-empty, reviewer string}, source node exists;
+        post: HumanReview node created via review_paper(), 201 JSON response with
+        review_id. 404 if source missing, 409 if duplicate reviewer, 422 if validation)
+      ALG-KK-WEB-REVIEW-STATUS (pre: source_id param; post: JSON array of
+        {reviewer, score, verdict, rationale, review_date}. Empty array if none.
+        404 if source not found)
+      ALG-KK-WEB-PAPER-DETAIL-REVIEW (pre: paper detail rendered for valid Source;
+        post: review section appended showing existing reviews as cards with verdict
+        badge/score/reviewer/date/rationale, plus collapsible form that POSTs via
+        JavaScript fetch to /api/review/{source_id})
+    Create 5 edges:
+      MOD-KK-WEB --contains--> INV-KK-WEB-REVIEW-WRITE-SCOPED
+      MOD-KK-WEB --contains--> ALG-KK-WEB-REVIEW-SUBMIT
+      MOD-KK-WEB --contains--> ALG-KK-WEB-REVIEW-STATUS
+      MOD-KK-WEB --contains--> ALG-KK-WEB-PAPER-DETAIL-REVIEW
+      ALG-KK-WEB-REVIEW-SUBMIT --depends-on--> ALG-KK-REVIEW-PAPER
+
+    CODE IMPLEMENTATION:
+    1. Modify src/web/routes.py inside setup_routes():
+       a. Add import at top of function: from ingest.paper_scorer import review_paper
+       b. Add POST /api/review/{source_id} handler:
+          - Parse JSON body via await request.json()
+          - Extract score (int), verdict (str), rationale (str), reviewer (str)
+          - Call review_paper(conn, source_id, body["reviewer"], body["score"],
+            body["verdict"], body["rationale"])
+          - conn.commit()
+          - Return JSONResponse(dataclasses.asdict(result), status_code=201)
+          - Catch ValueError: if "does not exist" in str -> 404, if "already reviewed" in str -> 409, else -> 422
+       c. Add GET /api/review/{source_id} handler:
+          - Verify source exists (404 if not)
+          - Query: SELECT n.attrs FROM edges e JOIN nodes n ON e.target_id = n.id
+            WHERE e.kind = 'reviewed-by' AND e.source_id = ? AND n.kind = 'HumanReview'
+          - Parse each row's attrs JSON
+          - Return JSONResponse with list of {reviewer, score, verdict, rationale, review_date}
+       d. Extend paper_detail() handler (currently at line 1117):
+          - After existing queries, before return: query reviewed-by edges for this source
+          - SQL: SELECT n.attrs FROM edges e JOIN nodes n ON e.target_id = n.id
+            WHERE e.kind = 'reviewed-by' AND e.source_id = ? AND n.kind = 'HumanReview'
+          - Parse attrs, build existing_reviews list of dicts
+          - Add "existing_reviews": existing_reviews to template context
+
+    2. Modify src/web/templates/paper_detail.html:
+       - Add after {# --- PAPER EVIDENCE --- #} block (after line 173, before {% endblock %}):
+       - New section {# --- HUMAN REVIEW --- #} with class attrs-section
+       - Display existing reviews as .card divs: verdict badge (green accept, red reject,
+         grey skip), score/5, reviewer, review_date, rationale paragraph
+       - "No reviews yet." when empty
+       - Collapsible <details> form: reviewer text input, score range slider 1-5 with
+         live value display, verdict radio buttons (accept/reject/skip), rationale
+         textarea (required), submit button
+       - JavaScript: form submit handler using fetch POST to /api/review/{{ source.id }},
+         Content-Type application/json, show status message, reload on success after 1s
+
+  - Spec areas:
+    NEW: INV-KK-WEB-REVIEW-WRITE-SCOPED, ALG-KK-WEB-REVIEW-SUBMIT,
+         ALG-KK-WEB-REVIEW-STATUS, ALG-KK-WEB-PAPER-DETAIL-REVIEW
+    EXISTING (parent): MOD-KK-WEB (receives contains edges)
+    EXISTING (dep target): ALG-KK-REVIEW-PAPER (depends-on from ALG-KK-WEB-REVIEW-SUBMIT)
+    EXISTING (extended): ALG-KK-WEB-PAPER-DETAIL (paper_detail handler extended, not replaced)
+
+  - Code path:
+    MODIFY: src/web/routes.py (add submit_review POST handler, review_status GET handler, extend paper_detail handler with review query)
+    MODIFY: src/web/templates/paper_detail.html (add review section + form + JavaScript after Paper Evidence block)
+
+  - Pre-commit hook: spec mutations (.cbm files) + routes.py + paper_detail.html
+
+  - Test: manual browser test — navigate to /paper/{source_id}, submit a review via
+    form, verify it appears after reload, verify duplicate submission returns 409,
+    verify GET /api/review/{source_id} returns JSON array.
+
+  >>> The following are general instructions. Copy verbatim to each prompt and do not use to generate the prompt body <<<
+  - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
+  - IMPORTANT: COMMIT TO WORK. REDUCE TURNS
+  - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
+  - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
+  - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
+  - CRITICAL: DO NOT EMIT P3_SKIPPED. I WILL STOP YOU AND MAKE YOU GO BACK. If you do not need to modify the specification you must submit a reason
+  - FORBIDDEN: MULTI-AGENT execution is not allowed. DO NOT SPAWN MULTIPLE AGENTS
+  - CRITICAL: The triage should report the specification surface. The triage specification surface is deterministic.
+  - WHEN TO COMMIT: Before "silk run finalize"
+  - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
+
+
+================================================================================
+PROMPT 4 of 4 — Phase 4: Review badges on feed/radar, reviews list page, nav
+================================================================================
+
+/cb-green — Phase 4: Add review badges to feed/radar, reviews list page, and nav link
+
+  - What: Create 2 spec nodes for the view integration, then implement the
+    batch review query helper, feed/radar badges, reviews list page, and nav update.
+
+    SPEC AUTHORING (via ril apply-batch):
+    Create algorithms in MOD-KK-WEB:
+      ALG-KK-WEB-FEED-REVIEW-BADGE (pre: page source IDs computed for feed or radar;
+        post: review status badge per paper showing avg score and verdict color,
+        single batch IN(...) query for all source IDs on current page,
+        INV-KK-WEB-QUERY-BOUNDED satisfied — one query not per-paper)
+      ALG-KK-WEB-REVIEWS-LIST (pre: DB open, optional query params verdict and
+        min_score; post: paginated HTML table of all reviews sorted by review_date
+        DESC, filterable by verdict enum and minimum score int, paper titles link
+        to /paper/{source_id}, INV-KK-WEB-QUERY-BOUNDED satisfied via SQL LIMIT/OFFSET)
+    Create 4 edges:
+      MOD-KK-WEB --contains--> ALG-KK-WEB-FEED-REVIEW-BADGE
+      MOD-KK-WEB --contains--> ALG-KK-WEB-REVIEWS-LIST
+      ALG-KK-WEB-FEED-REVIEW-BADGE --satisfies--> INV-KK-WEB-QUERY-BOUNDED
+      ALG-KK-WEB-REVIEWS-LIST --satisfies--> INV-KK-WEB-QUERY-BOUNDED
+
+    CODE IMPLEMENTATION:
+    1. Add _batch_review_status(conn, source_ids) helper inside setup_routes() in
+       src/web/routes.py:
+       - If not source_ids: return {}
+       - Single IN(...) query: SELECT e.source_id, json_extract(n.attrs, '$.score'),
+         json_extract(n.attrs, '$.verdict') FROM edges e JOIN nodes n ON e.target_id = n.id
+         WHERE e.kind = 'reviewed-by' AND n.kind = 'HumanReview' AND e.source_id IN (ph)
+       - Aggregate per source_id: collect scores and verdicts
+       - Return dict {source_id: {avg_score: float, count: int, latest_verdict: str|None}}
+
+    2. Extend research_feed() handler (line 852 of routes.py):
+       - After building items list, before return templates.TemplateResponse:
+       - feed_sids = [item["source_id"] for item in items]
+       - review_status = _batch_review_status(conn, feed_sids)
+       - for item in items: item["review"] = review_status.get(item["source_id"])
+
+    3. Extend radar() handler (line 1297 of routes.py):
+       - After fetching all rows: all_sids = [row[0] for row in rows]
+       - review_status = _batch_review_status(conn, all_sids)
+       - When building paper entries: entry["papers"][-1]["review"] = review_status.get(sid)
+
+    4. Modify src/web/templates/feed.html:
+       - Add <th style="width:8%;">Review</th> after Actions column header
+       - Add td per row: if item.review: badge with avg_score/5 and verdict-colored
+         background (#27ae60 accept, #c0392b reject, #7f8c8d skip/other).
+         Else: dash in #ccc.
+
+    5. Modify src/web/templates/radar.html:
+       - Show review badge next to each paper title in the expandable table.
+
+    6. Add GET /reviews route in src/web/routes.py:
+       - Query params: verdict (str|None), min_score (int|None ge=1 le=5),
+         page (int ge=1), per_page (int ge=10 le=200)
+       - SQL: SELECT n.id, n.attrs, s.id, s.attrs FROM nodes n
+         JOIN edges e ON e.kind = 'reviewed-by' AND e.target_id = n.id
+         JOIN nodes s ON s.id = e.source_id AND s.kind = 'Source'
+         WHERE n.kind = 'HumanReview'
+         + optional AND json_extract(n.attrs, '$.verdict') = ?
+         + optional AND CAST(json_extract(n.attrs, '$.score') AS INTEGER) >= ?
+         ORDER BY json_extract(n.attrs, '$.review_date') DESC
+         LIMIT per_page+1 OFFSET (page-1)*per_page
+       - Build reviews list: review_id, source_id, paper_title, reviewer, score,
+         verdict, rationale, review_date
+       - Render reviews.html template
+
+    7. Create src/web/templates/reviews.html:
+       - Extends base.html
+       - Filter bar: verdict dropdown (all/accept/reject/skip), min score dropdown (1-5)
+       - Table: Date, Paper (linked to /paper/{source_id}), Reviewer, Score (/5),
+         Verdict (badge), Rationale (truncated)
+       - Pagination: page N, previous/next links
+
+    8. Modify src/web/templates/base.html line 52:
+       - Add <a href="/reviews">Reviews</a> after the Radar link
+
+  - Spec areas:
+    NEW: ALG-KK-WEB-FEED-REVIEW-BADGE, ALG-KK-WEB-REVIEWS-LIST
+    EXISTING (parent): MOD-KK-WEB (receives contains edges)
+    EXISTING (satisfies target): INV-KK-WEB-QUERY-BOUNDED (existing invariant, not modified, receives satisfies edges)
+    EXISTING (extended, not replaced):
+      ALG-KK-WEB-FEED-LIST (feed handler extended with badge query)
+      ALG-KK-WEB-RADAR (radar handler extended with badge query)
+
+  - Code path:
+    MODIFY: src/web/routes.py (add _batch_review_status helper, extend research_feed handler, extend radar handler, add reviews_list route)
+    MODIFY: src/web/templates/feed.html (add Review column header + badge cell)
+    MODIFY: src/web/templates/radar.html (add badge next to paper titles)
+    NEW:    src/web/templates/reviews.html (paginated review list with filters, extends base.html)
+    MODIFY: src/web/templates/base.html (add Reviews nav link after Radar)
+
+  - Pre-commit hook: spec mutations (.cbm files) + routes.py + feed.html + radar.html + reviews.html + base.html
+
+  - Test: manual browser test — verify badges appear on /feed and /radar for reviewed
+    papers (requires at least one HumanReview node in DB from Phase 1/2/3), verify
+    /reviews page loads with pagination, verify verdict/score filters work, verify
+    Reviews link appears in nav bar.
+
+  >>> The following are general instructions. Copy verbatim to each prompt and do not use to generate the prompt body <<<
+  - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
+  - IMPORTANT: COMMIT TO WORK. REDUCE TURNS
+  - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
+  - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
+  - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
+  - CRITICAL: DO NOT EMIT P3_SKIPPED. I WILL STOP YOU AND MAKE YOU GO BACK. If you do not need to modify the specification you must submit a reason
+  - FORBIDDEN: MULTI-AGENT execution is not allowed. DO NOT SPAWN MULTIPLE AGENTS
+  - CRITICAL: The triage should report the specification surface. The triage specification surface is deterministic.
+  - WHEN TO COMMIT: Before "silk run finalize"
+  - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
+
+
+================================================================================
+ EXECUTION ORDER
+================================================================================
+
+  Prompt 1 — Phase 1 (data model + CLI + tests)
+  Prompt 2 — Phase 2 (batch import/export)
+  *** DECISION GATE — resolve Option A/B/C for POST endpoints ***
+  Prompt 3 — Phase 3 (web review endpoints + UI) — skip if Option B chosen
+  Prompt 4 — Phase 4 (view integration) — works regardless of Phase 3 decision
+
+================================================================================
+ OPEN DECISIONS (resolve before Prompt 3)
+================================================================================
+
+  POST endpoint policy:
+    A — Add INV-KK-WEB-REVIEW-WRITE-SCOPED (recommended)
+    B — Skip Phase 3, CLI-only scoring
+    C — Separate write app on different port

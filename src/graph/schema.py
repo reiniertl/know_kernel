@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity", "ResearchBrief")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity", "ResearchBrief", "HumanReview")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -44,6 +44,7 @@ EDGE_KINDS = (
     "opportunity-for",
     "supported-by",
     "summarizes-for",
+    "reviewed-by",
 )
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
@@ -83,6 +84,7 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "opportunity-for": ("Opportunity", "Concept"),
     "supported-by": [("Opportunity", "Problem"), ("Opportunity", "Observation"), ("Opportunity", "Discussion"), ("Opportunity", "Benchmark")],
     "summarizes-for": ("ResearchBrief", "Concept"),
+    "reviewed-by": ("Source", "HumanReview"),
 }
 
 REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
@@ -111,9 +113,10 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "Trend": ("title", "description", "strength", "window_start", "window_end", "artifact_class"),
     "Opportunity": ("title", "description", "confidence", "frontier_score", "artifact_class"),
     "ResearchBrief": ("title", "key_ideas", "relevance", "methodology", "source_date", "artifact_class"),
+    "HumanReview": ("reviewer", "score", "verdict", "rationale", "review_date", "artifact_class"),
 }
 
-DATE_ATTRS = frozenset({"source_date", "window_start", "window_end"})
+DATE_ATTRS = frozenset({"source_date", "window_start", "window_end", "review_date"})
 
 ID_PREFIXES = {
     "Concept": "concept-",
@@ -141,6 +144,7 @@ ID_PREFIXES = {
     "Trend": "trend-",
     "Opportunity": "opp-",
     "ResearchBrief": "rb-",
+    "HumanReview": "hrev-",
 }
 
 SCHEMA_SQL = """\
