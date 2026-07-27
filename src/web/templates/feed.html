@@ -23,6 +23,7 @@
       <th style="width:22%;">Summary</th>
       <th style="width:8%;">Subsystem</th>
       <th style="width:8%;">Why Pursue</th>
+      <th style="width:6%;">Review</th>
       <th style="width:10%;">Actions</th>
     </tr>
   </thead>
@@ -47,13 +48,20 @@
         <span class="badge" style="font-size:0.7em; padding:0.15em 0.4em; margin:0.1em; display:inline-block; background:{{ {'SECURITY':'#e74c3c','STABILITY':'#e67e22','PERFORMANCE':'#f39c12','SCALABILITY':'#3498db','EFFICIENCY':'#2ecc71','HARDWARE ENABLEMENT':'#9b59b6','MAINTAINABILITY':'#7f8c8d'}.get(m,'#95a5a6') }}; color:#fff; border-radius:3px;">{{ m }}</span>
         {% endfor %}
       </td>
+      <td>
+        {% if item.review %}
+        <span class="badge" style="background:{% if item.review.latest_verdict == 'accept' %}#27ae60{% elif item.review.latest_verdict == 'reject' %}#c0392b{% else %}#7f8c8d{% endif %};">{{ item.review.avg_score }}/5</span>
+        {% else %}
+        <span style="color:#ccc;">&mdash;</span>
+        {% endif %}
+      </td>
       <td style="white-space:nowrap;">
         <button onclick="previewCard('{{ item.source_id }}', this)" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#7f8c8d; color:#fff; border:none; border-radius:3px; font-size:0.8em;" title="Preview card text">Preview</button>
         <button onclick="sendCard('{{ item.source_id }}', this)" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#2980b9; color:#fff; border:none; border-radius:3px; font-size:0.8em;" title="Send card via CLI command">Send</button>
       </td>
     </tr>
     <tr id="preview-row-{{ item.source_id }}" style="display:none;">
-      <td colspan="8">
+      <td colspan="9">
         <pre style="white-space:pre-wrap; font-size:0.85em; background:#fafafa; padding:0.5rem; border:1px solid #eee; margin:0;"></pre>
       </td>
     </tr>

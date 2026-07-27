@@ -72,6 +72,9 @@
                       <td>
                         <a href="/paper/{{ p.source_id }}">{{ p.title }}</a>
                         {% if p.url %}<a href="{{ p.url }}" target="_blank" style="font-size:0.8em; margin-left:0.3em;">source &rarr;</a>{% endif %}
+                        {% if p.review %}
+                        <span class="badge" style="font-size:0.7em; margin-left:0.3em; background:{% if p.review.latest_verdict == 'accept' %}#27ae60{% elif p.review.latest_verdict == 'reject' %}#c0392b{% else %}#7f8c8d{% endif %};">{{ p.review.avg_score }}/5</span>
+                        {% endif %}
                       </td>
                       <td><span class="badge badge-kind">{{ p.source_type }}</span></td>
                       <td>{{ p.published_date or "—" }}</td>

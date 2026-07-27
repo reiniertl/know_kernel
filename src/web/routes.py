@@ -155,6 +155,40 @@ def _all_kinds(conn) -> list[str]:
     return [r["kind"] for r in rows]
 
 
+def _batch_review_status(conn, source_ids: list[str]) -> dict[str, dict]:
+    """Batch-query review status for multiple sources (ALG-KK-WEB-FEED-REVIEW-BADGE).
+
+    INV-KK-WEB-QUERY-BOUNDED: single IN(...) query, not per-paper.
+    """
+    if not source_ids:
+        return {}
+    ph = ",".join("?" for _ in source_ids)
+    rows = conn.execute(
+        f"SELECT e.source_id, "
+        f"json_extract(n.attrs, '$.score') as score, "
+        f"json_extract(n.attrs, '$.verdict') as verdict "
+        f"FROM edges e JOIN nodes n ON e.target_id = n.id "
+        f"WHERE e.kind = 'reviewed-by' AND n.kind = 'HumanReview' "
+        f"AND e.source_id IN ({ph})",
+        source_ids,
+    ).fetchall()
+    agg: dict[str, dict] = {}
+    for sid, score, verdict in rows:
+        if sid not in agg:
+            agg[sid] = {"scores": [], "verdicts": []}
+        agg[sid]["scores"].append(score)
+        agg[sid]["verdicts"].append(verdict)
+    result: dict[str, dict] = {}
+    for sid, data in agg.items():
+        scores = [s for s in data["scores"] if s is not None]
+        result[sid] = {
+            "avg_score": round(sum(scores) / len(scores), 1) if scores else 0,
+            "count": len(data["scores"]),
+            "latest_verdict": data["verdicts"][0] if data["verdicts"] else None,
+        }
+    return result
+
+
 def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
@@ -937,6 +971,11 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "subsystems": subsystems,
             })
 
+        feed_sids = [item["source_id"] for item in items]
+        review_status = _batch_review_status(conn, feed_sids)
+        for item in items:
+            item["review"] = review_status.get(item["source_id"])
+
         return templates.TemplateResponse(
             request,
             "feed.html",
@@ -1333,6 +1372,9 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "ORDER BY c.id, json_extract(s.attrs, '$.published_date') DESC"
         ).fetchall()
 
+        all_sids = list({row[0] for row in rows})
+        review_status = _batch_review_status(conn, all_sids)
+
         concept_ids = list({row[2] for row in rows})
         subsystem_map: dict[str, str] = {}
         if concept_ids:
@@ -1380,6 +1422,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "url": s_attrs.get("url", ""),
                 "source_type": s_attrs.get("source_type", ""),
                 "published_date": pub_date,
+                "review": review_status.get(sid),
             })
 
         by_subsystem: dict[str, dict] = {}
@@ -1621,6 +1664,69 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         if row is None or row["kind"] != "Vulnerability":
             return JSONResponse({"error": "Vulnerability not found"}, status_code=404)
         return JSONResponse(vulnerability_propagation(conn, vuln_id))
+
+    @app.get("/reviews", response_class=HTMLResponse)
+    async def reviews_list(
+        request: Request,
+        verdict: str | None = None,
+        min_score: int | None = Query(None, ge=1, le=5),
+        page: int = Query(1, ge=1),
+        per_page: int = Query(50, ge=10, le=200),
+    ):
+        """Paginated review list (ALG-KK-WEB-REVIEWS-LIST).
+
+        INV-KK-WEB-QUERY-BOUNDED: SQL LIMIT/OFFSET pagination.
+        """
+        conn = request.app.state.conn
+        sql = (
+            "SELECT n.id, n.attrs, s.id as source_id, s.attrs as source_attrs "
+            "FROM nodes n "
+            "JOIN edges e ON e.kind = 'reviewed-by' AND e.target_id = n.id "
+            "JOIN nodes s ON s.id = e.source_id AND s.kind = 'Source' "
+            "WHERE n.kind = 'HumanReview'"
+        )
+        params: list = []
+        if verdict:
+            sql += " AND json_extract(n.attrs, '$.verdict') = ?"
+            params.append(verdict)
+        if min_score is not None:
+            sql += " AND CAST(json_extract(n.attrs, '$.score') AS INTEGER) >= ?"
+            params.append(min_score)
+        sql += " ORDER BY json_extract(n.attrs, '$.review_date') DESC"
+        sql += " LIMIT ? OFFSET ?"
+        params.extend([per_page + 1, (page - 1) * per_page])
+
+        rows = conn.execute(sql, params).fetchall()
+        has_next = len(rows) > per_page
+        rows = rows[:per_page]
+
+        reviews = []
+        for r in rows:
+            r_attrs = json.loads(r[1]) if isinstance(r[1], str) else (r[1] or {})
+            s_attrs = json.loads(r[3]) if isinstance(r[3], str) else (r[3] or {})
+            reviews.append({
+                "review_id": r[0],
+                "source_id": r[2],
+                "paper_title": s_attrs.get("title", r[2]),
+                "reviewer": r_attrs.get("reviewer", ""),
+                "score": r_attrs.get("score", 0),
+                "verdict": r_attrs.get("verdict", ""),
+                "rationale": r_attrs.get("rationale", ""),
+                "review_date": r_attrs.get("review_date", ""),
+            })
+
+        return templates.TemplateResponse(
+            request,
+            "reviews.html",
+            {
+                "reviews": reviews,
+                "page": page,
+                "per_page": per_page,
+                "has_next": has_next,
+                "verdict_filter": verdict,
+                "min_score_filter": min_score,
+            },
+        )
 
     @app.get("/viz", response_class=HTMLResponse)
     async def viz(request: Request):

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Reviews</h1>
+
+<div style="margin-bottom:1rem; display:flex; gap:1rem; align-items:center;">
+  <form method="get" action="/reviews" style="display:flex; gap:0.5rem; align-items:center;">
+    <label>Verdict:</label>
+    <select name="verdict" onchange="this.form.submit()" style="font-family:monospace; padding:0.2rem;">
+      <option value="">All</option>
+      <option value="accept" {% if verdict_filter == 'accept' %}selected{% endif %}>Accept</option>
+      <option value="reject" {% if verdict_filter == 'reject' %}selected{% endif %}>Reject</option>
+      <option value="skip" {% if verdict_filter == 'skip' %}selected{% endif %}>Skip</option>
+    </select>
+    <label style="margin-left:0.5rem;">Min score:</label>
+    <select name="min_score" onchange="this.form.submit()" style="font-family:monospace; padding:0.2rem;">
+      <option value="">Any</option>
+      {% for s in [1,2,3,4,5] %}
+      <option value="{{ s }}" {% if min_score_filter == s %}selected{% endif %}>{{ s }}+</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+{% if reviews %}
+<table style="width:100%;">
+  <thead>
+    <tr>
+      <th style="width:10%;">Date</th>
+      <th style="width:25%;">Paper</th>
+      <th style="width:10%;">Reviewer</th>
+      <th style="width:6%;">Score</th>
+      <th style="width:8%;">Verdict</th>
+      <th>Rationale</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for rev in reviews %}
+    <tr>
+      <td style="font-size:0.85em; white-space:nowrap;">{{ rev.review_date or "&mdash;" }}</td>
+      <td><a href="/paper/{{ rev.source_id }}">{{ rev.paper_title }}</a></td>
+      <td style="font-size:0.85em;">{{ rev.reviewer }}</td>
+      <td><strong>{{ rev.score }}/5</strong></td>
+      <td>
+        <span class="badge" style="background:
+          {% if rev.verdict == 'accept' %}#27ae60
+          {% elif rev.verdict == 'reject' %}#c0392b
+          {% else %}#7f8c8d{% endif %};">{{ rev.verdict }}</span>
+      </td>
+      <td style="font-size:0.85em; color:#444;">{{ rev.rationale[:200] }}{% if rev.rationale|length > 200 %}...{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No reviews found{% if verdict_filter or min_score_filter %} matching filters{% endif %}.</p>
+{% endif %}
+
+<div style="margin-top:1rem; text-align:center; font-size:0.95em;">
+  {% if page > 1 %}
+  <a href="/reviews?page={{ page - 1 }}&per_page={{ per_page }}{% if verdict_filter %}&verdict={{ verdict_filter }}{% endif %}{% if min_score_filter %}&min_score={{ min_score_filter }}{% endif %}" style="margin-right:1rem;">&larr; Prev</a>
+  {% endif %}
+  Page {{ page }}
+  {% if has_next %}
+  <a href="/reviews?page={{ page + 1 }}&per_page={{ per_page }}{% if verdict_filter %}&verdict={{ verdict_filter }}{% endif %}{% if min_score_filter %}&min_score={{ min_score_filter }}{% endif %}" style="margin-left:1rem;">Next &rarr;</a>
+  {% endif %}
+</div>
+
+{% endblock %}
