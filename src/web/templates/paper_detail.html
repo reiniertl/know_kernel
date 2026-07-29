@@ -177,20 +177,48 @@
   <h3>Human Review</h3>
   {% if existing_reviews %}
     {% for rev in existing_reviews %}
-    <div class="card" style="margin-bottom:0.5rem;">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;">
-        <span>
-          <span class="badge" style="background:
-            {% if rev.verdict == 'accept' %}#27ae60
-            {% elif rev.verdict == 'reject' %}#c0392b
-            {% else %}#7f8c8d{% endif %};">{{ rev.verdict }}</span>
-          <strong>{{ rev.score }}/5</strong>
-        </span>
-        <span style="font-size:0.85em;color:#888;">
-          {{ rev.reviewer }} &middot; {{ rev.review_date }}
-        </span>
+    <div class="card" style="margin-bottom:0.5rem;" id="review-card-{{ rev.review_id }}">
+      <div class="review-display-{{ rev.review_id }}">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <span>
+            <span class="badge" style="background:
+              {% if rev.verdict == 'accept' %}#27ae60
+              {% elif rev.verdict == 'reject' %}#c0392b
+              {% else %}#7f8c8d{% endif %};">{{ rev.verdict }}</span>
+            <strong>{{ rev.score }}/5</strong>
+          </span>
+          <span style="font-size:0.85em;color:#888;">
+            {{ rev.reviewer }} &middot; {{ rev.review_date }}
+            &middot; <a href="#" onclick="toggleEditForm('{{ rev.review_id }}'); return false;" style="font-size:0.9em;">Edit</a>
+          </span>
+        </div>
+        <p style="margin:0.3em 0 0 0;font-size:0.9em;">{{ rev.rationale }}</p>
       </div>
-      <p style="margin:0.3em 0 0 0;font-size:0.9em;">{{ rev.rationale }}</p>
+      <div class="review-edit-{{ rev.review_id }}" style="display:none;">
+        <form onsubmit="submitEdit('{{ rev.review_id }}', event); return false;" style="margin-top:0.5rem;">
+          <div style="margin-bottom:0.5rem;">
+            <label>Impact Score:</label>
+            <input type="range" name="score" min="1" max="5" value="{{ rev.score }}"
+                   id="edit-score-{{ rev.review_id }}"
+                   oninput="document.getElementById('edit-score-display-{{ rev.review_id }}').textContent=this.value">
+            <span id="edit-score-display-{{ rev.review_id }}">{{ rev.score }}</span>/5
+          </div>
+          <div style="margin-bottom:0.5rem;">
+            <label>Verdict:</label>
+            <label style="margin-left:0.5rem;"><input type="radio" name="verdict" value="accept" {% if rev.verdict == 'accept' %}checked{% endif %}> Accept</label>
+            <label style="margin-left:0.5rem;"><input type="radio" name="verdict" value="reject" {% if rev.verdict == 'reject' %}checked{% endif %}> Reject</label>
+            <label style="margin-left:0.5rem;"><input type="radio" name="verdict" value="skip" {% if rev.verdict == 'skip' %}checked{% endif %}> Skip</label>
+          </div>
+          <div style="margin-bottom:0.5rem;">
+            <label>Rationale:</label>
+            <textarea name="rationale" rows="3" required
+                      style="font-family:monospace;width:100%;padding:0.3rem;box-sizing:border-box;">{{ rev.rationale }}</textarea>
+          </div>
+          <button type="submit" style="padding:0.3rem 1rem;">Save</button>
+          <button type="button" onclick="toggleEditForm('{{ rev.review_id }}')" style="padding:0.3rem 1rem;margin-left:0.5rem;">Cancel</button>
+          <span id="edit-status-{{ rev.review_id }}" style="margin-left:0.5rem;font-size:0.85em;"></span>
+        </form>
+      </div>
     </div>
     {% endfor %}
   {% else %}
@@ -230,6 +258,50 @@
 </div>
 
 <script>
+function toggleEditForm(reviewId) {
+  var display = document.querySelector('.review-display-' + reviewId);
+  var edit = document.querySelector('.review-edit-' + reviewId);
+  if (edit.style.display === 'none') {
+    display.style.display = 'none';
+    edit.style.display = 'block';
+  } else {
+    display.style.display = 'block';
+    edit.style.display = 'none';
+  }
+}
+
+async function submitEdit(reviewId, e) {
+  e.preventDefault();
+  var form = e.target;
+  var status = document.getElementById('edit-status-' + reviewId);
+  var verdictEl = form.querySelector('input[name="verdict"]:checked');
+  if (!verdictEl) { status.textContent = 'Select a verdict'; status.style.color = '#c0392b'; return; }
+  var data = {
+    score: parseInt(document.getElementById('edit-score-' + reviewId).value),
+    verdict: verdictEl.value,
+    rationale: form.rationale.value
+  };
+  try {
+    var resp = await fetch('/api/review/' + reviewId, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    var result = await resp.json();
+    if (resp.ok) {
+      status.textContent = 'Saved';
+      status.style.color = '#27ae60';
+      setTimeout(function(){ location.reload(); }, 1000);
+    } else {
+      status.textContent = result.error || 'Error';
+      status.style.color = '#c0392b';
+    }
+  } catch (err) {
+    status.textContent = 'Network error';
+    status.style.color = '#c0392b';
+  }
+}
+
 document.getElementById('review-form').addEventListener('submit', async function(e) {
   e.preventDefault();
   var form = e.target;

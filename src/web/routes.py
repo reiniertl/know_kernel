@@ -1286,14 +1286,15 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             paper_evidence.sort(key=lambda x: x.get("source_date") or "", reverse=True)
 
         review_rows = conn.execute(
-            "SELECT n.attrs FROM edges e JOIN nodes n ON e.target_id = n.id "
+            "SELECT n.id, n.attrs FROM edges e JOIN nodes n ON e.target_id = n.id "
             "WHERE e.kind = 'reviewed-by' AND e.source_id = ? AND n.kind = 'HumanReview'",
             (source_id,),
         ).fetchall()
         existing_reviews = []
         for rr in review_rows:
-            r_attrs = json.loads(rr[0]) if isinstance(rr[0], str) else (rr[0] or {})
+            r_attrs = json.loads(rr[1]) if isinstance(rr[1], str) else (rr[1] or {})
             existing_reviews.append({
+                "review_id": rr[0],
                 "reviewer": r_attrs.get("reviewer", ""),
                 "score": r_attrs.get("score", 0),
                 "verdict": r_attrs.get("verdict", ""),
@@ -1736,7 +1737,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
     async def submit_review(request: Request, source_id: str):
         """Submit a human review for a paper (ALG-KK-WEB-REVIEW-SUBMIT).
 
-        INV-KK-WEB-REVIEW-WRITE-SCOPED: only /api/review/* accepts POST.
+        INV-KK-WEB-REVIEW-WRITE-SCOPED: only /api/review/* accepts POST/PUT.
         """
         from ingest.paper_scorer import review_paper
         import dataclasses
@@ -1760,6 +1761,32 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             return JSONResponse({"error": msg}, status_code=422)
         except KeyError as exc:
             return JSONResponse({"error": f"Missing field: {exc}"}, status_code=422)
+
+    @app.put("/api/review/{review_id}")
+    async def update_review(request: Request, review_id: str):
+        """Update an existing human review (ALG-KK-WEB-REVIEW-EDIT).
+
+        INV-KK-WEB-REVIEW-WRITE-SCOPED: only /api/review/* accepts POST/PUT.
+        """
+        from ingest.paper_scorer import edit_review
+        import dataclasses
+
+        conn = request.app.state.conn
+        body = await request.json()
+        try:
+            result = edit_review(
+                conn, review_id,
+                body["score"], body["verdict"], body["rationale"],
+            )
+            conn.commit()
+            return JSONResponse(dataclasses.asdict(result))
+        except ValueError as exc:
+            msg = str(exc)
+            if "does not exist" in msg:
+                return JSONResponse({"error": msg}, status_code=404)
+            return JSONResponse({"error": msg}, status_code=400)
+        except KeyError as exc:
+            return JSONResponse({"error": f"Missing field: {exc}"}, status_code=400)
 
     @app.get("/api/review/{source_id:path}")
     async def review_status(request: Request, source_id: str):

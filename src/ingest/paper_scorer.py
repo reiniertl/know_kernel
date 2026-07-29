@@ -109,3 +109,70 @@ def review_paper(
         verdict=verdict,
         rationale=rationale.strip(),
     )
+
+
+def edit_review(
+    conn: sqlite3.Connection,
+    review_id: str,
+    score: int,
+    verdict: str,
+    rationale: str,
+) -> PaperReviewResult:
+    """Edit an existing HumanReview node (ALG-KK-REVIEW-EDIT).
+
+    Reviewer is immutable (INV-KK-REVIEW-EDIT-IMMUTABLE-REVIEWER).
+    """
+    from graph.engine import get_node, update_node_attrs
+
+    node = get_node(conn, review_id)
+    if node is None or node["kind"] != "HumanReview":
+        raise ValueError(
+            f"HumanReview node '{review_id}' does not exist"
+        )
+
+    if score not in VALID_SCORES:
+        raise ValueError(
+            f"Score must be 1-5, got {score} (INV-KK-REVIEW-SCORE-RANGE)"
+        )
+
+    if verdict not in VALID_VERDICTS:
+        raise ValueError(
+            f"Invalid verdict '{verdict}'. "
+            f"Must be one of: {', '.join(sorted(VALID_VERDICTS))} "
+            "(INV-KK-REVIEW-VERDICT-ENUM)"
+        )
+
+    if not rationale or not rationale.strip():
+        raise ValueError(
+            "Rationale must be non-empty (INV-KK-REVIEW-RATIONALE-REQUIRED)"
+        )
+
+    update_node_attrs(conn, review_id, {
+        "score": score,
+        "verdict": verdict,
+        "rationale": rationale.strip(),
+        "review_date": date.today().isoformat(),
+    })
+
+    violations = validate_node(conn, review_id, "HumanReview")
+    if violations:
+        raise RuntimeError(
+            f"HumanReview node {review_id} failed validation: "
+            + "; ".join(v.message for v in violations)
+        )
+
+    source_row = conn.execute(
+        "SELECT e.source_id FROM edges e "
+        "WHERE e.kind = 'reviewed-by' AND e.target_id = ?",
+        (review_id,),
+    ).fetchone()
+    source_id = source_row[0] if source_row else ""
+
+    return PaperReviewResult(
+        review_id=review_id,
+        source_id=source_id,
+        reviewer=node["attrs"].get("reviewer", ""),
+        score=score,
+        verdict=verdict,
+        rationale=rationale.strip(),
+    )

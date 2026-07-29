@@ -31,6 +31,7 @@
       <th style="width:6%;">Score</th>
       <th style="width:8%;">Verdict</th>
       <th>Rationale</th>
+      <th style="width:4%;"></th>
     </tr>
   </thead>
   <tbody>
@@ -47,6 +48,7 @@
           {% else %}#7f8c8d{% endif %};">{{ rev.verdict }}</span>
       </td>
       <td style="font-size:0.85em; color:#444;">{{ rev.rationale[:200] }}{% if rev.rationale|length > 200 %}...{% endif %}</td>
+      <td><a href="/paper/{{ rev.source_id }}" style="font-size:0.85em;">Edit</a></td>
     </tr>
   {% endfor %}
   </tbody>
