@@ -266,29 +266,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             },
         )
 
-    @app.get("/subsystems", response_class=HTMLResponse)
-    async def subsystems_list(
-        request: Request,
-        page: int = Query(1, ge=1),
-        per_page: int = Query(50, ge=10, le=200),
-    ):
-        conn = request.app.state.conn
-        offset = (page - 1) * per_page
-        rows = conn.execute(
-            "SELECT id, kind, attrs FROM nodes WHERE kind = 'Subsystem' ORDER BY id LIMIT ? OFFSET ?",
-            (per_page + 1, offset),
-        ).fetchall()
-        has_next = len(rows) > per_page
-        rows = rows[:per_page]
-        nodes = _rows_to_dicts(rows)
-        for n in nodes:
-            n["display_name"] = display_name_for_node(n["kind"], n.get("attrs") or {}, n["id"])
-        return templates.TemplateResponse(
-            request,
-            "concept_list.html",
-            {"nodes": nodes, "title": "Subsystems", "active_kind": "Subsystem", "all_kinds": _all_kinds(conn), "page": page, "per_page": per_page, "has_next": has_next},
-        )
-
     @app.get("/sources", response_class=HTMLResponse)
     async def sources_list(
         request: Request,
