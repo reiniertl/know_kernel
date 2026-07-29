@@ -36,7 +36,7 @@
         {% if item.url %}<a href="{{ item.url }}" target="_blank" style="font-size:0.8em; margin-left:0.3em;">source &rarr;</a>{% endif %}
       </td>
       <td><span class="badge badge-kind">{{ item.source_type }}</span></td>
-      <td><a href="/research/{{ item.concept_id }}">{{ item.concept_name }}</a></td>
+      <td><a href="/concepts/{{ item.concept_id }}">{{ item.concept_name }}</a></td>
       <td style="font-size:0.85em; color:#444;">{{ item.summary }}</td>
       <td>
         {% for s in item.subsystems %}

@@ -50,7 +50,7 @@
   <div style="display:flex;gap:1rem;flex-wrap:wrap;">
     {% for c in concepts %}
     <div class="card" style="flex:1;min-width:200px;max-width:300px;">
-      <h4 style="margin:0 0 0.3em 0;"><a href="/research/{{ c.id }}">{{ c.name }}</a></h4>
+      <h4 style="margin:0 0 0.3em 0;"><a href="/concepts/{{ c.id }}">{{ c.name }}</a></h4>
       <p style="font-size:0.85em; margin:0.2em 0;">Research Score: {{ "%.1f"|format(c.research_score) }}</p>
       {% if c.subsystem %}
       <span class="badge" style="background:#2980b9;font-size:0.75em;">{{ c.subsystem }}</span>

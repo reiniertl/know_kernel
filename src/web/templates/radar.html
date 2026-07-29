@@ -44,7 +44,7 @@
           <tbody>
           {% for c in sub.concepts %}
             <tr>
-              <td style="padding-left:2rem;"><a href="/research/{{ c.concept_id }}">{{ c.concept_name }}</a></td>
+              <td style="padding-left:2rem;"><a href="/concepts/{{ c.concept_id }}">{{ c.concept_name }}</a></td>
               <td>{{ c.paper_count }}</td>
               <td>
                 {% for m in c.motivations %}
