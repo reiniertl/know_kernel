@@ -139,47 +139,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             {"counts": counts, "total": total, "edge_total": edge_total},
         )
 
-    @app.get("/concepts", response_class=HTMLResponse)
-    async def concepts_list(
-        request: Request,
-        kind: str | None = None,
-        page: int = Query(1, ge=1),
-        per_page: int = Query(50, ge=10, le=200),
-    ):
-        """List nodes with pagination (INV-KK-WEB-KIND-FILTER, INV-KK-WEB-PAGINATION)."""
-        conn = request.app.state.conn
-        offset = (page - 1) * per_page
-        if kind:
-            rows = conn.execute(
-                "SELECT id, kind, attrs FROM nodes WHERE kind = ? ORDER BY kind, id LIMIT ? OFFSET ?",
-                (kind, per_page + 1, offset),
-            ).fetchall()
-            title = kind
-        else:
-            rows = conn.execute(
-                "SELECT id, kind, attrs FROM nodes ORDER BY kind, id LIMIT ? OFFSET ?",
-                (per_page + 1, offset),
-            ).fetchall()
-            title = "Knowledge Base"
-        has_next = len(rows) > per_page
-        rows = rows[:per_page]
-        nodes = _rows_to_dicts(rows)
-        for n in nodes:
-            n["display_name"] = display_name_for_node(n["kind"], n.get("attrs") or {}, n["id"])
-        return templates.TemplateResponse(
-            request,
-            "concept_list.html",
-            {
-                "nodes": nodes,
-                "title": title,
-                "active_kind": kind,
-                "all_kinds": _all_kinds(conn),
-                "page": page,
-                "per_page": per_page,
-                "has_next": has_next,
-            },
-        )
-
     @app.get("/concepts/{node_id}", response_class=HTMLResponse)
     async def concept_detail(request: Request, node_id: str):
         conn = request.app.state.conn
