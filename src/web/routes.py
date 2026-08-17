@@ -24,6 +24,18 @@ from graph.briefing import build_concept_brief, classify_motivations
 from graph.scoring import research_score
 
 
+# INV-KK-WEB-MUTATION-ALLOWLISTED: this tuple IS the structural enforcement.
+# Every POST/PUT/DELETE route registered in setup_routes must have a path
+# starting with one of these prefixes. Admitting a new mutating endpoint means
+# adding its prefix here — the invariant itself does not move.
+WEB_MUTATION_ALLOWLIST = (
+    "/api/review/",
+    "/api/reviewers",
+    "/api/abstract/",
+    "/api/feed/send/",  # side-effecting shell-out, not a graph write
+)
+
+
 def _rows_to_dicts(rows) -> list[dict]:
     result = []
     for row in rows:
@@ -1036,8 +1048,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
     async def create_reviewer(request: Request):
         """Register a reviewer name (ALG-KK-WEB-REVIEWER-CREATE).
 
-        INV-KK-WEB-REVIEW-WRITE-SCOPED: writes are confined to /api/review/*
-        and /api/reviewers.
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/reviewers is on
+        WEB_MUTATION_ALLOWLIST.
         """
         from ingest.reviewer_registry import register_reviewer
         import dataclasses
@@ -1060,7 +1072,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
     async def submit_review(request: Request, source_id: str):
         """Submit a human review for a paper (ALG-KK-WEB-REVIEW-SUBMIT).
 
-        INV-KK-WEB-REVIEW-WRITE-SCOPED: only /api/review/* accepts POST/PUT.
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/review/ is on
+        WEB_MUTATION_ALLOWLIST.
         """
         from ingest.paper_scorer import review_paper
         import dataclasses
@@ -1089,7 +1102,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
     async def update_review(request: Request, review_id: str):
         """Update an existing human review (ALG-KK-WEB-REVIEW-EDIT).
 
-        INV-KK-WEB-REVIEW-WRITE-SCOPED: only /api/review/* accepts POST/PUT.
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/review/ is on
+        WEB_MUTATION_ALLOWLIST.
         """
         from ingest.paper_scorer import edit_review
         import dataclasses
@@ -1115,8 +1129,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
     async def remove_review(request: Request, review_id: str):
         """Delete an existing human review (ALG-KK-WEB-REVIEW-DELETE).
 
-        INV-KK-WEB-REVIEW-WRITE-SCOPED: mutating methods are confined to
-        /api/review/* and /api/reviewers.
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/review/ is on
+        WEB_MUTATION_ALLOWLIST.
         """
         from ingest.paper_scorer import delete_review
         import dataclasses
@@ -1131,6 +1145,33 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             if "does not exist" in msg:
                 return JSONResponse({"error": msg}, status_code=404)
             return JSONResponse({"error": msg}, status_code=400)
+
+    @app.put("/api/abstract/{source_id:path}")
+    async def edit_abstract(request: Request, source_id: str):
+        """Set a Source abstract by hand (ALG-KK-WEB-ABSTRACT-EDIT).
+
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/abstract/ is on
+        WEB_MUTATION_ALLOWLIST.
+
+        The provenance label is forced to "manual" — a human typed it, whatever
+        the caller claims (IFC-KK-SOURCE-ABSTRACT).
+        """
+        from ingest.source_abstract import set_abstract
+        import dataclasses
+
+        conn = request.app.state.conn
+        body = await request.json()
+        try:
+            result = set_abstract(conn, source_id, body["abstract"], "manual")
+            conn.commit()
+            return JSONResponse(dataclasses.asdict(result))
+        except ValueError as exc:
+            msg = str(exc)
+            if "does not exist" in msg:
+                return JSONResponse({"error": msg}, status_code=404)
+            return JSONResponse({"error": msg}, status_code=422)
+        except KeyError as exc:
+            return JSONResponse({"error": f"Missing field: {exc}"}, status_code=422)
 
     @app.get("/api/review/{source_id:path}")
     async def review_status(request: Request, source_id: str):

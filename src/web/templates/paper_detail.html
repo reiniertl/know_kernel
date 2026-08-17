@@ -19,6 +19,64 @@
   {% endif %}
 </p>
 
+{# --- ABSTRACT (ALG-KK-WEB-ABSTRACT-EDIT, IFC-KK-SOURCE-ABSTRACT) --- #}
+{% if s_attrs.abstract %}
+<div class="attrs-section" id="abstract-section">
+  <div id="abstract-display">
+    <h3 style="margin-bottom:0.3em;">Abstract</h3>
+    <p style="margin:0.3em 0;">{{ s_attrs.abstract }}</p>
+    <p style="margin:0.3em 0 0 0;font-size:0.8em;color:#888;" id="abstract-provenance">
+      {% if s_attrs.abstract_source == 'arxiv' %}
+        Fetched verbatim from arXiv.
+      {% elif s_attrs.abstract_source == 'openalex' %}
+        Reconstructed from OpenAlex&rsquo;s inverted word index &mdash; the wording is
+        recovered from a bag of positions, so word order and punctuation may differ
+        from the published abstract.
+      {% elif s_attrs.abstract_source == 'pdf' %}
+        Extracted from the paper PDF.
+      {% elif s_attrs.abstract_source == 'manual' %}
+        Entered by hand.
+      {% else %}
+        Provenance unrecorded.
+      {% endif %}
+      {% if s_attrs.abstract_fetched_at %}&middot; {{ s_attrs.abstract_fetched_at }}{% endif %}
+      &middot; <a href="#" onclick="toggleAbstractForm(); return false;">Edit</a>
+    </p>
+  </div>
+  <div id="abstract-edit" style="display:none;">
+    <h3 style="margin-bottom:0.3em;">Abstract</h3>
+    <form onsubmit="saveAbstract(event); return false;">
+      <textarea name="abstract" id="abstract-text" rows="8" required
+                style="font-family:monospace;width:100%;padding:0.3rem;box-sizing:border-box;">{{ s_attrs.abstract }}</textarea>
+      <div style="margin-top:0.5rem;">
+        <button type="submit" style="padding:0.3rem 1rem;">Save</button>
+        <button type="button" onclick="toggleAbstractForm()" style="padding:0.3rem 1rem;margin-left:0.5rem;">Cancel</button>
+        <span id="abstract-status" style="margin-left:0.5rem;font-size:0.85em;"></span>
+      </div>
+      <p style="margin:0.3em 0 0 0;font-size:0.8em;color:#888;">
+        Saving marks the abstract as entered by hand.
+      </p>
+    </form>
+  </div>
+</div>
+{% else %}
+<p style="margin:0.3em 0;font-size:0.85em;">
+  <a href="#" onclick="toggleAbstractForm(); return false;">+ Add abstract</a>
+</p>
+<div id="abstract-edit" style="display:none;" class="attrs-section">
+  <h3 style="margin-bottom:0.3em;">Abstract</h3>
+  <form onsubmit="saveAbstract(event); return false;">
+    <textarea name="abstract" id="abstract-text" rows="8" required
+              style="font-family:monospace;width:100%;padding:0.3rem;box-sizing:border-box;"></textarea>
+    <div style="margin-top:0.5rem;">
+      <button type="submit" style="padding:0.3rem 1rem;">Save</button>
+      <button type="button" onclick="toggleAbstractForm()" style="padding:0.3rem 1rem;margin-left:0.5rem;">Cancel</button>
+      <span id="abstract-status" style="margin-left:0.5rem;font-size:0.85em;"></span>
+    </div>
+  </form>
+</div>
+{% endif %}
+
 {# --- RESEARCH BRIEF --- #}
 <div class="attrs-section">
   <h3>Research Brief</h3>
@@ -268,6 +326,44 @@
 </div>
 
 <script>
+function toggleAbstractForm() {
+  var display = document.getElementById('abstract-display');
+  var edit = document.getElementById('abstract-edit');
+  if (edit.style.display === 'none') {
+    if (display) { display.style.display = 'none'; }
+    edit.style.display = 'block';
+  } else {
+    if (display) { display.style.display = 'block'; }
+    edit.style.display = 'none';
+  }
+}
+
+async function saveAbstract(e) {
+  e.preventDefault();
+  var status = document.getElementById('abstract-status');
+  var text = document.getElementById('abstract-text').value;
+  if (!text.trim()) { status.textContent = 'Abstract cannot be empty'; status.style.color = '#c0392b'; return; }
+  try {
+    var resp = await fetch('/api/abstract/{{ source.id }}', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({abstract: text})
+    });
+    var result = await resp.json();
+    if (resp.ok) {
+      status.textContent = 'Saved';
+      status.style.color = '#27ae60';
+      setTimeout(function(){ location.reload(); }, 1000);
+    } else {
+      status.textContent = result.error || 'Error';
+      status.style.color = '#c0392b';
+    }
+  } catch (err) {
+    status.textContent = 'Network error';
+    status.style.color = '#c0392b';
+  }
+}
+
 function toggleEditForm(reviewId) {
   var display = document.querySelector('.review-display-' + reviewId);
   var edit = document.querySelector('.review-edit-' + reviewId);
