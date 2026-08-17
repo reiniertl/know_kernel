@@ -1,0 +1,16 @@
+{
+  "name": "know_kernel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Kernel-design intelligence system — combobul-specified",
+  "scripts": {
+    "ril": "node combobul/cli/ril.mjs",
+    "silk": "node combobul/cli/silk.mjs",
+    "spec:validate": "node combobul/cli/ril.mjs validate-delta --json",
+    "spec:check": "node combobul/cli/ril.mjs validate-delta --json"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0"
+  }
+}
