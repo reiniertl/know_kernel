@@ -190,6 +190,8 @@
           <span style="font-size:0.85em;color:#888;">
             {{ rev.reviewer }} &middot; {{ rev.review_date }}
             &middot; <a href="#" onclick="toggleEditForm('{{ rev.review_id }}'); return false;" style="font-size:0.9em;">Edit</a>
+            &middot; <a href="#" onclick="deleteReview('{{ rev.review_id }}'); return false;" style="font-size:0.9em;color:#c0392b;">Delete</a>
+            <span id="delete-status-{{ rev.review_id }}" style="margin-left:0.5rem;"></span>
           </span>
         </div>
         <p style="margin:0.3em 0 0 0;font-size:0.9em;">{{ rev.rationale }}</p>
@@ -275,6 +277,26 @@ function toggleEditForm(reviewId) {
   } else {
     display.style.display = 'block';
     edit.style.display = 'none';
+  }
+}
+
+async function deleteReview(reviewId) {
+  if (!confirm('Delete this review? This cannot be undone.')) { return; }
+  var status = document.getElementById('delete-status-' + reviewId);
+  try {
+    var resp = await fetch('/api/review/' + reviewId, {method: 'DELETE'});
+    var result = await resp.json();
+    if (resp.ok) {
+      status.textContent = 'Deleted';
+      status.style.color = '#27ae60';
+      setTimeout(function(){ location.reload(); }, 1000);
+    } else {
+      status.textContent = result.error || 'Error';
+      status.style.color = '#c0392b';
+    }
+  } catch (err) {
+    status.textContent = 'Network error';
+    status.style.color = '#c0392b';
   }
 }
 

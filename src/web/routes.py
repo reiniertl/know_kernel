@@ -1111,6 +1111,27 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         except KeyError as exc:
             return JSONResponse({"error": f"Missing field: {exc}"}, status_code=400)
 
+    @app.delete("/api/review/{review_id}")
+    async def remove_review(request: Request, review_id: str):
+        """Delete an existing human review (ALG-KK-WEB-REVIEW-DELETE).
+
+        INV-KK-WEB-REVIEW-WRITE-SCOPED: mutating methods are confined to
+        /api/review/* and /api/reviewers.
+        """
+        from ingest.paper_scorer import delete_review
+        import dataclasses
+
+        conn = request.app.state.conn
+        try:
+            result = delete_review(conn, review_id)
+            conn.commit()
+            return JSONResponse(dataclasses.asdict(result))
+        except ValueError as exc:
+            msg = str(exc)
+            if "does not exist" in msg:
+                return JSONResponse({"error": msg}, status_code=404)
+            return JSONResponse({"error": msg}, status_code=400)
+
     @app.get("/api/review/{source_id:path}")
     async def review_status(request: Request, source_id: str):
         """Return existing reviews for a paper (ALG-KK-WEB-REVIEW-STATUS)."""

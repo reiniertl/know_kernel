@@ -192,3 +192,53 @@ def edit_review(
         verdict=verdict,
         rationale=rationale.strip(),
     )
+
+
+@dataclass
+class ReviewDeleteResult:
+    review_id: str
+    source_id: str
+
+
+def delete_review(conn: sqlite3.Connection, review_id: str) -> ReviewDeleteResult:
+    """Remove a HumanReview and its reviewed-by edge (ALG-KK-REVIEW-DELETE).
+
+    Deliberately scoped rather than delegating to graph.engine.delete_node.
+    delete_node revalidates the source node of every incoming edge, so removing
+    a review revalidates the reviewing Source against its must-have-an-Advisory
+    rule and rolls back on the great majority of real Sources. Nothing in
+    RULES_BY_KIND depends on a HumanReview existing, and reviewed-by is the only
+    edge that reaches one, so dropping the node together with that edge is
+    complete and leaves no orphans.
+
+    Raises ValueError if review_id names no node or names one of another kind.
+    """
+    from graph.engine import get_node
+
+    node = get_node(conn, review_id)
+    if node is None or node["kind"] != "HumanReview":
+        raise ValueError(
+            f"HumanReview node '{review_id}' does not exist"
+        )
+
+    source_row = conn.execute(
+        "SELECT source_id FROM edges "
+        "WHERE kind = 'reviewed-by' AND target_id = ?",
+        (review_id,),
+    ).fetchone()
+    source_id = source_row[0] if source_row else ""
+
+    conn.execute("SAVEPOINT delete_review")
+    try:
+        conn.execute(
+            "DELETE FROM edges WHERE kind = 'reviewed-by' AND target_id = ?",
+            (review_id,),
+        )
+        conn.execute("DELETE FROM nodes WHERE id = ?", (review_id,))
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT delete_review")
+        conn.execute("RELEASE SAVEPOINT delete_review")
+        raise
+    conn.execute("RELEASE SAVEPOINT delete_review")
+
+    return ReviewDeleteResult(review_id=review_id, source_id=source_id)

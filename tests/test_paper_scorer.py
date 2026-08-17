@@ -4,7 +4,13 @@ import pytest
 
 from graph.engine import add_node, get_node
 from graph.schema import init_db
-from ingest.paper_scorer import PaperReviewResult, review_paper, edit_review
+from ingest.paper_scorer import (
+    PaperReviewResult,
+    ReviewDeleteResult,
+    delete_review,
+    edit_review,
+    review_paper,
+)
 from ingest.reviewer_registry import register_reviewer
 
 
@@ -146,3 +152,48 @@ class TestEditReview:
         assert result.reviewer == "alice"
         node = get_node(conn, created.review_id)
         assert node["attrs"]["reviewer"] == "alice"
+
+
+class TestDeleteReview:
+    def test_happy_path(self, conn, source):
+        created = review_paper(conn, source, "alice", 4, "accept", "Rationale.")
+        result = delete_review(conn, created.review_id)
+        assert isinstance(result, ReviewDeleteResult)
+        assert result.review_id == created.review_id
+        assert result.source_id == source
+        assert get_node(conn, created.review_id) is None
+
+    def test_reviewed_by_edge_removed(self, conn, source):
+        created = review_paper(conn, source, "alice", 4, "accept", "Rationale.")
+        delete_review(conn, created.review_id)
+        row = conn.execute(
+            "SELECT 1 FROM edges WHERE kind = 'reviewed-by' AND target_id = ?",
+            (created.review_id,),
+        ).fetchone()
+        assert row is None
+
+    def test_nonexistent_review(self, conn):
+        with pytest.raises(ValueError, match="does not exist"):
+            delete_review(conn, "hrev-nonexistent")
+
+    def test_non_review_node_refused(self, conn, source):
+        """A id naming a node of another kind is refused, not silently dropped."""
+        with pytest.raises(ValueError, match="does not exist"):
+            delete_review(conn, source)
+        assert get_node(conn, source) is not None
+
+    def test_other_reviews_untouched(self, conn, source, second_source):
+        keep = review_paper(conn, source, "bob", 2, "reject", "Keep this one.")
+        drop = review_paper(conn, second_source, "bob", 5, "accept", "Drop this one.")
+        delete_review(conn, drop.review_id)
+        assert get_node(conn, keep.review_id) is not None
+
+    def test_deletion_frees_the_duplicate_slot(self, conn, source):
+        """INV-KK-REVIEW-SINGLE-PER-REVIEWER: the same reviewer may review again."""
+        created = review_paper(conn, source, "alice", 4, "accept", "First take.")
+        with pytest.raises(ValueError, match="already reviewed by"):
+            review_paper(conn, source, "alice", 2, "reject", "Second take.")
+        delete_review(conn, created.review_id)
+        again = review_paper(conn, source, "alice", 2, "reject", "Second take.")
+        assert again.reviewer == "alice"
+        assert again.review_id != created.review_id
