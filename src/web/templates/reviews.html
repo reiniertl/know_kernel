@@ -9,7 +9,6 @@
       <option value="">All</option>
       <option value="accept" {% if verdict_filter == 'accept' %}selected{% endif %}>Accept</option>
       <option value="reject" {% if verdict_filter == 'reject' %}selected{% endif %}>Reject</option>
-      <option value="skip" {% if verdict_filter == 'skip' %}selected{% endif %}>Skip</option>
     </select>
     <label style="margin-left:0.5rem;">Min score:</label>
     <select name="min_score" onchange="this.form.submit()" style="font-family:monospace; padding:0.2rem;">

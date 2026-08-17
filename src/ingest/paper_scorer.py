@@ -11,7 +11,7 @@ from graph.engine import add_node, add_edge
 from graph.rules import validate_node
 
 
-VALID_VERDICTS = {"accept", "reject", "skip"}
+VALID_VERDICTS = {"accept", "reject"}
 VALID_SCORES = {1, 2, 3, 4, 5}
 
 

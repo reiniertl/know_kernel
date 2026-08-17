@@ -62,6 +62,11 @@ class TestReviewPaper:
         with pytest.raises(ValueError, match="Invalid verdict"):
             review_paper(conn, source, "alice", 3, "maybe", "Some rationale.")
 
+    def test_verdict_skip_retired(self, conn, source):
+        """INV-KK-REVIEW-VERDICT-ENUM: skip is no longer an admissible verdict."""
+        with pytest.raises(ValueError, match="Invalid verdict"):
+            review_paper(conn, source, "alice", 3, "skip", "Some rationale.")
+
     def test_rationale_empty(self, conn, source):
         with pytest.raises(ValueError, match="non-empty"):
             review_paper(conn, source, "alice", 3, "accept", "")
@@ -76,7 +81,7 @@ class TestReviewPaper:
         review_paper(conn, source, "alice", 4, "accept", "First review.")
         with pytest.raises(ValueError, match="already reviewed by"):
             review_paper(conn, source, "alice", 2, "reject", "Second review.")
-        result = review_paper(conn, source, "bob", 3, "skip", "Different reviewer.")
+        result = review_paper(conn, source, "bob", 3, "reject", "Different reviewer.")
         assert result.reviewer == "bob"
         result2 = review_paper(conn, second_source, "alice", 5, "accept", "Same reviewer, different source.")
         assert result2.source_id == second_source
@@ -111,6 +116,12 @@ class TestEditReview:
         created = review_paper(conn, source, "alice", 4, "accept", "Rationale.")
         with pytest.raises(ValueError, match="Invalid verdict"):
             edit_review(conn, created.review_id, 3, "maybe", "Rationale.")
+
+    def test_verdict_skip_retired(self, conn, source):
+        """INV-KK-REVIEW-VERDICT-ENUM: skip is no longer an admissible verdict."""
+        created = review_paper(conn, source, "alice", 4, "accept", "Rationale.")
+        with pytest.raises(ValueError, match="Invalid verdict"):
+            edit_review(conn, created.review_id, 3, "skip", "Rationale.")
 
     def test_empty_rationale(self, conn, source):
         created = review_paper(conn, source, "alice", 4, "accept", "Rationale.")

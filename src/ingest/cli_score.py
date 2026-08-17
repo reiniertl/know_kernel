@@ -21,7 +21,7 @@ def main() -> None:
     parser.add_argument("--score", required=True, type=int, help="Impact score 1-5")
     parser.add_argument(
         "--verdict", required=True,
-        choices=["accept", "reject", "skip"],
+        choices=["accept", "reject"],
         help="Review verdict",
     )
     parser.add_argument("--rationale", required=True, help="Assessment rationale text")
