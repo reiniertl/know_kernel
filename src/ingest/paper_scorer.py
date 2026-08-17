@@ -9,6 +9,7 @@ from datetime import date
 
 from graph.engine import add_node, add_edge
 from graph.rules import validate_node
+from ingest.reviewer_registry import find_reviewer
 
 
 VALID_VERDICTS = {"accept", "reject"}
@@ -54,6 +55,12 @@ def review_paper(
     if not rationale or not rationale.strip():
         raise ValueError(
             "Rationale must be non-empty (INV-KK-REVIEW-RATIONALE-REQUIRED)"
+        )
+
+    if find_reviewer(conn, reviewer) is None:
+        raise ValueError(
+            f"Reviewer '{reviewer}' is not registered "
+            "(INV-KK-REVIEW-REVIEWER-REGISTERED)"
         )
 
     source = conn.execute(
@@ -145,6 +152,15 @@ def edit_review(
     if not rationale or not rationale.strip():
         raise ValueError(
             "Rationale must be non-empty (INV-KK-REVIEW-RATIONALE-REQUIRED)"
+        )
+
+    # The reviewer is immutable (INV-KK-REVIEW-EDIT-IMMUTABLE-REVIEWER), so the
+    # roster is checked against the name already on the node.
+    existing_reviewer = node["attrs"].get("reviewer", "")
+    if find_reviewer(conn, existing_reviewer) is None:
+        raise ValueError(
+            f"Reviewer '{existing_reviewer}' is not registered "
+            "(INV-KK-REVIEW-REVIEWER-REGISTERED)"
         )
 
     update_node_attrs(conn, review_id, {

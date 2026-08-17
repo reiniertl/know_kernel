@@ -655,6 +655,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         INV-KK-WEB-PAPER-404-NON-SOURCE: 404 for missing or non-Source.
         INV-KK-WEB-PAPER-CONCEPT-CHAIN: all concepts shown with links.
         """
+        from ingest.reviewer_registry import list_reviewers
+
         conn = request.app.state.conn
 
         row = conn.execute(
@@ -809,6 +811,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "subsystems": sorted(all_subsystems),
                 "paper_evidence": paper_evidence,
                 "existing_reviews": existing_reviews,
+                "reviewers": [r.name for r in list_reviewers(conn)],
             },
         )
 
@@ -1011,9 +1014,47 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             },
         )
 
+    @app.get("/reviewers", response_class=HTMLResponse)
+    async def reviewers_page(request: Request):
+        """Reviewer roster page (ALG-KK-WEB-REVIEWERS-PAGE)."""
+        from ingest.reviewer_registry import list_reviewers
+
+        conn = request.app.state.conn
+        roster = [
+            {"reviewer_id": r.reviewer_id, "name": r.name}
+            for r in list_reviewers(conn)
+        ]
+        return templates.TemplateResponse(
+            request, "reviewers.html", {"reviewers": roster},
+        )
+
     @app.get("/viz", response_class=HTMLResponse)
     async def viz(request: Request):
         return templates.TemplateResponse(request, "graph_viz.html", {})
+
+    @app.post("/api/reviewers")
+    async def create_reviewer(request: Request):
+        """Register a reviewer name (ALG-KK-WEB-REVIEWER-CREATE).
+
+        INV-KK-WEB-REVIEW-WRITE-SCOPED: writes are confined to /api/review/*
+        and /api/reviewers.
+        """
+        from ingest.reviewer_registry import register_reviewer
+        import dataclasses
+
+        conn = request.app.state.conn
+        body = await request.json()
+        try:
+            result = register_reviewer(conn, body["name"])
+            conn.commit()
+            return JSONResponse(dataclasses.asdict(result), status_code=201)
+        except ValueError as exc:
+            msg = str(exc)
+            if "already registered" in msg:
+                return JSONResponse({"error": msg}, status_code=409)
+            return JSONResponse({"error": msg}, status_code=422)
+        except KeyError as exc:
+            return JSONResponse({"error": f"Missing field: {exc}"}, status_code=422)
 
     @app.post("/api/review/{source_id:path}")
     async def submit_review(request: Request, source_id: str):

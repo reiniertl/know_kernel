@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity", "ResearchBrief", "HumanReview")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity", "ResearchBrief", "HumanReview", "Reviewer")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -114,6 +114,7 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "Opportunity": ("title", "description", "confidence", "frontier_score", "artifact_class"),
     "ResearchBrief": ("title", "key_ideas", "relevance", "methodology", "source_date", "artifact_class"),
     "HumanReview": ("reviewer", "score", "verdict", "rationale", "review_date", "artifact_class"),
+    "Reviewer": ("name",),
 }
 
 DATE_ATTRS = frozenset({"source_date", "window_start", "window_end", "review_date"})
@@ -145,6 +146,7 @@ ID_PREFIXES = {
     "Opportunity": "opp-",
     "ResearchBrief": "rb-",
     "HumanReview": "hrev-",
+    "Reviewer": "rvr-",
 }
 
 SCHEMA_SQL = """\

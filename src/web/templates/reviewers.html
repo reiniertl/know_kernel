@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Reviewers</h1>
+
+<p style="color:#666; font-size:0.9em;">
+  Names on this roster are the ones offered when submitting a paper review.
+  A review cannot be attributed to anyone who is not listed here.
+</p>
+
+<form id="reviewer-form" style="margin-bottom:1rem; display:flex; gap:0.5rem; align-items:center;">
+  <label>Name:</label>
+  <input type="text" name="name" required
+         style="font-family:monospace; padding:0.2rem 0.4rem; width:20rem;">
+  <button type="submit" style="padding:0.3rem 1rem;">Add</button>
+  <span id="reviewer-status" style="margin-left:0.5rem; font-size:0.85em;"></span>
+</form>
+
+{% if reviewers %}
+<table style="width:100%;">
+  <thead>
+    <tr>
+      <th style="width:40%;">Name</th>
+      <th>ID</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in reviewers %}
+    <tr>
+      <td>{{ r.name }}</td>
+      <td style="font-size:0.85em; color:#888; font-family:monospace;">{{ r.reviewer_id }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="color:#888;">No reviewers registered yet.</p>
+{% endif %}
+
+<script>
+document.getElementById('reviewer-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  var form = e.target;
+  var status = document.getElementById('reviewer-status');
+  try {
+    var resp = await fetch('/api/reviewers', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: form.name.value})
+    });
+    var result = await resp.json();
+    if (resp.ok) {
+      status.textContent = 'Added';
+      status.style.color = '#27ae60';
+      setTimeout(function(){ location.reload(); }, 1000);
+    } else {
+      status.textContent = result.error || 'Error';
+      status.style.color = '#c0392b';
+    }
+  } catch (err) {
+    status.textContent = 'Network error';
+    status.style.color = '#c0392b';
+  }
+});
+</script>
+{% endblock %}

@@ -5,11 +5,18 @@ import pytest
 from graph.engine import add_node, get_node
 from graph.schema import init_db
 from ingest.paper_scorer import PaperReviewResult, review_paper, edit_review
+from ingest.reviewer_registry import register_reviewer
 
 
 @pytest.fixture
 def conn(tmp_path):
-    return init_db(tmp_path / "test.db")
+    conn = init_db(tmp_path / "test.db")
+    # INV-KK-REVIEW-REVIEWER-REGISTERED: reviews are only admissible for names
+    # already on the roster, so the reviewers these tests use are registered up
+    # front. "carol" is deliberately left off.
+    register_reviewer(conn, "alice")
+    register_reviewer(conn, "bob")
+    return conn
 
 
 @pytest.fixture
@@ -66,6 +73,11 @@ class TestReviewPaper:
         """INV-KK-REVIEW-VERDICT-ENUM: skip is no longer an admissible verdict."""
         with pytest.raises(ValueError, match="Invalid verdict"):
             review_paper(conn, source, "alice", 3, "skip", "Some rationale.")
+
+    def test_unregistered_reviewer(self, conn, source):
+        """INV-KK-REVIEW-REVIEWER-REGISTERED: an unknown name cannot review."""
+        with pytest.raises(ValueError, match="is not registered"):
+            review_paper(conn, source, "carol", 3, "accept", "Some rationale.")
 
     def test_rationale_empty(self, conn, source):
         with pytest.raises(ValueError, match="non-empty"):

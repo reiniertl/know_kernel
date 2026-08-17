@@ -229,8 +229,18 @@
     <form id="review-form" style="margin-top:0.5rem;">
       <div style="margin-bottom:0.5rem;">
         <label>Reviewer:</label>
-        <input type="text" name="reviewer" required
-               style="font-family:monospace;padding:0.2rem 0.4rem;width:100%;">
+        <select name="reviewer" required
+                style="font-family:monospace;padding:0.2rem 0.4rem;width:100%;">
+          <option value="">-- select --</option>
+          {% for name in reviewers %}
+          <option value="{{ name }}">{{ name }}</option>
+          {% endfor %}
+        </select>
+        {% if not reviewers %}
+        <p style="font-size:0.85em;color:#c0392b;margin:0.3em 0 0 0;">
+          No reviewers registered. Add one on the <a href="/reviewers">Reviewers</a> page first.
+        </p>
+        {% endif %}
       </div>
       <div style="margin-bottom:0.5rem;">
         <label>Impact Score:</label>
@@ -306,6 +316,7 @@ document.getElementById('review-form').addEventListener('submit', async function
   var status = document.getElementById('review-status');
   var verdictEl = form.querySelector('input[name="verdict"]:checked');
   if (!verdictEl) { status.textContent = 'Select a verdict'; status.style.color = '#c0392b'; return; }
+  if (!form.reviewer.value) { status.textContent = 'Select a reviewer'; status.style.color = '#c0392b'; return; }
   var data = {
     reviewer: form.reviewer.value,
     score: parseInt(document.getElementById('score-slider').value),
