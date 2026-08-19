@@ -667,8 +667,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         INV-KK-WEB-PAPER-404-NON-SOURCE: 404 for missing or non-Source.
         INV-KK-WEB-PAPER-CONCEPT-CHAIN: all concepts shown with links.
         """
-        from ingest.reviewer_registry import list_reviewers
-
         conn = request.app.state.conn
 
         row = conn.execute(
@@ -823,7 +821,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "subsystems": sorted(all_subsystems),
                 "paper_evidence": paper_evidence,
                 "existing_reviews": existing_reviews,
-                "reviewers": [r.name for r in list_reviewers(conn)],
             },
         )
 
@@ -1074,16 +1071,25 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
 
         INV-KK-WEB-MUTATION-ALLOWLISTED: /api/review/ is on
         WEB_MUTATION_ALLOWLIST.
+        INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION: the author is the logged-in
+        user. A reviewer field in the body is ignored, so no request can file
+        a review under someone else's name.
         """
         from ingest.paper_scorer import review_paper
         import dataclasses
+
+        identity = getattr(request.state, "user", None)
+        if identity is None:
+            # Defensive: the gate never lets an anonymous request this far.
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+        reviewer = identity["reviewer"]
 
         conn = request.app.state.conn
         body = await request.json()
         try:
             result = review_paper(
                 conn, source_id,
-                body["reviewer"], body["score"],
+                reviewer, body["score"],
                 body["verdict"], body["rationale"],
             )
             conn.commit()

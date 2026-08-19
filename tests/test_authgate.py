@@ -429,3 +429,149 @@ def test_a_user_may_not_reset_someone_elses_password(gated):
         == 403
     )
     assert login(gated, username="boss", password="boss-pw").status_code == 302
+
+
+# --- implicit reviewer identity ---------------------------------------------
+#
+# INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION: the author is the session user.
+
+
+def _stored_reviewers(master_path: str) -> list[str]:
+    conn = sqlite3.connect(master_path)
+    try:
+        return [
+            r[0]
+            for r in conn.execute(
+                "SELECT json_extract(attrs, '$.reviewer') FROM nodes "
+                "WHERE kind = 'HumanReview'"
+            )
+        ]
+    finally:
+        conn.close()
+
+
+def test_paper_page_has_no_reviewer_picker(gated):
+    login(gated)
+
+    response = gated.get("/paper/src-1")
+
+    assert response.status_code == 200
+    assert 'name="reviewer"' not in response.text
+    assert "-- select --" not in response.text
+
+
+def test_paper_page_names_the_session_user_as_the_reviewer(gated):
+    login(gated)
+
+    response = gated.get("/paper/src-1")
+
+    assert "Reviewing as" in response.text
+    assert "<strong>reinier</strong>" in response.text
+
+
+def test_review_is_attributed_to_the_session_user(gated):
+    login(gated)
+
+    response = gated.post(
+        "/api/review/src-1",
+        json={"score": 4, "verdict": "accept", "rationale": "Solid."},
+    )
+
+    assert response.status_code == 201
+    assert _stored_reviewers(gated.master_path) == ["reinier"]
+
+
+def test_a_reviewer_field_in_the_body_is_ignored(gated):
+    """No request can file a review under someone else's name."""
+    login(gated)
+
+    response = gated.post(
+        "/api/review/src-1",
+        json={
+            "reviewer": "boss",
+            "score": 2,
+            "verdict": "reject",
+            "rationale": "Nope.",
+        },
+    )
+
+    assert response.status_code == 201
+    assert _stored_reviewers(gated.master_path) == ["reinier"]
+
+
+def test_a_second_review_by_the_same_session_user_is_409(gated):
+    """INV-KK-REVIEW-SINGLE-PER-REVIEWER still produces the 409."""
+    login(gated)
+    body = {"score": 4, "verdict": "accept", "rationale": "Solid."}
+    assert gated.post("/api/review/src-1", json=body).status_code == 201
+
+    assert gated.post("/api/review/src-1", json=body).status_code == 409
+
+
+def test_review_of_a_missing_source_is_still_404(gated):
+    login(gated)
+
+    response = gated.post(
+        "/api/review/nope-1",
+        json={"score": 4, "verdict": "accept", "rationale": "Solid."},
+    )
+
+    assert response.status_code == 404
+
+
+def test_anonymous_review_post_never_reaches_the_handler(gated):
+    response = gated.post(
+        "/api/review/src-1",
+        json={"score": 4, "verdict": "accept", "rationale": "Solid."},
+    )
+
+    assert response.status_code == 302
+    assert _stored_reviewers(gated.master_path) == []
+
+
+# --- nav ---------------------------------------------------------------------
+
+
+def test_nav_shows_the_username_and_a_logout_control(gated):
+    login(gated)
+
+    text = gated.get("/").text
+
+    assert "reinier" in text
+    assert 'action="/logout"' in text
+
+
+def test_a_plain_user_sees_no_admin_link(gated):
+    login(gated)
+
+    assert '/admin/users' not in gated.get("/").text
+
+
+def test_an_admin_sees_the_admin_link(gated):
+    login(gated, username="boss", password="boss-pw")
+
+    assert '/admin/users' in gated.get("/").text
+
+
+# --- regression guard: the templates still render with no gate ---------------
+
+
+def test_ungated_app_still_renders_without_an_identity(tmp_path):
+    """The nav and review-form guards must survive an ungated create_app."""
+    from web.app import create_app
+
+    master_path = tmp_path / "ungated.db"
+    conn = init_db(master_path)
+    add_node(
+        conn,
+        "src-1",
+        "Source",
+        {"url": "https://example.com/p.pdf", "source_type": "paper", "license": "MIT"},
+    )
+    conn.commit()
+    conn.close()
+
+    with TestClient(create_app(str(master_path))) as client:
+        assert client.get("/").status_code == 200
+        assert client.get("/paper/src-1").status_code == 200
+        assert 'action="/logout"' not in client.get("/").text

@@ -49,6 +49,16 @@
   <a href="/reviewers">Reviewers</a>
   <a href="/viz">Graph</a>
   <a href="/health">Health</a>
+  {# The guard is load-bearing: tests/test_web.py renders these templates
+     through create_app with no gate, so request.state.user is absent.
+     Jinja turns the missing attribute into Undefined, which is falsy. #}
+  {% if request.state.user %}
+  <span style="margin-left:1rem;color:#555;">{{ request.state.user.username }}</span>
+  {% if request.state.user.role == 'admin' %}<a href="/admin/users">Admin</a>{% endif %}
+  <form method="post" action="/logout" style="display:inline;">
+    <button type="submit" style="font-family:monospace;">Logout</button>
+  </form>
+  {% endif %}
   <span style="display:inline-block;position:relative;margin-left:1rem;">
     <input type="text" id="search-input" placeholder="Search nodes..."
            hx-get="/api/search" hx-trigger="keyup changed delay:300ms"
