@@ -23,9 +23,9 @@ def test_node_kinds_complete():
         "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis",
         "Kernel", "Problem", "Observation", "Discussion", "Benchmark",
         "Rejection", "Vulnerability", "Fix", "Proposal", "Trend",
-        "Opportunity",
+        "Opportunity", "ResearchBrief", "HumanReview", "Reviewer",
     }
-    assert len(NODE_KINDS) == 24
+    assert len(NODE_KINDS) == 27
 
 
 def test_edge_kinds_complete():
@@ -39,10 +39,10 @@ def test_edge_kinds_complete():
         "rejected-for", "grounded-in", "exploits", "affects-subsystem",
         "fixes", "patches", "addresses", "contradicted-by",
         "resulted-in", "motivated-by", "trend-about",
-        "opportunity-for", "supported-by",
+        "opportunity-for", "supported-by", "summarizes-for", "reviewed-by",
     }
     assert set(EDGE_KINDS) == expected
-    assert len(EDGE_KINDS) == 35
+    assert len(EDGE_KINDS) == 37
 
 
 def test_edge_valid_pairs_covers_all_edge_kinds():

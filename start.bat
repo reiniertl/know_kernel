@@ -22,11 +22,15 @@ if not exist "%DB%" (
 )
 
 set "KNOW_KERNEL_DB=%DB%"
+if "%KNOW_KERNEL_AUTH_DB%"=="" set "KNOW_KERNEL_AUTH_DB=%SCRIPT_DIR%datauth.db"
 set "PYTHONPATH=%SCRIPT_DIR%src"
 
 echo Starting know_kernel web server...
 echo   Database: %DB%
+echo   Auth DB:  %KNOW_KERNEL_AUTH_DB%
 echo   URL:      http://localhost:8000
 echo.
 
-python -m uvicorn web.app:app --host 127.0.0.1 --port 8000 --reload
+REM authgate.app:app, never web.app:app - the latter serves the knowledge app
+REM with no authentication at all (INV-KK-AUTH-GATE-COVERS-MOUNT).
+python -m uvicorn authgate.app:app --host 127.0.0.1 --port 8000 --reload

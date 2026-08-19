@@ -33,6 +33,9 @@ env/
 data/pdfs/*.pdf
 
 # Runtime databases (generated, not source)
+data/auth.db
+data/auth.db-wal
+data/auth.db-shm
 *.db-journal
 *.db-wal
 *.db-shm

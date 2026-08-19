@@ -182,13 +182,67 @@ Question ("design a subsystem using RCU + slab allocation")
       risk-accepts: [failure modes with local blast + self-healing]
 ```
 
+## Users and login
+
+The web application is behind a login. The gate app (`authgate.app:app`) owns
+`/login`, `/logout` and `/admin/users`, and mounts the know_kernel app beneath
+it at `/`, so no page is reachable without a session.
+
+Credentials live in their own SQLite file, `data/auth.db`, which is entirely
+separate from the knowledge graph in `data/master.db`. The two share no tables
+and no connection.
+
+### Bootstrap the first admin
+
+There is no self-registration. The first account is created from a shell:
+
+```bash
+kk-useradd --admin reinier    # prompts for the password twice
+./start.sh                    # or start.bat on Windows
+```
+
+Every user created this way is also added to the reviewer roster under the
+same name, so a logged-in person can submit reviews immediately. Later users
+can be added from `/admin/users` by any admin, or with `kk-useradd`.
+
+```
+kk-useradd [--admin] <name>   # create a user (prompts for the password)
+kk-userlist                   # list users, roles, active state
+kk-passwd <name>              # change a password
+```
+
+### Environment
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `KNOW_KERNEL_DB` | `data/master.db` | The knowledge graph |
+| `KNOW_KERNEL_AUTH_DB` | `data/auth.db` | Users, sessions, remember-me tokens |
+
+### Sessions
+
+A session lasts 24 hours and slides forward on every request. Ticking
+"Remember me on this device" additionally stores a 30-day rotating token, so an
+expired session is silently renewed and the browser appears to stay logged in.
+Sessions are stored server-side, so restarting the server — including
+`--reload` — does not log anyone out, and logging out genuinely revokes.
+
+### Do not start the inner app directly
+
+> **Warning:** `uvicorn web.app:app` serves the entire knowledge application
+> with **no authentication at all**. The know_kernel app is mounted behind the
+> gate and cannot defend itself; the gate is the only thing enforcing access.
+> Always start `authgate.app:app` — via `./start.sh`, `start.bat`, or `kk-web`.
+
 ## CLI entry points
 
 ```
-kk-ingest   # Run the ingestion pipeline
-kk-web      # Start the web API server
-kk-export   # Export a Class B-only snapshot
-kk-mcp      # Start the MCP server
+kk-ingest    # Run the ingestion pipeline
+kk-web       # Start the web API server behind the auth gate
+kk-export    # Export a Class B-only snapshot
+kk-mcp       # Start the MCP server
+kk-useradd   # Create a login user (and its reviewer roster entry)
+kk-userlist  # List login users
+kk-passwd    # Change a user's password
 ```
 
 ## Development
