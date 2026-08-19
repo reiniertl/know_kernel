@@ -11,6 +11,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "jinja2>=3.1",
+    "python-multipart>=0.0.9",  # FastAPI Form() parsing for the login POST
     "mcp>=1.0",
     "httpx>=0.27",
 ]

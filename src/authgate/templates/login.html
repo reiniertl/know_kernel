@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>know_kernel — sign in</title>
+  <!-- Standalone by design: the gate must render even if the knowledge app
+       cannot be imported or its database cannot be opened. The styling is
+       copied from web/templates/base.html so it does not look foreign. -->
+  <style>
+    body { font-family: monospace; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; }
+    form { max-width: 22rem; }
+    label { display: block; margin: 0.9rem 0 0.2rem; }
+    input[type="text"], input[type="password"] { width: 100%; padding: 0.4rem; font-family: monospace; }
+    .remember { margin: 0.9rem 0; font-weight: normal; }
+    .remember input { margin-right: 0.4rem; }
+    button { margin-top: 0.6rem; padding: 0.4rem 1.2rem; font-family: monospace; cursor: pointer; }
+    .error { border: 1px solid #c0392b; color: #c0392b; padding: 0.5rem 0.7rem; margin: 1rem 0; }
+    .hint { color: #666; font-size: 0.85em; margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <h1>know_kernel</h1>
+
+  {% if error %}
+  <p class="error">{{ error }}</p>
+  {% endif %}
+
+  <form method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next }}">
+
+    <label for="username">Username</label>
+    <input type="text" id="username" name="username" autocomplete="username" autofocus required>
+
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required>
+
+    <label class="remember">
+      <input type="checkbox" name="remember" value="1"> Remember me on this device
+    </label>
+
+    <button type="submit">Sign in</button>
+  </form>
+
+  <p class="hint">Accounts are created by an administrator; there is no self-registration.</p>
+</body>
+</html>

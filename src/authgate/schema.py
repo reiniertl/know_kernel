@@ -56,13 +56,18 @@ CREATE INDEX IF NOT EXISTS idx_remember_username ON remember_tokens(username);
 """
 
 
-def init_auth_db(path: Path | str) -> sqlite3.Connection:
+def init_auth_db(
+    path: Path | str, check_same_thread: bool = True
+) -> sqlite3.Connection:
     """Open (or create) auth.db and apply the schema.
 
     Mirrors graph.schema.init_db: WAL, foreign keys on, idempotent
     CREATE TABLE IF NOT EXISTS so an existing file migrates on open.
+
+    The server passes check_same_thread=False because FastAPI runs sync
+    handlers on a threadpool; the CLIs keep the safer default.
     """
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), check_same_thread=check_same_thread)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
