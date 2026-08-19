@@ -22,7 +22,7 @@ if not exist "%DB%" (
 )
 
 set "KNOW_KERNEL_DB=%DB%"
-if "%KNOW_KERNEL_AUTH_DB%"=="" set "KNOW_KERNEL_AUTH_DB=%SCRIPT_DIR%datauth.db"
+if "%KNOW_KERNEL_AUTH_DB%"=="" set "KNOW_KERNEL_AUTH_DB=%SCRIPT_DIR%data\auth.db"
 set "PYTHONPATH=%SCRIPT_DIR%src"
 
 echo Starting know_kernel web server...
