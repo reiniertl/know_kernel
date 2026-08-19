@@ -9,6 +9,8 @@ Sessions are expired by writing expires_at directly, never by sleeping.
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
@@ -47,6 +49,7 @@ def gated(tmp_path):
     app = create_gate_app(str(master_path), str(auth_path))
     with TestClient(app, follow_redirects=False) as client:
         client.auth_path = str(auth_path)
+        client.master_path = str(master_path)
         yield client
 
 
@@ -254,3 +257,175 @@ def test_identity_crosses_the_mount(gated):
 
     assert response.status_code == 200
     assert seen == {"username": "reinier", "role": "user", "reviewer": "reinier"}
+
+
+# --- admin surface ----------------------------------------------------------
+#
+# ALG-KK-AUTH-ADMIN-USER-LIST / -CREATE / -DEACTIVATE / -PASSWORD-SET
+# INV-KK-AUTH-NO-SELF-REGISTRATION: only an admin identity or the CLI.
+
+
+def _reviewer_names(master_path: str) -> list[str]:
+    conn = sqlite3.connect(master_path)
+    try:
+        return [
+            r[0]
+            for r in conn.execute(
+                "SELECT json_extract(attrs, '$.name') FROM nodes "
+                "WHERE kind = 'Reviewer' ORDER BY 1"
+            )
+        ]
+    finally:
+        conn.close()
+
+
+def _usernames(auth_path: str) -> list[str]:
+    conn = init_auth_db(auth_path)
+    try:
+        return [r[0] for r in conn.execute("SELECT username FROM users ORDER BY 1")]
+    finally:
+        conn.close()
+
+
+def test_anonymous_admin_page_is_gated(gated):
+    assert gated.get("/admin/users").status_code == 302
+
+
+def test_non_admin_cannot_read_the_user_list(gated):
+    login(gated)
+    assert gated.get("/admin/users").status_code == 403
+
+
+def test_admin_sees_every_user(gated):
+    login(gated, username="boss", password="boss-pw")
+
+    response = gated.get("/admin/users")
+
+    assert response.status_code == 200
+    assert "boss" in response.text
+    assert "reinier" in response.text
+
+
+def test_admin_creates_a_user_who_can_log_in_and_is_on_the_roster(gated):
+    login(gated, username="boss", password="boss-pw")
+
+    response = gated.post(
+        "/admin/users",
+        data={"username": "newbie", "password": "new-pw", "role": "user"},
+    )
+
+    assert response.status_code == 302
+    assert "newbie" in _usernames(gated.auth_path)
+    assert "newbie" in _reviewer_names(gated.master_path)
+    assert login(gated, username="newbie", password="new-pw").status_code == 302
+
+
+def test_admin_can_create_another_admin(gated):
+    login(gated, username="boss", password="boss-pw")
+    gated.post(
+        "/admin/users",
+        data={"username": "second", "password": "pw", "role": "admin"},
+    )
+
+    login(gated, username="second", password="pw")
+    assert gated.get("/admin/users").status_code == 200
+
+
+def test_non_admin_cannot_create_a_user_in_either_store(gated):
+    """INV-KK-AUTH-NO-SELF-REGISTRATION."""
+    login(gated)
+
+    response = gated.post(
+        "/admin/users",
+        data={"username": "sneaky", "password": "pw", "role": "admin"},
+    )
+
+    assert response.status_code == 403
+    assert "sneaky" not in _usernames(gated.auth_path)
+    assert "sneaky" not in _reviewer_names(gated.master_path)
+
+
+def test_duplicate_username_is_reported_not_crashed(gated):
+    login(gated, username="boss", password="boss-pw")
+
+    response = gated.post(
+        "/admin/users", data={"username": "reinier", "password": "pw", "role": "user"}
+    )
+
+    assert response.status_code == 400
+    assert "already exists" in response.text
+
+
+def test_create_rejects_an_unknown_role(gated):
+    login(gated, username="boss", password="boss-pw")
+
+    response = gated.post(
+        "/admin/users", data={"username": "x", "password": "pw", "role": "root"}
+    )
+
+    assert response.status_code == 400
+    assert "x" not in _usernames(gated.auth_path)
+
+
+def test_deactivation_kills_the_targets_live_session(gated):
+    victim = TestClient(gated.app, follow_redirects=False)
+    login(victim)
+    assert victim.get("/").status_code == 200
+
+    login(gated, username="boss", password="boss-pw")
+    assert gated.post("/admin/users/reinier/deactivate").status_code == 302
+
+    assert victim.get("/").status_code == 302
+
+
+def test_the_last_active_admin_cannot_be_deactivated(gated):
+    login(gated, username="boss", password="boss-pw")
+
+    response = gated.post("/admin/users/boss/deactivate")
+
+    assert response.status_code == 400
+    assert "last active admin" in response.text
+    assert gated.get("/admin/users").status_code == 200
+
+
+def test_non_admin_cannot_deactivate(gated):
+    login(gated)
+
+    assert gated.post("/admin/users/boss/deactivate").status_code == 403
+
+
+def test_admin_resets_another_users_password(gated):
+    login(gated, username="boss", password="boss-pw")
+
+    assert (
+        gated.post(
+            "/admin/users/reinier/password", data={"password": "reset-pw"}
+        ).status_code
+        == 302
+    )
+
+    assert login(gated, password="pw").status_code == 401
+    assert login(gated, password="reset-pw").status_code == 302
+
+
+def test_a_user_may_reset_their_own_password(gated):
+    login(gated)
+
+    response = gated.post(
+        "/admin/users/reinier/password", data={"password": "mine"}
+    )
+
+    assert response.status_code == 302
+    assert login(gated, password="mine").status_code == 302
+
+
+def test_a_user_may_not_reset_someone_elses_password(gated):
+    login(gated)
+
+    assert (
+        gated.post(
+            "/admin/users/boss/password", data={"password": "hijack"}
+        ).status_code
+        == 403
+    )
+    assert login(gated, username="boss", password="boss-pw").status_code == 302
