@@ -1,89 +1,151 @@
 ================================================================================
- Human Paper Scoring — /cb-green Implementation Prompts
- Generated from: docs/plans/human-paper-scoring-implementation.md
- Date: 2026-07-27
+ Authentication Gate, Sessions, Implicit Reviewer Identity
+ /cb-green Implementation Prompts
+ Generated from: docs/plans/auth-gate-and-session-implementation.md
+ Source audit:   silk run audit-auth-session-01 (cb-audit, SUCCESS, 0 violations)
+ Date:           2026-08-19
 ================================================================================
 
-4 skill invocations. Phase 1 merges spec+code (tightly coupled schema
-extension). Phase 3 blocked on DECISION (Option A/B/C for POST endpoints).
+6 skill invocations. Each authors exactly the spec surface for the code it
+writes, then implements it — no spec-only pass, no code-without-spec pass.
+
+  PROMPT 1  Auth store foundation      MOD-KK-AUTH + 3 IFC + 2 ALG + 4 INV
+  PROMPT 2  User creation CLI + roster mirroring       2 ALG + 1 INV
+  PROMPT 3  Gate, login, logout, mount  1 IFC + 4 ALG + 2 INV
+  PROMPT 4  Admin user management       4 ALG + 1 INV
+  PROMPT 5  Implicit reviewer identity  1 INV + 3 amended ALG
+  PROMPT 6  Trivial bundle              entry points, gitignore, README,
+                                        stale test assertions, 1 amended INV
+
+/cb-fix is NOT used anywhere in this list — the skill is reported broken. The
+one pre-existing test defect it would have handled (tests/test_graph_schema.py
+stale kind counts) is folded into PROMPT 6.
+
+ORDERING IS MANDATORY. 1 -> 2 -> 3 -> 4 -> 5 -> 6.
+  - 2 depends on the store from 1.
+  - 3 depends on the store from 1 and is what makes 5 possible.
+  - 5 depends on request.state.user, injected by the gate from 3.
+  - 6 switches the documented entry point and must land last.
+PROMPT 6 fixes a PRE-EXISTING red test. Until 6 lands, expect
+tests/test_graph_schema.py::test_node_kinds_complete and
+::test_edge_kinds_complete to fail. They are NOT caused by this work. Do not
+"fix" them in prompts 1-5 and do not let them block a green verdict there.
+
+TWO OPEN DECISIONS carried from the plan (§14). Both have defaults written into
+the prompts below; both are flagged inline as DECISION points:
+  D-13  REMEMBER_TTL = 30 days   (alternatives: 7d, 90d)   — appears in PROMPT 1
+  D-14  "Reviewing as <user>" static line kept              — appears in PROMPT 5
 
 ================================================================================
-PROMPT 1 of 4 — Phase 1: HumanReview data model, domain logic, CLI, tests
+PROMPT 1 of 6 — Auth store foundation: MOD-KK-AUTH, credential and session storage
 ================================================================================
 
-/cb-green — Phase 1: Add HumanReview node kind with reviewed-by edge, domain logic, CLI, and tests
 
-  - What: Create the MOD-KK-REVIEW module with 11 spec nodes, then implement
-    the full Phase 1 code surface in a single pass.
+================================================================================
+PROMPT 2 of 6 — User creation CLI and reviewer-roster mirroring
+================================================================================
+
+/cb-green — Add kk-useradd / kk-userlist / kk-passwd CLIs that create users in auth.db and mirror them into the Reviewer roster in master.db
+
+  - What: Make users creatable from the command line, and make every created
+    user automatically appear on the existing reviewer roster. This is the
+    bootstrap path for the first admin, and it is the mechanism that lets a
+    later prompt delete the reviewer dropdown.
+
+    Design context (settled, do not re-litigate — plan §3 D-6, D-7, D-9):
+    The operator offered to REMOVE the reviewer roster entirely. That option is
+    REJECTED. Rationale: HumanReview nodes carry a reviewed-by edge to Reviewer
+    nodes, so the roster is the graph-side record of authorship — removing it
+    would force master.db to depend on auth.db to answer "who wrote this
+    review", inverting the storage separation. Removal would also touch ~10
+    source/test files and ~9 spec nodes and is a refactor of shipped behaviour
+    requiring separate rule-#4 approval. Instead the roster becomes a
+    PROJECTION of the user list: creating a user creates its roster entry.
+    The roster name IS the auth username (D-7). Usernames are unique by primary
+    key in auth.db, so INV-KK-REVIEWER-NAME-UNIQUE (case-insensitive, enforced
+    at src/ingest/reviewer_registry.py:24-37) can never be violated by user
+    creation. A separate display name is deliberately deferred.
+    Users are DEACTIVATED, never deleted (D-9): a deleted user whose reviews
+    still reference their roster entry leaves dangling attribution.
 
     SPEC AUTHORING (via ril apply-batch):
-    Create module MOD-KK-REVIEW (kind=module, language=py, description="Human
-    review subsystem: CLI and batch interfaces for scoring papers, storing
-    reviewer judgments as graph nodes.").
-    Create interfaces IFC-KK-HUMAN-REVIEW (HumanReview node schema: reviewer,
-    score 1-5, verdict accept|reject|skip, rationale, review_date, artifact_class;
-    linked via reviewed-by edge) and IFC-KK-REVIEW-RESULT (return type from
-    review_paper(): review_id, source_id, reviewer, score, verdict, rationale).
-    Create 5 invariants:
-      INV-KK-REVIEW-SCORE-RANGE (predicate: forall r:HumanReview. r.score in {1..5}, strong, runtime, enforced:{})
-      INV-KK-REVIEW-VERDICT-ENUM (predicate: forall r:HumanReview. r.verdict in {accept,reject,skip}, strong, runtime, enforced:{})
-      INV-KK-REVIEW-SINGLE-PER-REVIEWER (predicate: forall (s:Source, reviewer:string). count(reviewed-by from s where target.reviewer=reviewer) <= 1, strong, runtime, enforced:{})
-      INV-KK-REVIEW-SOURCE-EXISTS (predicate: forall r:HumanReview. exists s:Source. edge(reviewed-by, s, r), strong, runtime, enforced:{})
-      INV-KK-REVIEW-RATIONALE-REQUIRED (predicate: forall r:HumanReview. r.rationale.strip() != "", strong, runtime, enforced:{})
     Create algorithms:
-      ALG-KK-REVIEW-PAPER (pre: source exists, score 1-5, verdict in enum, rationale non-empty, no dup by reviewer; post: HumanReview node + reviewed-by edge created, PaperReviewResult returned, all 5 invariants enforced)
-      ALG-KK-REVIEW-CLI (pre: valid CLI args --db --source-id --score --verdict --rationale --reviewer; post: JSON to stdout, exit 0/1/2)
-    Create 14 edges:
-      MOD-KK-REVIEW --contains--> IFC-KK-HUMAN-REVIEW, IFC-KK-REVIEW-RESULT,
-        INV-KK-REVIEW-SCORE-RANGE, INV-KK-REVIEW-VERDICT-ENUM,
-        INV-KK-REVIEW-SINGLE-PER-REVIEWER, INV-KK-REVIEW-SOURCE-EXISTS,
-        INV-KK-REVIEW-RATIONALE-REQUIRED, ALG-KK-REVIEW-PAPER, ALG-KK-REVIEW-CLI
-      ALG-KK-REVIEW-PAPER --enforces--> INV-KK-REVIEW-SCORE-RANGE,
-        INV-KK-REVIEW-VERDICT-ENUM, INV-KK-REVIEW-SINGLE-PER-REVIEWER,
-        INV-KK-REVIEW-SOURCE-EXISTS, INV-KK-REVIEW-RATIONALE-REQUIRED
+      ALG-KK-AUTH-USER-CREATE (pre: caller is an admin identity or the CLI;
+        username non-empty and not already present; post: a row exists in
+        auth.db.users carrying a pbkdf2 hash AND a Reviewer node named by that
+        username exists in master.db; both or neither)
+      ALG-KK-AUTH-CLI-USERADD (pre: kk-useradd [--admin] [--db PATH]
+        [--auth-db PATH] <username>, password read twice via getpass and never
+        accepted as an argv argument; post: delegates to ALG-KK-AUTH-USER-CREATE,
+        prints the created username and role, exit 0/1)
+    Create invariant:
+      INV-KK-AUTH-ROSTER-MIRRORS-USERS (predicate: forall u in users where
+        u.active = 1. exists r:Reviewer in master.db. r.name = u.username,
+        strong, runtime)
+    Create edges:
+      MOD-KK-AUTH --contains--> ALG-KK-AUTH-USER-CREATE, ALG-KK-AUTH-CLI-USERADD,
+        INV-KK-AUTH-ROSTER-MIRRORS-USERS
+      ALG-KK-AUTH-USER-CREATE --enforces--> INV-KK-AUTH-ROSTER-MIRRORS-USERS,
+        INV-KK-AUTH-NO-PLAINTEXT-PASSWORD
+      ALG-KK-AUTH-CLI-USERADD --enforces--> INV-KK-AUTH-NO-PLAINTEXT-PASSWORD
 
     CODE IMPLEMENTATION:
-    1. Modify src/graph/schema.py: append "HumanReview" to NODE_KINDS tuple,
-       add REQUIRED_ATTRS["HumanReview"] = ("reviewer","score","verdict","rationale","review_date","artifact_class"),
-       add ID_PREFIXES["HumanReview"] = "hrev-", append "reviewed-by" to EDGE_KINDS tuple,
-       add EDGE_VALID_PAIRS["reviewed-by"] = ("Source","HumanReview"),
-       add "review_date" to DATE_ATTRS frozenset.
-    2. Create src/ingest/paper_scorer.py: PaperReviewResult dataclass + review_paper()
-       function following the reviewer.py pattern (validate inputs, check source exists,
-       check no dup, add_node, add_edge, validate_node, return result).
-       Import from graph.engine (add_node, add_edge) and graph.rules (validate_node).
-       review_paper() signature: (conn, source_id, reviewer, score, verdict, rationale) -> PaperReviewResult.
-       Validation order: score range, verdict enum, rationale non-empty, source exists, dup check.
-       Dup check SQL: SELECT 1 FROM edges e JOIN nodes n ON e.target_id = n.id WHERE e.kind = 'reviewed-by' AND e.source_id = ? AND n.kind = 'HumanReview' AND json_extract(n.attrs, '$.reviewer') = ? LIMIT 1.
-       ID generation: f"hrev-{uuid.uuid4().hex[:12]}".
-       Node attrs: reviewer, score, verdict, rationale (stripped), review_date (date.today().isoformat()), artifact_class="human-review".
-    3. Create src/ingest/cli_score.py: argparse with --db --source-id --score --verdict
-       --rationale --reviewer. Calls init_db(), review_paper(), conn.commit(), prints JSON.
-       Exit codes: 0 success, 1 ValueError, 2 other Exception.
-    4. Create tests/test_paper_scorer.py: 6 test cases covering happy path + each of
-       the 5 invariants. Use init_db(":memory:"), pre-insert Source node with required
-       attrs (url, source_type, license).
+    1. src/authgate/roster.py — ensure_roster_entry(master_conn, username) -> str.
+       Calls find_reviewer then register_reviewer from
+       src/ingest/reviewer_registry.py (signatures verified:
+       find_reviewer(conn, name) -> str | None at line 24;
+       register_reviewer(conn, name) -> ReviewerResult at line 39;
+       ReviewerResult carries .reviewer_id and .name). Idempotent. Returns the
+       rvr- node id.
+       THIS MODULE IS THE ONLY PLACE THE GATE TOUCHES master.db. Do not import
+       graph or ingest modules anywhere else under src/authgate/.
+       Do NOT modify src/ingest/reviewer_registry.py — its API is sufficient.
+    2. src/authgate/cli.py:
+         useradd()  — kk-useradd [--admin] [--db PATH] [--auth-db PATH] <username>
+         userlist() — kk-userlist [--auth-db PATH]
+         passwd()   — kk-passwd [--auth-db PATH] <username>
+       argparse, matching the style of src/ingest/cli.py and src/export/cli.py.
+       Password via getpass.getpass, prompted twice, confirmed equal. NEVER an
+       argv flag (INV-KK-AUTH-NO-PLAINTEXT-PASSWORD).
+       WRITE ORDERING (two stores, not atomic — must be fail-loud, never
+       silently half-applied): write the user row -> ensure_roster_entry ->
+       commit auth.db -> commit master.db. If the roster write raises, roll back
+       BOTH and exit non-zero.
+       Console-script wiring lands in PROMPT 6, not here. Invoke via
+       `python -m authgate.cli` or the function directly for testing.
 
-  - Spec areas:
-    NEW: MOD-KK-REVIEW, IFC-KK-HUMAN-REVIEW, IFC-KK-REVIEW-RESULT,
-         INV-KK-REVIEW-SCORE-RANGE, INV-KK-REVIEW-VERDICT-ENUM,
-         INV-KK-REVIEW-SINGLE-PER-REVIEWER, INV-KK-REVIEW-SOURCE-EXISTS,
-         INV-KK-REVIEW-RATIONALE-REQUIRED, ALG-KK-REVIEW-PAPER, ALG-KK-REVIEW-CLI
-    EXISTING (not modified): graph.engine add_node/add_edge (kind-agnostic, no changes)
+  - Spec areas: 3 new nodes under MOD-KK-AUTH plus 5 edges. Reads (does not
+    modify) the roster surface in MOD-KK-REVIEW. Run before authoring:
+      npm run ril -- query-multi '[{"cmd":"node-info","args":["ALG-KK-REVIEWER-REGISTER","IFC-KK-REVIEWER","INV-KK-REVIEWER-NAME-UNIQUE","MOD-KK-REVIEW"]},{"cmd":"impact-analysis","args":["ALG-KK-REVIEWER-REGISTER","INV-KK-REVIEWER-NAME-UNIQUE"]}]' --json
+    Expected finding: ALG-KK-AUTH-USER-CREATE becomes a NEW caller of
+    ALG-KK-REVIEWER-REGISTER. If the live template permits it, add
+      ALG-KK-AUTH-USER-CREATE --depends-on--> ALG-KK-REVIEWER-REGISTER
+    Do NOT modify, weaken, or re-scope INV-KK-REVIEWER-NAME-UNIQUE,
+    INV-KK-REVIEW-REVIEWER-REGISTERED, or ALG-KK-REVIEWER-REGISTER. They keep
+    holding as-is and that is the point of the design.
 
-  - Code path:
-    MODIFY: src/graph/schema.py (NODE_KINDS, EDGE_KINDS, REQUIRED_ATTRS, EDGE_VALID_PAIRS, ID_PREFIXES, DATE_ATTRS)
-    NEW:    src/ingest/paper_scorer.py (review_paper, PaperReviewResult, VALID_VERDICTS, VALID_SCORES)
-    NEW:    src/ingest/cli_score.py (main)
-    NEW:    tests/test_paper_scorer.py (6 test cases)
+  - Code path: NEW src/authgate/roster.py, src/authgate/cli.py.
+    NEW tests/test_authgate_cli.py.
+    READ-ONLY dependency on src/ingest/reviewer_registry.py (do not edit).
+    No web, graph, export, or MCP file is touched.
 
-  - Pre-commit hook: spec mutations (.cbm files) + schema.py + paper_scorer.py + cli_score.py + test_paper_scorer.py
+  - Pre-commit hook: one commit, "feat: kk-useradd CLI with roster mirroring".
+    Contents: .cbm mutation file(s), src/authgate/roster.py,
+    src/authgate/cli.py, tests/test_authgate_cli.py. npm run spec:check must
+    hold at 0 errors.
 
-  - Test: tests/test_paper_scorer.py — test_happy_path, test_score_range_invalid, test_verdict_invalid, test_rationale_empty, test_source_not_found, test_duplicate_reviewer
+  - Test: NEW tests/test_authgate_cli.py covering plan §10 items 19-23:
+    kk-useradd creates BOTH the auth.db row and the Reviewer node in master.db;
+    re-running for an existing username exits non-zero and creates no second
+    roster entry; ensure_roster_entry is idempotent when the entry already
+    exists; --admin sets role='admin'; the password never appears in argv or in
+    captured stdout/stderr.
+    Add one test asserting the fail-loud ordering: if ensure_roster_entry
+    raises, no user row survives in auth.db.
 
-  >>> The following are general instructions. Copy verbatim to each prompt and do not use to generate the prompt body <<<
+  >>> GENERAL INSTRUCTIONS <<<
   - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
-  - IMPORTANT: COMMIT TO WORK. REDUCE TURNS
+  - IMPORTANT: COMMIT TO WOR. REDUCE TURNS
   - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
   - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
   - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
@@ -93,82 +155,186 @@ PROMPT 1 of 4 — Phase 1: HumanReview data model, domain logic, CLI, tests
   - WHEN TO COMMIT: Before "silk run finalize"
   - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
 
-
 ================================================================================
-PROMPT 2 of 4 — Phase 2: Batch import/export for paper_review_list.txt
+PROMPT 3 of 6 — The gate: parent app, login/logout, mounted know_kernel, identity injection
 ================================================================================
 
-/cb-green — Phase 2: Batch import/export bridging paper_review_list.txt and the graph
+/cb-green — Build the authentication gate app that owns /login and /logout, mounts the existing know_kernel app at /, and injects the resolved identity into every downstream request
 
-  - What: Create 4 spec nodes for the batch subsystem, then implement batch_score.py.
+  - What: The structural core of the feature. A NEW parent FastAPI app owns the
+    auth routes and a single gate middleware, and mounts the EXISTING,
+    UNMODIFIED know_kernel app at "/". After this prompt the application is
+    behind a wall.
+
+    Design context (settled, do not re-litigate — plan §3 D-1, D-2, D-3, D-8, D-11):
+    D-1 PARENT GATE, CHILD MOUNT. One structural choke point, mirroring the
+    existing WEB_MUTATION_ALLOWLIST pattern at src/web/routes.py:27-36. A
+    middleware also covers FastAPI's auto-generated /docs, /redoc and
+    /openapi.json, which per-route dependencies would silently miss.
+    Consequences, all verified: (a) INV-KK-WEB-MUTATION-ALLOWLISTED never
+    changes because /login and /logout are NOT in MOD-KK-WEB — DO NOT add them
+    to WEB_MUTATION_ALLOWLIST; (b) the 167 tests in tests/test_web.py keep
+    passing untouched because they build their client from create_app directly
+    (tests/test_web.py:17-45); (c) tests/test_source_abstract.py:209-221 sweeps
+    client.app.routes asserting every POST/PUT/DELETE is on the allowlist — it
+    MUST STAY pointed at create_app or it will pick up the gate's routes and
+    fail. Do not convert either fixture.
+    ACCEPTED RISK R-1: `uvicorn web.app:app` still serves everything
+    anonymously. The inner app cannot self-defend under this design. Entry
+    points are switched in PROMPT 6 and the risk is documented there.
+    D-2 MOUNT AT "/" ONLY, never a sub-path — templates use absolute links
+    (src/web/templates/base.html:44-51) and paper_detail.html fetches
+    /api/review/... Explicit parent routes registered BEFORE the Mount win the
+    match, so /login resolves in the gate.
+    D-3 IDENTITY CROSSES THE MOUNT VIA request.state. Starlette propagates
+    request.state through a Mount via the ASGI scope["state"] dict. VERIFIED
+    EMPIRICALLY against the installed starlette 1.2.1 — a parent
+    @app.middleware("http") that sets request.state.user is readable as
+    request.state.user inside the mounted app. NO TOKEN IN THE URL: tokens in
+    URLs leak via history, logs, and Referer. Login sets a cookie and 302s.
+    D-8 TWO COOKIES: 24h sliding session + 30d rotating remember-me. This is
+    what produces the operator's requirement — an expired session with a valid
+    remember token mints a new session inline and the request proceeds, so the
+    user sees nothing.
+    D-11 NO HARDENING: no rate limiting, no CSRF tokens, no password reset, no
+    lockout, no 2FA. SameSite=Lax on both cookies is the whole CSRF story.
+    https_only is a config flag defaulting to False (deployment is 127.0.0.1).
 
     SPEC AUTHORING (via ril apply-batch):
-    Create interface IFC-KK-REVIEW-BATCH-REPORT (return type: imported int, skipped int,
-    errors list of {title, reason}).
-    Create invariant INV-KK-REVIEW-BATCH-IDEMPOTENT (predicate: forall batch_import(file).
-    batch_import(file);batch_import(file) = batch_import(file). Duplicate reviews skipped.
-    strong, runtime, enforced:{}).
+    Create interface:
+      IFC-KK-IDENTITY (fields: username TEXT, role TEXT, reviewer TEXT — the
+        shape injected into request.state.user. reviewer currently always
+        equals username but is a distinct key so a display name can arrive
+        later without touching call sites.)
     Create algorithms:
-      ALG-KK-REVIEW-BATCH-IMPORT (pre: file exists, DB open, reviewer provided; post:
-        BatchImportReport returned, marked papers get HumanReview nodes, dups skipped,
-        unmatched titles in errors)
-      ALG-KK-REVIEW-BATCH-EXPORT (pre: DB open, output path writable; post: text file
-        in paper_review_list.txt format, reviewed papers show filled Decision/Notes)
-    Create 4 edges:
-      MOD-KK-REVIEW --contains--> IFC-KK-REVIEW-BATCH-REPORT,
-        INV-KK-REVIEW-BATCH-IDEMPOTENT, ALG-KK-REVIEW-BATCH-IMPORT,
-        ALG-KK-REVIEW-BATCH-EXPORT
+      ALG-KK-AUTH-LOGIN (pre: POST body carries username + password; post: on
+        success a sessions row exists, the kk_session cookie is set, a
+        kk_remember cookie + remember_tokens row exist iff "remember me" was
+        ticked, and the response is 302 to a validated local next; on failure
+        login.html re-renders with ONE generic message and HTTP 401)
+      ALG-KK-AUTH-LOGOUT (post: the session row is deleted, the remember-token
+        row if any is deleted, both cookies are cleared, response is 302 /login)
+      ALG-KK-AUTH-SESSION-RESUME (pre: session absent or expired and a
+        kk_remember cookie is present; post: if the token hash matches a
+        non-expired row for an active user, the old remember row is deleted, a
+        new one written, a new cookie set, a new session minted, and the request
+        proceeds; otherwise the request is anonymous)
+      ALG-KK-AUTH-GATE (post: every request either carries request.state.user,
+        or is on AUTH_EXEMPT_PATHS, or is answered 302/401 before reaching the
+        mount)
+    Create invariants:
+      INV-KK-AUTH-GATE-COVERS-MOUNT (predicate: forall request r. r.path not in
+        AUTH_EXEMPT_PATHS implies r reaching the mounted app carries a resolved
+        identity, strong, structural — the AUTH_EXEMPT_PATHS tuple IS the
+        enforcement, exactly as WEB_MUTATION_ALLOWLIST is for
+        INV-KK-WEB-MUTATION-ALLOWLISTED)
+      INV-KK-AUTH-NEXT-IS-LOCAL (predicate: forall next parameter n. n starts
+        with "/" and does not start with "//", strong, runtime — rejects open
+        redirects, falls back to "/")
+    Include in INV-KK-AUTH-GATE-COVERS-MOUNT's description this scope note:
+      "The gate covers HTTP only. The MCP server is stdio (src/mcp_server/
+      server.py:609 mcp.run()), ingest and export are local argparse CLIs, and
+      master.db remains readable to anyone with filesystem access. This is not
+      system-wide access control."
+    Create edges:
+      MOD-KK-AUTH --contains--> IFC-KK-IDENTITY, ALG-KK-AUTH-LOGIN,
+        ALG-KK-AUTH-LOGOUT, ALG-KK-AUTH-SESSION-RESUME, ALG-KK-AUTH-GATE,
+        INV-KK-AUTH-GATE-COVERS-MOUNT, INV-KK-AUTH-NEXT-IS-LOCAL
+      ALG-KK-AUTH-GATE --enforces--> INV-KK-AUTH-GATE-COVERS-MOUNT
+      ALG-KK-AUTH-LOGIN --enforces--> INV-KK-AUTH-NEXT-IS-LOCAL
+      ALG-KK-AUTH-SESSION-RESUME --enforces--> INV-KK-AUTH-REMEMBER-ROTATES
+      ALG-KK-AUTH-LOGIN --depends-on--> ALG-KK-AUTH-VERIFY-CREDENTIAL
 
     CODE IMPLEMENTATION:
-    Create src/ingest/batch_score.py with:
-    1. BatchImportReport dataclass (imported, skipped, errors)
-    2. parse_review_list(file_path): parse paper_review_list.txt format.
-       Paper blocks delimited by "--- Paper N/M ---" headers, ending at
-       80-char dash separator. Extract Title: line value (strip after colon).
-       Decision line: [X] ACCEPT means verdict="accept", [X] REJECT means
-       verdict="reject". Skip papers with no [X] mark.
-       Notes: multiline text until separator. May contain "Score: N" for
-       explicit score (N in 1-5); otherwise derive: accept=4, reject=1, skip=3.
-       Notes text (minus Score: prefix) becomes rationale.
-       Return list of {"title": str, "verdict": str, "notes": str, "score": int}.
-    3. import_reviews(conn, file_path, reviewer): call parse_review_list(), for each
-       entry look up Source by title:
-       SELECT id FROM nodes WHERE kind = 'Source' AND json_extract(attrs, '$.title') = ?
-       If no Source found: add {"title": ..., "reason": "Source not found by title"} to errors.
-       If Source found: call review_paper(conn, source_id, reviewer, score, verdict, rationale).
-       Catch ValueError (duplicate review) -> increment skipped (idempotent).
-       Return BatchImportReport(imported, skipped, errors).
-    4. export_review_list(conn, output_path): query research-type Sources:
-       SELECT id, attrs FROM nodes WHERE kind = 'Source' AND json_extract(attrs, '$.source_type')
-       IN ('paper','preprint','conference-paper','conference-proceedings')
-       ORDER BY json_extract(attrs, '$.published_date') DESC.
-       For each Source, check reviewed-by edges:
-       SELECT n.attrs FROM edges e JOIN nodes n ON e.target_id = n.id
-       WHERE e.kind = 'reviewed-by' AND e.source_id = ? AND n.kind = 'HumanReview' LIMIT 1.
-       Write in paper_review_list.txt format: reviewed papers get [X] ACCEPT/REJECT
-       with Score: N and rationale in Notes. Unreviewed papers get empty checkboxes.
-    5. CLI main() with argparse subparsers:
-       "import --db --file --reviewer" calls import_reviews, prints JSON report.
-       "export --db --output" calls export_review_list, prints confirmation.
+    1. src/authgate/gate.py:
+         AUTH_EXEMPT_PATHS = ("/login", "/healthz", "/static/")
+           Comment it as THE structural enforcement of
+           INV-KK-AUTH-GATE-COVERS-MOUNT, in the same voice as the comment at
+           src/web/routes.py:27-30.
+         is_exempt(path) -> bool
+         safe_next(raw) -> str        # INV-KK-AUTH-NEXT-IS-LOCAL
+         install_gate(app, auth_conn_getter) — registers @app.middleware("http"):
+           1. exempt path            -> pass through, no identity
+           2. valid session cookie   -> slide_session, inject identity
+           3. absent/expired session + kk_remember -> consume_remember (rotate),
+                                        create_session, set cookies, inject
+           4. otherwise -> if request.headers.get("HX-Request"):
+                              Response(status_code=401,
+                                       headers={"HX-Redirect": "/login"})
+                           else:
+                              RedirectResponse(f"/login?next={quote(path)}", 302)
+           The HX branch is REQUIRED: src/web/templates/base.html:50-56 fires
+           hx-get /api/search on every keystroke; a 302 would be swapped into
+           the dropdown as HTML.
+         Identity shape, exactly: {"username": ..., "role": ..., "reviewer": ...}
+    2. src/authgate/templates/login.html — STANDALONE, does NOT extend
+       base.html (D-10: the gate must render without the knowledge app being
+       importable or its DB open). Username, password, a "Remember me on this
+       device" checkbox UNCHECKED by default, a hidden next field, one generic
+       error slot. Copy the monospace styling from src/web/templates/base.html:8
+       so it does not look foreign.
+    3. src/authgate/app.py:
+         create_gate_app(db_path, auth_db_path) -> FastAPI
+         lifespan: open auth.db, run AUTH_SCHEMA_SQL, purge_expired, store on
+           app.state.auth_conn, close on shutdown. FAIL CLOSED — if auth.db
+           cannot be opened the gate must refuse to start, never start open.
+         Routes: GET /login, POST /login, POST /logout, GET /healthz.
+         install_gate(...) BEFORE the mount.
+         app.mount("/", create_app(db_path))     # src/web/app.py:18 factory
+         app = create_gate_app(os.environ.get("KNOW_KERNEL_DB", ":memory:"),
+                               auth_db_path())
+         main() for uvicorn authgate.app:app
+    4. pyproject.toml dependencies — add python-multipart (the login form posts
+       urlencoded; it is installed transitively today but UNDECLARED, so a clean
+       install of the declared set cannot run the login). Do NOT add
+       itsdangerous — server-side sessions removed the need.
 
-  - Spec areas:
-    NEW: IFC-KK-REVIEW-BATCH-REPORT, INV-KK-REVIEW-BATCH-IDEMPOTENT,
-         ALG-KK-REVIEW-BATCH-IMPORT, ALG-KK-REVIEW-BATCH-EXPORT
-    EXISTING (parent): MOD-KK-REVIEW (created in Phase 1, receives contains edges)
-    DEPENDS ON: ALG-KK-REVIEW-PAPER (called by import_reviews)
+  - Spec areas: 7 new nodes under MOD-KK-AUTH plus 12 edges. Reads, and must
+    NOT modify, the web module's mutation surface. Run before authoring:
+      npm run ril -- query-multi '[{"cmd":"node-info","args":["MOD-KK-WEB","INV-KK-WEB-MUTATION-ALLOWLISTED"]},{"cmd":"impact-analysis","args":["INV-KK-WEB-MUTATION-ALLOWLISTED","MOD-KK-WEB"]}]' --json
+    Expected finding, and the reason this design was chosen: /login and /logout
+    are POST endpoints but they live in MOD-KK-AUTH, and
+    INV-KK-WEB-MUTATION-ALLOWLISTED is quantified over MOD-KK-WEB only
+    ("forall endpoint in MOD-KK-WEB. endpoint.method in {POST, PUT, DELETE}
+    implies endpoint.path in WEB_MUTATION_ALLOWLIST"). The invariant therefore
+    still holds untouched. DO NOT extend WEB_MUTATION_ALLOWLIST and DO NOT
+    weaken or re-scope that invariant.
 
-  - Code path:
-    NEW: src/ingest/batch_score.py (parse_review_list, import_reviews, export_review_list, BatchImportReport, main)
-    READ ONLY: data/paper_review_list.txt (reference format, not modified by this prompt)
+  - Code path: NEW src/authgate/gate.py, src/authgate/app.py,
+    src/authgate/templates/login.html. MODIFY pyproject.toml:9-15 (add
+    python-multipart only). NEW tests/test_authgate.py.
+    src/web/routes.py, src/web/app.py and src/web/templates/ are NOT touched by
+    this prompt — reviewer identity and nav changes land in PROMPT 5.
 
-  - Pre-commit hook: spec mutations (.cbm files) + batch_score.py
+  - Pre-commit hook: one commit, "feat: authentication gate with login and
+    mounted app". Contents: .cbm mutation file(s), the three new authgate
+    files, pyproject.toml, tests/test_authgate.py. npm run spec:check at 0
+    errors. Full pytest run: everything green EXCEPT the two known pre-existing
+    tests/test_graph_schema.py failures (fixed in PROMPT 6).
 
-  - Test: manual verification via CLI. Optionally add tests/test_batch_score.py with
-    a synthetic review list string parsed against parse_review_list().
+  - Test: NEW tests/test_authgate.py covering plan §10 items 24-34.
+    Fixture design matters and is what protects the existing suite — build a
+    `gated` fixture that seeds a master.db (with one Source), an auth.db with an
+    admin ("boss") and a plain user ("reinier"), calls ensure_roster_entry for
+    both, then wraps create_gate_app in TestClient. TestClient persists cookies,
+    so one login() helper authenticates the rest of a test. Leave the fixture
+    ANONYMOUS by default and log in explicitly per test.
+    Cases: anonymous GET / -> 302 /login?next=/; GET /login -> 200 anonymous;
+    POST /login valid -> 302 to the validated next with a session cookie set;
+    POST /login invalid -> 401, one generic message, no cookie; after login
+    GET / -> 200; GET /docs and GET /openapi.json gated while anonymous;
+    HX-Request while anonymous -> 401 with HX-Redirect: /login; POST /logout
+    clears the cookie and the next GET / -> 302; an expired session WITH a valid
+    remember cookie -> request succeeds and a new session cookie is issued; an
+    expired session WITHOUT one -> 302 /login; next=https://evil.example and
+    next=//evil.example are both rejected in favour of "/".
+    Expire sessions by writing expires_at directly, never by sleeping.
+    REGRESSION, must pass unmodified: pytest tests/test_web.py -q (all 167) and
+    pytest tests/test_source_abstract.py -q including the router sweep.
 
-  >>> The following are general instructions. Copy verbatim to each prompt and do not use to generate the prompt body <<<
+  >>> GENERAL INSTRUCTIONS <<<
   - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
-  - IMPORTANT: COMMIT TO WORK. REDUCE TURNS
+  - IMPORTANT: COMMIT TO WOR. REDUCE TURNS
   - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
   - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
   - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
@@ -178,110 +344,92 @@ PROMPT 2 of 4 — Phase 2: Batch import/export for paper_review_list.txt
   - WHEN TO COMMIT: Before "silk run finalize"
   - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
 
-
 ================================================================================
-*** DECISION GATE — Resolve before Prompt 3 ***
-================================================================================
-
-The web layer has zero POST endpoints. Phase 3 introduces POST /api/review/{source_id}.
-INV-KK-WEB-READ-ONLY is referenced in code comments but does NOT exist as a formal
-spec node in the DAG. Options:
-
-  A. Add INV-KK-WEB-REVIEW-WRITE-SCOPED (permits POST only at /api/review/*)
-  B. Skip Phase 3 entirely (CLI-only scoring, Phases 1+2+4 still work)
-  C. Separate write app on different port
-
-Decision must be made before executing Prompt 3.
-
-================================================================================
-PROMPT 3 of 4 — Phase 3: Web review endpoints and paper detail review UI
+PROMPT 4 of 6 — Admin user management in the browser
 ================================================================================
 
-/cb-green — Phase 3: Add web review endpoints (POST/GET) and paper detail review section
+/cb-green — Add admin-only user management routes and page to the gate app: list, create, deactivate, reset password
 
-  - What: Create 4 spec nodes for the web review surface, then implement the
-    POST/GET review endpoints and paper detail review section.
+  - What: Let an admin manage the roster of people who may log in, without
+    dropping to the CLI. Admin surface lives ENTIRELY in the gate app so
+    MOD-KK-WEB gains nothing and the admin surface cannot leak into the
+    knowledge graph.
+
+    Design context (settled — plan §3 D-9, requirements 9 and 10):
+    Exactly two roles, admin and user. NO self-registration anywhere in the
+    HTTP surface — the operator was explicit. The first admin is created by
+    kk-useradd --admin from PROMPT 2. Under 50 users at any time, so no
+    pagination, no search, no sorting, no groups. Deactivate, never delete.
 
     SPEC AUTHORING (via ril apply-batch):
-    Create invariant INV-KK-WEB-REVIEW-WRITE-SCOPED in MOD-KK-WEB (predicate:
-    forall POST endpoint in MOD-KK-WEB. endpoint.path matches "/api/review/*".
-    Only review POST endpoints permitted, all other routes remain GET-only.
-    strong, structural, enforced:{}).
-    Create algorithms in MOD-KK-WEB:
-      ALG-KK-WEB-REVIEW-SUBMIT (pre: valid JSON body {score 1-5, verdict
-        accept|reject|skip, rationale non-empty, reviewer string}, source node exists;
-        post: HumanReview node created via review_paper(), 201 JSON response with
-        review_id. 404 if source missing, 409 if duplicate reviewer, 422 if validation)
-      ALG-KK-WEB-REVIEW-STATUS (pre: source_id param; post: JSON array of
-        {reviewer, score, verdict, rationale, review_date}. Empty array if none.
-        404 if source not found)
-      ALG-KK-WEB-PAPER-DETAIL-REVIEW (pre: paper detail rendered for valid Source;
-        post: review section appended showing existing reviews as cards with verdict
-        badge/score/reviewer/date/rationale, plus collapsible form that POSTs via
-        JavaScript fetch to /api/review/{source_id})
-    Create 5 edges:
-      MOD-KK-WEB --contains--> INV-KK-WEB-REVIEW-WRITE-SCOPED
-      MOD-KK-WEB --contains--> ALG-KK-WEB-REVIEW-SUBMIT
-      MOD-KK-WEB --contains--> ALG-KK-WEB-REVIEW-STATUS
-      MOD-KK-WEB --contains--> ALG-KK-WEB-PAPER-DETAIL-REVIEW
-      ALG-KK-WEB-REVIEW-SUBMIT --depends-on--> ALG-KK-REVIEW-PAPER
+    Create algorithms:
+      ALG-KK-AUTH-ADMIN-USER-LIST (pre: caller identity has role=admin;
+        post: all users returned with role, active, created_at; 403 otherwise)
+      ALG-KK-AUTH-ADMIN-USER-CREATE (pre: caller role=admin; post: delegates to
+        ALG-KK-AUTH-USER-CREATE, so the roster entry is created too; 403 otherwise)
+      ALG-KK-AUTH-ADMIN-USER-DEACTIVATE (pre: caller role=admin, target exists;
+        post: users.active=0 and the target's sessions and remember tokens are
+        deleted; refuses when the target is the last active admin; 403 otherwise)
+      ALG-KK-AUTH-ADMIN-PASSWORD-SET (pre: caller role=admin OR caller is the
+        target user; post: the stored hash is replaced; existing sessions are
+        left alone)
+    Create invariant:
+      INV-KK-AUTH-NO-SELF-REGISTRATION (predicate: forall user-creating path p.
+        caller(p) is an admin identity or caller(p) is the CLI, strong,
+        structural)
+    Create edges:
+      MOD-KK-AUTH --contains--> ALG-KK-AUTH-ADMIN-USER-LIST,
+        ALG-KK-AUTH-ADMIN-USER-CREATE, ALG-KK-AUTH-ADMIN-USER-DEACTIVATE,
+        ALG-KK-AUTH-ADMIN-PASSWORD-SET, INV-KK-AUTH-NO-SELF-REGISTRATION
+      ALG-KK-AUTH-ADMIN-USER-CREATE --enforces--> INV-KK-AUTH-NO-SELF-REGISTRATION,
+        INV-KK-AUTH-ROSTER-MIRRORS-USERS
+      ALG-KK-AUTH-CLI-USERADD --enforces--> INV-KK-AUTH-NO-SELF-REGISTRATION
+      ALG-KK-AUTH-ADMIN-USER-CREATE --depends-on--> ALG-KK-AUTH-USER-CREATE
 
     CODE IMPLEMENTATION:
-    1. Modify src/web/routes.py inside setup_routes():
-       a. Add import at top of function: from ingest.paper_scorer import review_paper
-       b. Add POST /api/review/{source_id} handler:
-          - Parse JSON body via await request.json()
-          - Extract score (int), verdict (str), rationale (str), reviewer (str)
-          - Call review_paper(conn, source_id, body["reviewer"], body["score"],
-            body["verdict"], body["rationale"])
-          - conn.commit()
-          - Return JSONResponse(dataclasses.asdict(result), status_code=201)
-          - Catch ValueError: if "does not exist" in str -> 404, if "already reviewed" in str -> 409, else -> 422
-       c. Add GET /api/review/{source_id} handler:
-          - Verify source exists (404 if not)
-          - Query: SELECT n.attrs FROM edges e JOIN nodes n ON e.target_id = n.id
-            WHERE e.kind = 'reviewed-by' AND e.source_id = ? AND n.kind = 'HumanReview'
-          - Parse each row's attrs JSON
-          - Return JSONResponse with list of {reviewer, score, verdict, rationale, review_date}
-       d. Extend paper_detail() handler (currently at line 1117):
-          - After existing queries, before return: query reviewed-by edges for this source
-          - SQL: SELECT n.attrs FROM edges e JOIN nodes n ON e.target_id = n.id
-            WHERE e.kind = 'reviewed-by' AND e.source_id = ? AND n.kind = 'HumanReview'
-          - Parse attrs, build existing_reviews list of dicts
-          - Add "existing_reviews": existing_reviews to template context
+    1. src/authgate/templates/admin_users.html — a table of username / role /
+       active / created_at, an add form (username, password, role), and
+       deactivate + reset-password controls per row. Same monospace styling.
+    2. src/authgate/app.py — add:
+         GET  /admin/users
+         POST /admin/users
+         POST /admin/users/{username}/deactivate
+         POST /admin/users/{username}/password
+       Every handler asserts request.state.user["role"] == "admin" and returns
+       403 otherwise. Factor the check into one helper (require_admin) so the
+       rule has a single definition site.
+       POST /admin/users calls ensure_roster_entry in the same handler, with the
+       same fail-loud two-store ordering as PROMPT 2: user row -> roster entry
+       -> commit auth.db -> commit master.db; on roster failure roll back both
+       and return 500 with a clear message.
+       The gate needs the master.db connection for the roster write — reach it
+       through the mounted app's state or hold a second connection in the gate's
+       lifespan. Choose ONE and comment why; do not open a connection per request.
 
-    2. Modify src/web/templates/paper_detail.html:
-       - Add after {# --- PAPER EVIDENCE --- #} block (after line 173, before {% endblock %}):
-       - New section {# --- HUMAN REVIEW --- #} with class attrs-section
-       - Display existing reviews as .card divs: verdict badge (green accept, red reject,
-         grey skip), score/5, reviewer, review_date, rationale paragraph
-       - "No reviews yet." when empty
-       - Collapsible <details> form: reviewer text input, score range slider 1-5 with
-         live value display, verdict radio buttons (accept/reject/skip), rationale
-         textarea (required), submit button
-       - JavaScript: form submit handler using fetch POST to /api/review/{{ source.id }},
-         Content-Type application/json, show status message, reload on success after 1s
+  - Spec areas: 5 new nodes under MOD-KK-AUTH plus 8 edges, including two edges
+    onto nodes authored in PROMPTS 2 and 3 (ALG-KK-AUTH-USER-CREATE,
+    ALG-KK-AUTH-CLI-USERADD). Run before authoring:
+      npm run ril -- query-multi '[{"cmd":"node-info","args":["MOD-KK-AUTH","ALG-KK-AUTH-USER-CREATE","ALG-KK-AUTH-CLI-USERADD","INV-KK-AUTH-ROSTER-MIRRORS-USERS"]},{"cmd":"impact-analysis","args":["ALG-KK-AUTH-USER-CREATE"]}]' --json
+    No node outside MOD-KK-AUTH is modified.
 
-  - Spec areas:
-    NEW: INV-KK-WEB-REVIEW-WRITE-SCOPED, ALG-KK-WEB-REVIEW-SUBMIT,
-         ALG-KK-WEB-REVIEW-STATUS, ALG-KK-WEB-PAPER-DETAIL-REVIEW
-    EXISTING (parent): MOD-KK-WEB (receives contains edges)
-    EXISTING (dep target): ALG-KK-REVIEW-PAPER (depends-on from ALG-KK-WEB-REVIEW-SUBMIT)
-    EXISTING (extended): ALG-KK-WEB-PAPER-DETAIL (paper_detail handler extended, not replaced)
+  - Code path: NEW src/authgate/templates/admin_users.html. MODIFY
+    src/authgate/app.py (new routes + require_admin helper). EXTEND
+    tests/test_authgate.py.
 
-  - Code path:
-    MODIFY: src/web/routes.py (add submit_review POST handler, review_status GET handler, extend paper_detail handler with review query)
-    MODIFY: src/web/templates/paper_detail.html (add review section + form + JavaScript after Paper Evidence block)
+  - Pre-commit hook: one commit, "feat: admin user management". Contents: .cbm
+    mutation file(s), the new template, src/authgate/app.py,
+    tests/test_authgate.py. npm run spec:check at 0 errors.
 
-  - Pre-commit hook: spec mutations (.cbm files) + routes.py + paper_detail.html
+  - Test: EXTEND tests/test_authgate.py with plan §10 items 35-39: a non-admin
+    GET /admin/users -> 403; an admin GET /admin/users -> 200 listing all users;
+    an admin POST /admin/users creates a user who can then log in AND has a
+    Reviewer node in master.db; a non-admin POST /admin/users -> 403 creating
+    nothing in either store; deactivating a user invalidates that user's live
+    session on their next request; the last active admin cannot be deactivated.
 
-  - Test: manual browser test — navigate to /paper/{source_id}, submit a review via
-    form, verify it appears after reload, verify duplicate submission returns 409,
-    verify GET /api/review/{source_id} returns JSON array.
-
-  >>> The following are general instructions. Copy verbatim to each prompt and do not use to generate the prompt body <<<
+  >>> GENERAL INSTRUCTIONS <<<
   - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
-  - IMPORTANT: COMMIT TO WORK. REDUCE TURNS
+  - IMPORTANT: COMMIT TO WOR. REDUCE TURNS
   - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
   - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
   - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
@@ -291,112 +439,135 @@ PROMPT 3 of 4 — Phase 3: Web review endpoints and paper detail review UI
   - WHEN TO COMMIT: Before "silk run finalize"
   - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
 
-
 ================================================================================
-PROMPT 4 of 4 — Phase 4: Review badges on feed/radar, reviews list page, nav
+PROMPT 5 of 6 — Implicit reviewer identity: delete the dropdown, derive the reviewer from the session
 ================================================================================
 
-/cb-green — Phase 4: Add review badges to feed/radar, reviews list page, and nav link
+/cb-green — Take the review author from the logged-in session, delete the reviewer dropdown from the paper page, and show the user in the nav
 
-  - What: Create 2 spec nodes for the view integration, then implement the
-    batch review query helper, feed/radar badges, reviews list page, and nav update.
+  - What: The operator's requirement, verbatim: "I also want the drop down list
+    to go away. Once a user is logged in we should expect the user to be
+    implicitly the reviewer." Two halves: the UI stops offering a choice, and
+    the SERVER stops accepting one.
+
+    Design context (settled — plan §3 D-12):
+    Server-side authority is the real change. submit_review must stop reading
+    body["reviewer"] ENTIRELY. This is not a security measure — it is
+    correctness: otherwise attribution is decorative and any hand-crafted
+    request can impersonate any roster member.
+    VERIFIED FACT that makes this cheap: there are NO HTTP-level tests for any
+    /api/review* endpoint anywhere in tests/ (confirmed: grep -rn "api/review"
+    tests/ returns nothing). review_paper is covered at function level in
+    tests/test_paper_scorer.py, which does not go through the web layer and is
+    NOT affected. Nothing existing breaks.
+    VERIFIED FACT about the picker: src/web/templates/paper_detail.html:292 is
+    the ONLY reviewer picker in the entire UI. The <select> elements in
+    src/web/templates/reviews.html:8 and :14 are verdict and min-score FILTERS —
+    leave them alone.
 
     SPEC AUTHORING (via ril apply-batch):
-    Create algorithms in MOD-KK-WEB:
-      ALG-KK-WEB-FEED-REVIEW-BADGE (pre: page source IDs computed for feed or radar;
-        post: review status badge per paper showing avg score and verdict color,
-        single batch IN(...) query for all source IDs on current page,
-        INV-KK-WEB-QUERY-BOUNDED satisfied — one query not per-paper)
-      ALG-KK-WEB-REVIEWS-LIST (pre: DB open, optional query params verdict and
-        min_score; post: paginated HTML table of all reviews sorted by review_date
-        DESC, filterable by verdict enum and minimum score int, paper titles link
-        to /paper/{source_id}, INV-KK-WEB-QUERY-BOUNDED satisfied via SQL LIMIT/OFFSET)
-    Create 4 edges:
-      MOD-KK-WEB --contains--> ALG-KK-WEB-FEED-REVIEW-BADGE
-      MOD-KK-WEB --contains--> ALG-KK-WEB-REVIEWS-LIST
-      ALG-KK-WEB-FEED-REVIEW-BADGE --satisfies--> INV-KK-WEB-QUERY-BOUNDED
-      ALG-KK-WEB-REVIEWS-LIST --satisfies--> INV-KK-WEB-QUERY-BOUNDED
+    Create invariant:
+      INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION (predicate: forall review
+        submission s. s.reviewer = request.state.user.reviewer, strong, runtime)
+    Amend three existing algorithm nodes:
+      ALG-KK-WEB-REVIEW-SUBMIT — precondition changes from "body carries a
+        registered reviewer name" to "the request carries a resolved identity;
+        the reviewer is derived from it"; postcondition gains "the request
+        body's reviewer field, if present, is ignored".
+      ALG-KK-WEB-PAPER-DETAIL — postcondition drops "the reviewer roster is
+        supplied to the template".
+      ALG-KK-WEB-REVIEWERS-PAGE — description gains "read-only projection of
+        the user list; new entries arrive via ALG-KK-AUTH-USER-CREATE".
+    Create edges:
+      MOD-KK-WEB --contains--> INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION
+      ALG-KK-WEB-REVIEW-SUBMIT --enforces--> INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION
+      ALG-KK-WEB-REVIEW-SUBMIT --depends-on--> ALG-KK-AUTH-GATE   (if the live
+        template permits; the handler now requires the gate's identity)
 
     CODE IMPLEMENTATION:
-    1. Add _batch_review_status(conn, source_ids) helper inside setup_routes() in
-       src/web/routes.py:
-       - If not source_ids: return {}
-       - Single IN(...) query: SELECT e.source_id, json_extract(n.attrs, '$.score'),
-         json_extract(n.attrs, '$.verdict') FROM edges e JOIN nodes n ON e.target_id = n.id
-         WHERE e.kind = 'reviewed-by' AND n.kind = 'HumanReview' AND e.source_id IN (ph)
-       - Aggregate per source_id: collect scores and verdicts
-       - Return dict {source_id: {avg_score: float, count: int, latest_verdict: str|None}}
+    1. src/web/routes.py:1071-1099 submit_review —
+         identity = getattr(request.state, "user", None)
+         if identity is None: return JSONResponse({"error": "Not authenticated"},
+                                                  status_code=401)   # defensive
+         reviewer = identity["reviewer"]
+       Pass that to review_paper. DELETE the body["reviewer"] read. Keep the
+       existing 404 / 409 / 422 mapping exactly as it is — INV-KK-REVIEW-
+       SINGLE-PER-REVIEWER still produces the 409 and must keep doing so.
+    2. src/web/routes.py:826 — DELETE the context entry
+         "reviewers": [r.name for r in list_reviewers(conn)],
+    3. src/web/routes.py:670 — DELETE the now-unused
+         from ingest.reviewer_registry import list_reviewers
+       inside paper_detail. DO NOT touch the identical import at
+       src/web/routes.py:1032, which the /reviewers page still needs.
+    4. src/web/templates/paper_detail.html:291-304 — DELETE the whole
+       <label>Reviewer:</label> + <select name="reviewer"> block AND the
+       {% if not reviewers %} "No reviewers registered..." warning that follows
+       it. Replace with one static line (DECISION D-14 — keep unless the
+       operator says otherwise):
+         <p style="margin:0;font-size:0.9em;color:#555;">
+           Reviewing as <strong>{{ request.state.user.reviewer }}</strong>
+         </p>
+    5. src/web/templates/paper_detail.html:437 — DELETE
+         if (!form.reviewer.value) { ... return; }
+    6. src/web/templates/paper_detail.html:439 — DELETE the
+         reviewer: form.reviewer.value,
+       line from the data object. Leave score, verdict, rationale untouched.
+    7. src/web/templates/base.html:43-60 nav — append after the existing links,
+       before the search span:
+         {% if request.state.user %}
+           <span style="margin-left:1rem;color:#555;">{{ request.state.user.username }}</span>
+           {% if request.state.user.role == 'admin' %}<a href="/admin/users">Admin</a>{% endif %}
+           <form method="post" action="/logout" style="display:inline;">
+             <button type="submit" style="font-family:monospace;">Logout</button>
+           </form>
+         {% endif %}
+       THE GUARD IS LOAD-BEARING. tests/test_web.py renders these templates
+       through create_app with NO gate and therefore NO request.state.user.
+       Jinja tolerates undefined attributes but request.state raises
+       AttributeError when the key is absent. VERIFY which form survives the
+       ungated render and pick it; the regression test below exists to catch
+       exactly this failure.
+    8. src/web/templates/reviews.html — NO CHANGE.
 
-    2. Extend research_feed() handler (line 852 of routes.py):
-       - After building items list, before return templates.TemplateResponse:
-       - feed_sids = [item["source_id"] for item in items]
-       - review_status = _batch_review_status(conn, feed_sids)
-       - for item in items: item["review"] = review_status.get(item["source_id"])
+  - Spec areas: 1 new invariant under MOD-KK-WEB, 3 amended algorithm nodes,
+    2-3 new edges. This is the ONLY prompt that modifies existing spec nodes —
+    run impact-analysis FIRST and report it:
+      npm run ril -- query-multi '[{"cmd":"node-info","args":["ALG-KK-WEB-REVIEW-SUBMIT","ALG-KK-WEB-PAPER-DETAIL","ALG-KK-WEB-REVIEWERS-PAGE","ALG-KK-WEB-PAPER-DETAIL-REVIEW","ALG-KK-WEB-REVIEW-EDIT","ALG-KK-WEB-REVIEW-DELETE"]},{"cmd":"impact-analysis","args":["ALG-KK-WEB-REVIEW-SUBMIT","ALG-KK-WEB-PAPER-DETAIL"]},{"cmd":"invariant-context","args":["INV-KK-REVIEW-REVIEWER-REGISTERED","INV-KK-REVIEW-SINGLE-PER-REVIEWER","INV-KK-REVIEW-EDIT-IMMUTABLE-REVIEWER"]}]' --json
+    MUST NOT CHANGE: INV-KK-REVIEW-REVIEWER-REGISTERED (still enforced inside
+    review_paper at src/ingest/paper_scorer.py:60-64 — the session username is
+    on the roster because PROMPT 2 put it there), INV-KK-REVIEW-SINGLE-PER-
+    REVIEWER, INV-KK-REVIEW-EDIT-IMMUTABLE-REVIEWER, INV-KK-WEB-MUTATION-
+    ALLOWLISTED (/api/review/ is already on the allowlist — the path does not
+    change), INV-KK-WEB-QUERY-BOUNDED (dropping the roster query REDUCES per-page
+    work; it cannot violate the bound).
+    Do NOT touch src/ingest/paper_scorer.py or src/ingest/reviewer_registry.py.
 
-    3. Extend radar() handler (line 1297 of routes.py):
-       - After fetching all rows: all_sids = [row[0] for row in rows]
-       - review_status = _batch_review_status(conn, all_sids)
-       - When building paper entries: entry["papers"][-1]["review"] = review_status.get(sid)
+  - Code path: MODIFY src/web/routes.py (lines 670, 826, 1071-1099),
+    src/web/templates/paper_detail.html (lines 291-304, 437, 439),
+    src/web/templates/base.html (lines 43-60). EXTEND tests/test_authgate.py.
 
-    4. Modify src/web/templates/feed.html:
-       - Add <th style="width:8%;">Review</th> after Actions column header
-       - Add td per row: if item.review: badge with avg_score/5 and verdict-colored
-         background (#27ae60 accept, #c0392b reject, #7f8c8d skip/other).
-         Else: dash in #ccc.
+  - Pre-commit hook: one commit, "feat: implicit reviewer identity from
+    session". Contents: .cbm mutation file(s), the two templates,
+    src/web/routes.py, tests/test_authgate.py. npm run spec:check at 0 errors.
+    State the D-14 choice ("Reviewing as" line kept / dropped) in the commit body.
 
-    5. Modify src/web/templates/radar.html:
-       - Show review badge next to each paper title in the expandable table.
+  - Test: EXTEND tests/test_authgate.py with plan §10 items 40-45 and 48:
+    a gated GET /paper/{id} contains NO <select name="reviewer">; it shows
+    "Reviewing as <username>"; POST /api/review/{id} with only
+    {score, verdict, rationale} -> 201 and the stored HumanReview.reviewer
+    equals the session username; the SAME post carrying
+    "reviewer": "someone-else" still stores the session user; a second review of
+    the same paper by the same session user -> 409; the nav shows the username
+    and a Logout control and a non-admin sees no Admin link.
+    REGRESSION GUARD (item 48, protects the nav guard in step 7): an UNGATED
+    create_app render of "/" and "/paper/{id}" still returns 200 with no
+    identity present.
+    MUST STILL PASS UNMODIFIED: pytest tests/test_web.py -q (167) and
+    pytest tests/test_source_abstract.py -q.
 
-    6. Add GET /reviews route in src/web/routes.py:
-       - Query params: verdict (str|None), min_score (int|None ge=1 le=5),
-         page (int ge=1), per_page (int ge=10 le=200)
-       - SQL: SELECT n.id, n.attrs, s.id, s.attrs FROM nodes n
-         JOIN edges e ON e.kind = 'reviewed-by' AND e.target_id = n.id
-         JOIN nodes s ON s.id = e.source_id AND s.kind = 'Source'
-         WHERE n.kind = 'HumanReview'
-         + optional AND json_extract(n.attrs, '$.verdict') = ?
-         + optional AND CAST(json_extract(n.attrs, '$.score') AS INTEGER) >= ?
-         ORDER BY json_extract(n.attrs, '$.review_date') DESC
-         LIMIT per_page+1 OFFSET (page-1)*per_page
-       - Build reviews list: review_id, source_id, paper_title, reviewer, score,
-         verdict, rationale, review_date
-       - Render reviews.html template
-
-    7. Create src/web/templates/reviews.html:
-       - Extends base.html
-       - Filter bar: verdict dropdown (all/accept/reject/skip), min score dropdown (1-5)
-       - Table: Date, Paper (linked to /paper/{source_id}), Reviewer, Score (/5),
-         Verdict (badge), Rationale (truncated)
-       - Pagination: page N, previous/next links
-
-    8. Modify src/web/templates/base.html line 52:
-       - Add <a href="/reviews">Reviews</a> after the Radar link
-
-  - Spec areas:
-    NEW: ALG-KK-WEB-FEED-REVIEW-BADGE, ALG-KK-WEB-REVIEWS-LIST
-    EXISTING (parent): MOD-KK-WEB (receives contains edges)
-    EXISTING (satisfies target): INV-KK-WEB-QUERY-BOUNDED (existing invariant, not modified, receives satisfies edges)
-    EXISTING (extended, not replaced):
-      ALG-KK-WEB-FEED-LIST (feed handler extended with badge query)
-      ALG-KK-WEB-RADAR (radar handler extended with badge query)
-
-  - Code path:
-    MODIFY: src/web/routes.py (add _batch_review_status helper, extend research_feed handler, extend radar handler, add reviews_list route)
-    MODIFY: src/web/templates/feed.html (add Review column header + badge cell)
-    MODIFY: src/web/templates/radar.html (add badge next to paper titles)
-    NEW:    src/web/templates/reviews.html (paginated review list with filters, extends base.html)
-    MODIFY: src/web/templates/base.html (add Reviews nav link after Radar)
-
-  - Pre-commit hook: spec mutations (.cbm files) + routes.py + feed.html + radar.html + reviews.html + base.html
-
-  - Test: manual browser test — verify badges appear on /feed and /radar for reviewed
-    papers (requires at least one HumanReview node in DB from Phase 1/2/3), verify
-    /reviews page loads with pagination, verify verdict/score filters work, verify
-    Reviews link appears in nav bar.
-
-  >>> The following are general instructions. Copy verbatim to each prompt and do not use to generate the prompt body <<<
+  >>> GENERAL INSTRUCTIONS <<<
   - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
-  - IMPORTANT: COMMIT TO WORK. REDUCE TURNS
+  - IMPORTANT: COMMIT TO WOR. REDUCE TURNS
   - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
   - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
   - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
@@ -406,22 +577,124 @@ PROMPT 4 of 4 — Phase 4: Review badges on feed/radar, reviews list page, nav
   - WHEN TO COMMIT: Before "silk run finalize"
   - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
 
-
 ================================================================================
- EXECUTION ORDER
-================================================================================
-
-  Prompt 1 — Phase 1 (data model + CLI + tests)
-  Prompt 2 — Phase 2 (batch import/export)
-  *** DECISION GATE — resolve Option A/B/C for POST endpoints ***
-  Prompt 3 — Phase 3 (web review endpoints + UI) — skip if Option B chosen
-  Prompt 4 — Phase 4 (view integration) — works regardless of Phase 3 decision
-
-================================================================================
- OPEN DECISIONS (resolve before Prompt 3)
+PROMPT 6 of 6 — Trivial bundle: entry points, packaging, gitignore, README, stale test assertions
 ================================================================================
 
-  POST endpoint policy:
-    A — Add INV-KK-WEB-REVIEW-WRITE-SCOPED (recommended)
-    B — Skip Phase 3, CLI-only scoring
-    C — Separate write app on different port
+/cb-green — Switch every documented entry point to the auth gate, wire the console scripts, ignore auth.db, document the login, and reconcile two stale schema test assertions
+
+  - What: The last mile. Five small, mechanically independent changes bundled
+    into ONE skill execution because none of them carries design risk. This
+    prompt is what actually closes the gate in production — until it lands, the
+    documented way to start the app still bypasses authentication.
+
+    (a) ENTRY POINTS. pyproject.toml [project.scripts]: kk-web changes from
+        "web.app:main" to "authgate.app:main"; add kk-useradd =
+        "authgate.cli:useradd", kk-userlist = "authgate.cli:userlist",
+        kk-passwd = "authgate.cli:passwd". Add "src/authgate" to
+        [tool.hatch.build.targets.wheel] packages (currently lists src/graph,
+        src/ingest, src/export, src/web, src/mcp_server at pyproject.toml:44).
+    (b) START SCRIPTS. start.bat and start.sh currently run
+        `python -m uvicorn web.app:app --host 127.0.0.1 --port 8000 --reload`.
+        Change to authgate.app:app. Add a KNOW_KERNEL_AUTH_DB export defaulting
+        to <script dir>/data/auth.db, and print it alongside the existing
+        "Database:" and "URL:" lines. KEEP --reload — server-side sessions
+        survive reloads by design (that is why D-4 chose them).
+    (c) GITIGNORE. Add data/auth.db, data/auth.db-wal, data/auth.db-shm.
+    (d) README. New "Users and login" section: bootstrap the first admin with
+        kk-useradd --admin <name>; the two environment variables
+        KNOW_KERNEL_DB and KNOW_KERNEL_AUTH_DB; and an EXPLICIT WARNING that
+        `uvicorn web.app:app` bypasses the gate entirely and must not be used.
+        That warning is the documented mitigation for accepted risk R-1 — the
+        inner app cannot defend itself under the parent-mount design.
+    (e) STALE TEST ASSERTIONS — PRE-EXISTING DEFECT, NOT CAUSED BY THIS WORK.
+        tests/test_graph_schema.py:19-28 test_node_kinds_complete asserts a
+        24-element set and len(NODE_KINDS) == 24, while src/graph/schema.py:8
+        ships 27 kinds (the missing three: ResearchBrief, HumanReview, Reviewer).
+        tests/test_graph_schema.py:32-46 test_edge_kinds_complete asserts a
+        35-element set and len(EDGE_KINDS) == 35, while src/graph/schema.py:10-48
+        ships 37 (the missing two: summarizes-for, reviewed-by).
+        Update both assertions to the shipped values. This is a TEST-SIDE fix
+        only — CLAUDE.md rule #2 runs the other way, so confirm first that the
+        SHIPPED kinds are the correct ones (they are: each was added by a
+        committed feature) and change the test, not the schema. Touch NOTHING
+        else in src/graph/schema.py.
+        (This would normally be a /cb-fix; that skill is reported broken, so it
+        rides here.)
+
+    SPEC AUTHORING (via ril apply-batch):
+    This prompt DOES have a specification touch — do not skip P3.
+    Amend INV-KK-AUTH-GATE-COVERS-MOUNT (authored in PROMPT 3): extend its
+    description to name the deployed entry point, because the entry point is
+    what makes the invariant true in production. Add, in substance:
+      "Enforcement depends on the deployed entry point being authgate.app:app.
+      Starting web.app:app directly bypasses the gate; start.bat, start.sh and
+      the kk-web console script are the enforcement surface, and README
+      documents the prohibition."
+    Amend MOD-KK-AUTH's description to state that it owns the application entry
+    point and that the know_kernel app is mounted beneath it.
+    If, and only if, the live template permits an artifact association, register
+    start.sh / start.bat / pyproject.toml against INV-KK-AUTH-GATE-COVERS-MOUNT
+    via `ril associate` so the enforcement surface is traceable.
+    No new node is created by this prompt.
+
+  - Spec areas: 2 amended nodes (INV-KK-AUTH-GATE-COVERS-MOUNT, MOD-KK-AUTH),
+    both authored earlier in this same sequence. Zero new nodes, zero new edges.
+    Run before amending:
+      npm run ril -- query-multi '[{"cmd":"node-info","args":["INV-KK-AUTH-GATE-COVERS-MOUNT","MOD-KK-AUTH"]},{"cmd":"impact-analysis","args":["INV-KK-AUTH-GATE-COVERS-MOUNT"]}]' --json
+    NOTE for triage, deterministic: there is NO spec node governing packaging,
+    console scripts, shell launchers, or test assertions. Verified — a filter
+    for SERVE across the graph returns only LMP/badger nodes
+    (ALG-LMP-SERVE, ALG-LMP-SERVE-TEST, etc.), and no ALG-KK-WEB-SERVE node
+    exists despite src/web/app.py:1 and src/web/routes.py:1 docstrings
+    referencing that id. Do NOT create one to satisfy this prompt; the
+    INV-KK-AUTH-GATE-COVERS-MOUNT amendment is the correct and sufficient
+    specification touch. If P3 feels empty, that is the reason to submit —
+    never P3_SKIPPED.
+
+  - Code path: MODIFY pyproject.toml (scripts at :33-38, wheel packages at :44),
+    start.bat (tail), start.sh (tail), .gitignore, README.md,
+    tests/test_graph_schema.py (lines 19-28 and 32-46 only).
+    No src/ file is modified by this prompt except none — src/ is untouched.
+
+  - Pre-commit hook: one commit, "chore: switch entry points to the auth gate".
+    Contents: .cbm mutation file(s) for the two amendments, pyproject.toml,
+    start.bat, start.sh, .gitignore, README.md, tests/test_graph_schema.py.
+    npm run spec:check at 0 errors. This commit must leave the FULL suite green
+    with zero known failures — the two pre-existing reds are fixed here.
+
+  - Test: NO new test file. tests/test_graph_schema.py::test_node_kinds_complete
+    and ::test_edge_kinds_complete must flip from red to green with the shipped
+    27 / 37 values. Then run the full suite (pytest tests/ -q) and confirm zero
+    failures. Manual smoke sequence, per plan §12:
+      kk-useradd --admin reinier ; ./start.sh
+      1. GET / redirects to /login
+      2. login without "remember me" -> dashboard, nav shows the user + Logout
+      3. refresh and follow links -> still logged in
+      4. restart the server -> still logged in (server-side session)
+      5. open a paper -> no dropdown, "Reviewing as reinier", submit a review,
+         attribution correct
+      6. /admin/users visible as admin; create a non-admin; as them -> 403
+      7. logout -> / bounces to /login
+      8. UPDATE sessions SET expires_at='2000-01-01T00:00:00+00:00' with a
+         remember cookie present -> refresh proceeds silently, new session row
+      9. curl -s -o /dev/null -w '%{http_code}' localhost:8000/api/search?q=x
+         while anonymous -> 302
+
+  >>> GENERAL INSTRUCTIONS <<<
+  - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
+  - IMPORTANT: COMMIT TO WOR. REDUCE TURNS
+  - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
+  - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
+  - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
+  - CRITICAL: DO NOT EMIT P3_SKIPPED. I WILL STOP YOU AND MAKE YOU GO BACK. If you do not need to modify the specification you must submit a reason
+  - FORBIDDEN: MULTI-AGENT execution is not allowed. DO NOT SPAWN MULTIPLE AGENTS
+  - CRITICAL: The triage should report the specification surface. The triage specification surface is deterministic.
+  - WHEN TO COMMIT: Before "silk run finalize"
+  - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
+
+================================================================================
+ END — 6 prompts. Full design rationale, verified baseline with file:line
+ citations, 48-item test plan, fixture design, and risk register live in
+ docs/plans/auth-gate-and-session-implementation.md.
+================================================================================
