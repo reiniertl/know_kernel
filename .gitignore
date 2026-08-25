@@ -33,7 +33,9 @@ env/
 data/pdfs/*.pdf
 
 # Runtime databases (generated, not source)
-data/auth.db
+# data/auth.db is tracked deliberately so a clone carries the accounts. It
+# holds pbkdf2 password hashes and live session tokens; revisit this before
+# the repository has any untrusted reader.
 data/auth.db-wal
 data/auth.db-shm
 *.db-journal
