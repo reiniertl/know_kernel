@@ -1,4 +1,4 @@
-﻿"""Tests for ingest_document â€” INV-KK-INGEST-CREATES-EVIDENCE."""
+"""Tests for ingest_document — INV-KK-INGEST-CREATES-EVIDENCE."""
 
 import pytest
 

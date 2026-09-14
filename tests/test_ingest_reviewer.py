@@ -1,4 +1,4 @@
-﻿"""Tests for review_source â€” ALG-KK-REVIEW-SOURCE invariants."""
+"""Tests for review_source — ALG-KK-REVIEW-SOURCE invariants."""
 
 import pytest
 

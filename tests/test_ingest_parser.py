@@ -1,4 +1,4 @@
-﻿"""Tests for INV-KK-PARSE-RETURNS-TEXT and INV-KK-PARSE-IDEMPOTENT."""
+"""Tests for INV-KK-PARSE-RETURNS-TEXT and INV-KK-PARSE-IDEMPOTENT."""
 
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def test_parse_returns_parsed_document(txt_file: Path) -> None:
     assert doc.page_count == 1
 
 
-# --- INV-KK-PARSE-IDEMPOTENT: same file â†’ identical output ---
+# --- INV-KK-PARSE-IDEMPOTENT: same file → identical output ---
 
 def test_parse_idempotent(txt_file: Path) -> None:
     """Parsing the same file twice returns identical results."""

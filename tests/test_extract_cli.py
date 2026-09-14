@@ -1,4 +1,4 @@
-﻿"""Tests for kk-extract CLI â€” ALG-KK-EXTRACT-CLI."""
+"""Tests for kk-extract CLI — ALG-KK-EXTRACT-CLI."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-﻿"""App 1: Ingestion service â€” document parsing, license scanning, LLM extraction."""
+"""App 1: Ingestion service — document parsing, license scanning, LLM extraction."""
 
 from ingest.extractor import ExtractionResult, extract_concepts
 from ingest.gate import SessionGate, SessionViolationError

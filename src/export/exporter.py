@@ -1,4 +1,4 @@
-﻿"""Snapshot exporter â€” produces a Class B-only SQLite DB from the master.
+"""Snapshot exporter — produces a Class B-only SQLite DB from the master.
 
 This is the contamination gate for LLM consumption. It filters out all
 Class A content so the MCP server is clean by construction.

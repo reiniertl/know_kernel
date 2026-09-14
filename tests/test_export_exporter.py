@@ -1,4 +1,4 @@
-﻿"""Tests for export_class_b_snapshot and validate_snapshot â€” the contamination gate."""
+"""Tests for export_class_b_snapshot and validate_snapshot — the contamination gate."""
 
 from __future__ import annotations
 

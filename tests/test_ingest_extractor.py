@@ -1,4 +1,4 @@
-﻿"""Tests for extract_concepts â€” ALG-KK-LLM-EXTRACT invariants."""
+"""Tests for extract_concepts — ALG-KK-LLM-EXTRACT invariants."""
 
 from __future__ import annotations
 

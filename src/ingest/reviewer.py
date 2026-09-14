@@ -1,4 +1,4 @@
-﻿"""Source review workflow â€” creates Advisory nodes (ALG-KK-REVIEW-SOURCE)."""
+"""Source review workflow — creates Advisory nodes (ALG-KK-REVIEW-SOURCE)."""
 
 from __future__ import annotations
 

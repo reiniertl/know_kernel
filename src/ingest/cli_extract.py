@@ -1,4 +1,4 @@
-﻿"""CLI entry point for the extraction service (ALG-KK-EXTRACT-CLI)."""
+"""CLI entry point for the extraction service (ALG-KK-EXTRACT-CLI)."""
 
 from __future__ import annotations
 

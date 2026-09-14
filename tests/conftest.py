@@ -1,4 +1,4 @@
-﻿"""Shared fixtures for graph engine tests."""
+"""Shared fixtures for graph engine tests."""
 
 from __future__ import annotations
 

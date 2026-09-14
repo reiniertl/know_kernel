@@ -1,4 +1,4 @@
-﻿"""Tests for know_kernel.graph.rules â€” admissibility rule checkers."""
+"""Tests for know_kernel.graph.rules — admissibility rule checkers."""
 
 from __future__ import annotations
 

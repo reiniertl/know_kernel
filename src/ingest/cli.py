@@ -1,4 +1,4 @@
-﻿"""CLI entry point for the ingestion service (ALG-KK-INGEST-CLI)."""
+"""CLI entry point for the ingestion service (ALG-KK-INGEST-CLI)."""
 
 from __future__ import annotations
 

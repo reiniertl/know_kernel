@@ -1,0 +1,13 @@
+# Normalise line endings on checkin. A Windows round trip previously flipped
+# the whole tree LF -> CRLF (43,417 insertions / 43,417 deletions, with
+# `git diff --ignore-all-space` empty) and left UTF-8 BOMs and cp1252-misread
+# mojibake behind. This keeps the repository LF-only regardless of platform.
+* text=auto eol=lf
+
+# Binary: never touch these.
+*.db binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.zip binary
+*.node binary

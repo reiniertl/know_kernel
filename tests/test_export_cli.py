@@ -1,4 +1,4 @@
-﻿"""Tests for the kk-export CLI entry point."""
+"""Tests for the kk-export CLI entry point."""
 
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ class TestExportCli:
         assert result.returncode != 0
 
     def test_validation_failure_exit_1(self, tmp_path: Path) -> None:
-        """Master DB with admissibility violations â†’ exit 1."""
+        """Master DB with admissibility violations → exit 1."""
         master = tmp_path / "bad.db"
         conn = init_db(master)
         add_node(conn, "c1", "Concept", {"name": "X", "description": "x", "artifact_class": "B", "key_properties": ["test"], "tradeoffs": [], "design_rationale": "test"})

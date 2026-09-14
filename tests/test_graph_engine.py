@@ -1,4 +1,4 @@
-﻿"""Tests for know_kernel.graph.engine â€” CRUD ops, edge/attr validation, delete cascade."""
+"""Tests for know_kernel.graph.engine — CRUD ops, edge/attr validation, delete cascade."""
 
 from __future__ import annotations
 

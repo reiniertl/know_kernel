@@ -1,4 +1,4 @@
-﻿"""Tests for know_kernel web API â€” ALG-KK-WEB-SERVE.
+"""Tests for know_kernel web API — ALG-KK-WEB-SERVE.
 
 INV-KK-WEB-READ-ONLY: no write endpoints.
 INV-KK-WEB-FULL-ACCESS: all node kinds served to humans.

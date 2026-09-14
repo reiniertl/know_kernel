@@ -1,4 +1,4 @@
-﻿"""Tests for kk-review CLI â€” ALG-KK-REVIEW-CLI."""
+"""Tests for kk-review CLI — ALG-KK-REVIEW-CLI."""
 
 from __future__ import annotations
 

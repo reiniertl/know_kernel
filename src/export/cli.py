@@ -1,4 +1,4 @@
-﻿"""CLI entry point for the snapshot exporter."""
+"""CLI entry point for the snapshot exporter."""
 
 from __future__ import annotations
 

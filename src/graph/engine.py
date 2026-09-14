@@ -1,4 +1,4 @@
-﻿"""Graph engine â€” node/edge CRUD and traversal queries."""
+"""Graph engine — node/edge CRUD and traversal queries."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-﻿"""CLI entry point for the review service (ALG-KK-REVIEW-CLI)."""
+"""CLI entry point for the review service (ALG-KK-REVIEW-CLI)."""
 
 from __future__ import annotations
 

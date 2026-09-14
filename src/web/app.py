@@ -1,4 +1,4 @@
-﻿"""FastAPI application factory â€” ALG-KK-WEB-SERVE."""
+"""FastAPI application factory — ALG-KK-WEB-SERVE."""
 
 from __future__ import annotations
 

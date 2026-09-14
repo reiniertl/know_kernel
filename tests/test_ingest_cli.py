@@ -1,4 +1,4 @@
-﻿"""Tests for kk-ingest CLI â€” ALG-KK-INGEST-CLI."""
+"""Tests for kk-ingest CLI — ALG-KK-INGEST-CLI."""
 
 from __future__ import annotations
 

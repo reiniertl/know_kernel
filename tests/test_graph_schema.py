@@ -1,4 +1,4 @@
-﻿"""Tests for know_kernel.graph.schema â€” init_db, table creation, kind enums."""
+"""Tests for know_kernel.graph.schema — init_db, table creation, kind enums."""
 
 from __future__ import annotations
 

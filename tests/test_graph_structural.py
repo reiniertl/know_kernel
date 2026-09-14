@@ -1,4 +1,4 @@
-﻿"""Tests for structural constraints â€” symmetric contradicts, acyclic supersedes, path_exists."""
+"""Tests for structural constraints — symmetric contradicts, acyclic supersedes, path_exists."""
 
 from __future__ import annotations
 
