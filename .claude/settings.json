@@ -1,0 +1,101 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/session-schema-cache.sh",
+            "statusMessage": "Caching authoring schema from ril..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/cb-skill-gate-reset.mjs",
+            "statusMessage": "Clearing stale gate marker..."
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/cb-green-triage-dispatch.mjs",
+            "statusMessage": "CS-088 triage dispatch...",
+            "timeout": 300000
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/skill-state-reminder.sh",
+            "statusMessage": "Injecting CS-079 workflow reminder..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/skill-active-gate.mjs",
+            "statusMessage": "CS-079 skill-active gate..."
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'ARGS=\"$ARGUMENTS\"; if echo \"$ARGS\" | grep -q \"spec/elements/.*\\.xml\"; then echo \"RIL-QUERY-FIRST: You are reading spec/elements/*.xml directly. Use the RIL first: npm run ril -- query node-info <id>, or nodes --kind <kind>, or nodes --filter <text>. Only read the XML after querying for [file:startLine-endLine] locations.\" >&2; exit 1; fi; exit 0'",
+            "statusMessage": "Checking spec file access..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'ARGS=\"$ARGUMENTS\"; if echo \"$ARGS\" | grep -qE \"spec/(graph|verification|semantic-validate|source-extractors|config/types)\\.ts\"; then if echo \"$ARGS\" | grep -qE \"spec/elements/.*\\.xml\"; then exit 0; fi; echo \"SPEC-FIRST CHECK: You edited engine source. If this adds NEW behavior (invariants, checks, edge kinds, algorithms), ensure spec nodes exist in spec/elements/engine.xml first. If this is a bug fix or mechanical change, ignore this warning.\" >&2; exit 0; fi; exit 0'",
+            "statusMessage": "Checking spec-first compliance..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/cb-code-skill-edit.sh",
+            "statusMessage": "Checking CS-072 SKILL.md edits..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/cb-fix-skill-edit.sh",
+            "statusMessage": "Checking CS-072b SKILL.md edits..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/cb-fix-test-watcher.sh",
+            "statusMessage": "Checking CS-072b reproduction-test edits..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/cb-audit-skill-edit.sh",
+            "statusMessage": "Checking CS-072c SKILL.md edits..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/cb-code-verify-reminder.sh",
+            "statusMessage": "Checking CS-072 verify-reminder..."
+          }
+        ]
+      }
+    ]
+  }
+}

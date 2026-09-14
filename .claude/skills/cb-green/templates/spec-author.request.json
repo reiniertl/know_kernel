@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-green-spec-author-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "spec-author",
+  "payload": {
+    "instruction": "Author spec nodes via ril apply-batch and validate (P3_MUTATE + P4_VALIDATE)",
+    "expectedOutput": "SPEC_CHANGESET entries + P4_VALIDATE result",
+    "allowedTools": ["reasoning", "ril-query", "ril-template", "ril-apply-batch", "spec-check"],
+    "maxTokens": 16384
+  }
+}

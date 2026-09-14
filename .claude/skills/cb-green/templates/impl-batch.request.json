@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-green-impl-batch-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "impl-batch",
+  "payload": {
+    "instruction": "Implement code changes per the plan (P5_PLAN_IMPL + P6_IMPLEMENT)",
+    "expectedOutput": "CODE_CHANGESET entries with tracesTo references to spec nodes",
+    "allowedTools": ["reasoning", "file-edit", "grep", "read", "npm-test"],
+    "maxTokens": 32768
+  }
+}

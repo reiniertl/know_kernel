@@ -1,0 +1,12 @@
+{
+  "templateId": "cb-audit-ap1-inventory-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "ap1-inventory",
+  "forbidden": ["edit", "write", "mutating-bash", "mutating-ril", "mutating-silk"],
+  "payload": {
+    "instruction": "Enumerate the subgraph in scope using read-only ril query commands (nodes, node-info, neighborhood, impact-analysis, protection-context, invariant-context, algorithm-context). No mutations. Capture node counts per kind, containing modules, pipeline stages covered, structural summary.",
+    "expectedOutput": "inventory: { nodeCountByKind, modules, stages, summary }",
+    "allowedTools": ["ril-query", "reasoning"],
+    "maxTokens": 8192
+  }
+}

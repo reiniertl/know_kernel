@@ -1,0 +1,12 @@
+{
+  "templateId": "cb-green-triage-v2",
+  "schemaVersion": "2.0.0",
+  "stage": "triage",
+  "payload": {
+    "classification": "",
+    "candidateNodes": [],
+    "affectedModules": [],
+    "userIntent": "",
+    "readOnlyDiscovery": null
+  }
+}

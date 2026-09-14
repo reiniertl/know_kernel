@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-fix-fp0-triage-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "fp0-triage",
+  "payload": {
+    "instruction": "Classify the bug report into CB-FIX-CLASSIFICATION-ENUM: BUG_CONFIRMED | BUG_NEEDS_REPRODUCTION | NOT_A_BUG | SPEC_GAP | DUPLICATE | REJECT",
+    "expectedOutput": "CLASSIFICATION enum value + RATIONALE",
+    "allowedTools": ["reasoning"],
+    "maxTokens": 2048
+  }
+}

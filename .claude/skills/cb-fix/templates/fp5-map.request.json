@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-fix-fp5-map-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "fp5-map",
+  "payload": {
+    "instruction": "Map the fix onto spec artifacts. For CODE_BUG: trivial (fix enforces existing invariant). For SPEC_GAP: identify new invariant/contract to add in FP6",
+    "expectedOutput": "candidateArtifacts: { kind, idHint, predicate?, attachesTo? }[]",
+    "allowedTools": ["ril-query", "ril-template", "reasoning"],
+    "maxTokens": 4096
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "templateId": "cb-fix-fp10-verify-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "fp10-verify",
+  "payload": {
+    "instruction": "Run npm test (reproduction must transition FAIL to PASS), npm run spec:conformance. CB-FIX-INV-REPRODUCE-PASSES-AFTER-FIX + CB-GREEN-INV-VERIFIED-BEFORE-SUCCESS inherited",
+    "expectedOutput": "verificationResult: { reproductionTransitionedFailToPass, npmTest, specConformance }",
+    "allowedTools": ["npm-test", "spec-conformance", "reasoning"],
+    "maxTokens": 8192,
+    "testEvidence": {
+      "total": 0,
+      "passed": 0,
+      "failed": 0,
+      "filesPassed": 0,
+      "filesFailed": 0,
+      "failedNames": []
+    }
+  }
+}

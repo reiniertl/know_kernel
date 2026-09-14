@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-fix-fp2-diagnose-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "fp2-diagnose",
+  "payload": {
+    "instruction": "Document observed-vs-expected. Cite the violated invariant (CODE_BUG candidate) or note missing invariant (SPEC_GAP candidate)",
+    "expectedOutput": "diagnosis: { observed, expected, violatedInvariantId?, missingInvariantHint? }",
+    "allowedTools": ["ril-query", "spec-conformance", "reasoning"],
+    "maxTokens": 4096
+  }
+}

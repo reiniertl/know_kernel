@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-fix-fp1-reproduce-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "fp1-reproduce",
+  "payload": {
+    "instruction": "Author a FAILING reproduction test isolating the bug. CB-FIX-INV-REPRODUCE-BEFORE-FIX requires this before any code fix",
+    "expectedOutput": "reproductionTest: { path, name, status: FAIL-confirmed | could-not-reproduce }",
+    "allowedTools": ["file-edit", "npm-test", "AskUserQuestion", "reasoning"],
+    "maxTokens": 8192
+  }
+}

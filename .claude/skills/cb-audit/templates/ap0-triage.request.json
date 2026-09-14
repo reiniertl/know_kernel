@@ -1,0 +1,12 @@
+{
+  "templateId": "cb-audit-ap0-triage-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "ap0-triage",
+  "forbidden": ["edit", "write", "mutating-bash", "mutating-ril", "mutating-silk"],
+  "payload": {
+    "instruction": "Classify the audit scope into CB-AUDIT-SCOPE-ENUM: SCOPE_MODULE | SCOPE_INVARIANT | SCOPE_INTERFACE | SCOPE_SYSTEM_WIDE | REJECT. cb-audit is read-only; do not consider mutation paths during classification.",
+    "expectedOutput": "SCOPE enum value + RATIONALE (1-3 sentences)",
+    "allowedTools": ["reasoning", "AskUserQuestion"],
+    "maxTokens": 2048
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "templateId": "cb-audit-ap4-recommend-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "ap4-recommend",
+  "forbidden": ["edit", "write", "mutating-bash", "mutating-ril", "mutating-silk"],
+  "payload": {
+    "instruction": "For each finding, draft a concrete follow-up workflow citation: VIOLATED -> /cb-fix; UNVERIFIABLE -> /cb-green or /cb-fix; UNCHECKED -> spec:conformance run; SPEC_GAP -> /cb-green; ORPHAN -> /cb-green or removal; SEVERITY_MISMATCH -> /cb-fix. Rank by severity. Output top 5-10.",
+    "expectedOutput": "recommendations: string[] (top 5-10, severity-ranked)",
+    "allowedTools": ["reasoning"],
+    "maxTokens": 8192
+  }
+}

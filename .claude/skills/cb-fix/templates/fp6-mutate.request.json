@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-fix-fp6-mutate-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "fp6-mutate",
+  "payload": {
+    "instruction": "Only runs when rootCause=SPEC_GAP. Author the new invariant/contract via ril apply-batch. For CODE_BUG: emit FP6_MUTATE: SKIPPED and proceed",
+    "expectedOutput": "specChangeset: array of applied node ids; or SKIPPED",
+    "allowedTools": ["ril-apply-batch", "ril-template", "reasoning"],
+    "maxTokens": 16384
+  }
+}

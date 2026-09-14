@@ -1,0 +1,12 @@
+{
+  "templateId": "cb-audit-ap5-report-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "ap5-report",
+  "forbidden": ["edit", "write", "mutating-bash", "mutating-ril", "mutating-silk"],
+  "payload": {
+    "instruction": "Assemble the CbAuditReport in canonical order (SCOPE / RATIONALE / PHASE_LOG / INVENTORY / FINDINGS / RECOMMENDATIONS / FINAL_STATUS / REPORT). Use silk's finalStatus (from silk run audit), not your own claim. CODE_CHANGESET MUST be empty (CB-AUDIT-INV-NO-MUTATION).",
+    "expectedOutput": "CbAuditReport with 7 named sections; FINAL_STATUS from silk run audit",
+    "allowedTools": ["reasoning"],
+    "maxTokens": 8192
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-fix-fp4-read-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "fp4-read",
+  "payload": {
+    "instruction": "Query the affected spec subgraph via ril query. For CODE_BUG: identify the existing invariant. For SPEC_GAP: identify where the new invariant should attach",
+    "expectedOutput": "specEntities: string[]; preservationObligations: string[]",
+    "allowedTools": ["ril-query", "reasoning"],
+    "maxTokens": 8192
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "templateId": "cb-audit-ap3-classify-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "ap3-classify",
+  "forbidden": ["edit", "write", "mutating-bash", "mutating-ril", "mutating-silk"],
+  "payload": {
+    "instruction": "Transform raw AP2 outputs into typed findings. Each finding: { nodeId, kind in CB-AUDIT-FINDING-KIND-ENUM, severity in CRITICAL|ERROR|WARN|INFO, message, suggestedAction }. Every finding MUST cite a concrete nodeId or file path. CB-AUDIT-INV-ANALYSIS-BEFORE-FINDINGS requires AP2_ANALYZE = PASS.",
+    "expectedOutput": "findings: Array<{ nodeId, kind, severity, message, suggestedAction }>",
+    "allowedTools": ["reasoning"],
+    "maxTokens": 16384
+  }
+}

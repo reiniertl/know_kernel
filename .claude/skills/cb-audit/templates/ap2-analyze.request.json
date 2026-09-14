@@ -1,0 +1,12 @@
+{
+  "templateId": "cb-audit-ap2-analyze-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "ap2-analyze",
+  "forbidden": ["edit", "write", "mutating-bash", "mutating-ril", "mutating-silk"],
+  "payload": {
+    "instruction": "Run the two read-only verification commands: npm run spec:check (L2+L3), npm run spec:conformance (L5). Capture raw outputs. If any tool CRASHES (not just reports findings), set finalStatus=BLOCKED and skip to AP5. Forbidden: mutations, interpretation (defer to AP3).",
+    "expectedOutput": "analyzeOutput: { specCheck, specConformance, anyToolCrashed }",
+    "allowedTools": ["spec-check", "spec-conformance", "reasoning"],
+    "maxTokens": 16384
+  }
+}

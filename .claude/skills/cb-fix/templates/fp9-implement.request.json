@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-fix-fp9-implement-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "fp9-implement",
+  "payload": {
+    "instruction": "Edit code to enforce the invariant. The reproduction test must transition FAIL to PASS across this fix (CB-FIX-INV-REPRODUCE-PASSES-AFTER-FIX)",
+    "expectedOutput": "CODE_CHANGESET: list of { path, tracesTo } entries",
+    "allowedTools": ["file-edit", "ril-apply-batch", "read", "grep", "reasoning"],
+    "maxTokens": 32768
+  }
+}

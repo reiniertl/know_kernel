@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-fix-fp7-validate-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "fp7-validate",
+  "payload": {
+    "instruction": "Run npm run spec:check. For CODE_BUG: regression check (spec should still pass). For SPEC_GAP: validates the new spec addition. CB-GREEN-INV-VALIDATED-BEFORE-IMPL inherited",
+    "expectedOutput": "FP7_VALIDATE: PASS | FAIL",
+    "allowedTools": ["spec-check", "reasoning"],
+    "maxTokens": 4096
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-green-plan-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "plan",
+  "payload": {
+    "instruction": "Read existing spec via RIL queries, map request to affected nodes, and produce an implementation plan",
+    "expectedOutput": "PHASE_LOG entries for P1A_PLAN, P1B_READ, P2_MAP with captured query output",
+    "allowedTools": ["reasoning", "ril-query", "ril-template", "grep", "read"],
+    "maxTokens": 8192
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-fix-fp3-root-cause-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "fp3-root-cause",
+  "payload": {
+    "instruction": "Classify into CB-FIX-ROOT-CAUSE-ENUM: CODE_BUG (fix code only, skip FP6) | SPEC_GAP (add invariant AND code guard) | NOT_A_BUG (terminate, recommend /cb-green)",
+    "expectedOutput": "ROOT_CAUSE enum value + rationale",
+    "allowedTools": ["reasoning"],
+    "maxTokens": 2048
+  }
+}

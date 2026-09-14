@@ -1,0 +1,11 @@
+{
+  "templateId": "cb-fix-fp8-plan-impl-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "fp8-plan-impl",
+  "payload": {
+    "instruction": "Plan the code fix. Every entry must traces_to a spec item: CODE_BUG traces to existing violated invariant; SPEC_GAP traces to newly-added invariant from FP6",
+    "expectedOutput": "implementationPlan: per-target reasoning + spec-to-code traceability",
+    "allowedTools": ["ril-query", "grep", "read", "reasoning"],
+    "maxTokens": 8192
+  }
+}

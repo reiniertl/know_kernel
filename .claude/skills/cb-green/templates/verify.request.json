@@ -1,0 +1,19 @@
+{
+  "templateId": "cb-green-verify-v1",
+  "schemaVersion": "1.0.0",
+  "stage": "verify",
+  "payload": {
+    "instruction": "Run verification suite (P7_VERIFY): npm test, spec:check",
+    "expectedOutput": "VERIFICATION_RESULT with npmTest, specConformance statuses",
+    "allowedTools": ["reasoning", "npm-test", "spec-check", "spec-conformance"],
+    "maxTokens": 8192,
+    "testEvidence": {
+      "total": 0,
+      "passed": 0,
+      "failed": 0,
+      "filesPassed": 0,
+      "filesFailed": 0,
+      "failedNames": []
+    }
+  }
+}
