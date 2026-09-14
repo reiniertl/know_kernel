@@ -18,8 +18,9 @@ dependencies = [
 
 [project.optional-dependencies]
 ingest = [
-    "pymupdf>=1.24",
-    "scancode-toolkit>=32",
+    "pymupdf>=1.24",      # `import fitz` in ingest/parser.py
+    "feedparser>=6.0",    # ingest/feed.py RSS/Atom fetch
+    "anthropic>=0.40",    # ingest/extractor.py claim extraction
 ]
 dev = [
     "pytest>=8",
