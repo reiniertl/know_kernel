@@ -254,10 +254,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-1,303 tests. As of 2026-09-15: 1,300 pass and 3 fail.
-
-The three failures are the `/radar` tests, which assert the page's pre-2026-07-15
-semantics; `/radar` itself works.
+1,304 tests, zero failures.
 
 ## License
 

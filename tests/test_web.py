@@ -1043,15 +1043,88 @@ def radar_vuln_client(tmp_path):
         yield c
 
 
-def test_radar_returns_200(radar_vuln_client):
-    response = radar_vuln_client.get("/radar")
+# --- ALG-KK-WEB-RADAR tests ---
+#
+# /radar was created on 2026-06-29 (eb1a7d0) as a subsystem VULNERABILITY radar:
+# heading "Subsystem Radar", one row per subsystem carrying vuln and fix counts. It
+# was rewritten on 2026-07-15 (534d725, then 5f08345) into a research radar: papers
+# grouped by subsystem, then by concept, with a paper drill-down. These tests were
+# last touched on 2026-07-09, six days before that rewrite, and until now still
+# asserted the old semantics against radar_vuln_client -- a fixture holding no Source
+# and no Evidence nodes at all. The page correctly rendered "0 research papers across
+# 0 subsystems" and the assertions searched an empty table, so they failed while the
+# page was working. Rewritten below against the current semantics, with a fixture
+# that supplies the chain the route actually queries.
+
+
+@pytest.fixture
+def research_radar_client(tmp_path):
+    """Client whose graph carries the chain /radar traverses.
+
+    The route joins Concept -extracted-from-> Evidence -sourced-from-> Source, and
+    keeps only Sources whose source_type is a paper kind. Scheduler gets two papers
+    and Memory Management one, so subsystem ordering (by descending paper count) is
+    deterministic. Empty Subsystem has no concept and must not be rendered.
+    """
+    db_path = tmp_path / "research_radar.db"
+    conn = init_db(db_path)
+
+    add_node(conn, "sub-sched", "Subsystem", {"name": "Scheduler"})
+    add_node(conn, "sub-mm", "Subsystem", {"name": "Memory Management"})
+    add_node(conn, "sub-empty", "Subsystem", {"name": "Empty Subsystem"})
+
+    def _concept(node_id, name, description):
+        add_node(conn, node_id, "Concept", {
+            "name": name,
+            "description": description,
+            "artifact_class": "B",
+            "key_properties": [],
+            "tradeoffs": [],
+            "design_rationale": "test",
+        })
+
+    _concept("concept-rcu", "RCU", "Read-Copy-Update for scheduler latency")
+    _concept("concept-slab", "SLAB Allocator", "Slab allocation for memory management")
+    add_edge(conn, "belongs-to", "concept-rcu", "sub-sched")
+    add_edge(conn, "belongs-to", "concept-slab", "sub-mm")
+
+    papers = [
+        ("src-rcu-1", "ev-rcu-1", "concept-rcu", "Scalable RCU Grace Periods", "2026-06-01"),
+        ("src-rcu-2", "ev-rcu-2", "concept-rcu", "RCU Under Memory Pressure", "2026-06-20"),
+        ("src-slab-1", "ev-slab-1", "concept-slab", "SLAB Fragmentation Revisited", "2026-05-10"),
+    ]
+    for source_id, evidence_id, concept_id, title, published in papers:
+        add_node(conn, source_id, "Source", {
+            "url": f"https://example.com/{source_id}.pdf",
+            "source_type": "paper",
+            "license": "MIT",
+            "title": title,
+            "published_date": published,
+        })
+        add_node(conn, evidence_id, "Evidence", {
+            "artifact_class": "A",
+            "contamination_level": "weak-copyleft",
+        })
+        add_edge(conn, "sourced-from", evidence_id, source_id)
+        add_edge(conn, "extracted-from", concept_id, evidence_id)
+
+    conn.commit()
+    conn.close()
+
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        yield c
+
+
+def test_radar_returns_200(research_radar_client):
+    response = research_radar_client.get("/radar")
     assert response.status_code == 200
-    assert "Subsystem Radar" in response.text
+    assert "Research Radar" in response.text
 
 
-def test_radar_shows_subsystems_with_concepts(radar_vuln_client):
-    """INV-KK-WEB-RADAR-SUBSYSTEM: shows subsystems with >= 1 concept."""
-    response = radar_vuln_client.get("/radar")
+def test_radar_shows_subsystems_with_concepts(research_radar_client):
+    """Shows every subsystem reached by at least one paper, and no others."""
+    response = research_radar_client.get("/radar")
     assert response.status_code == 200
     text = response.text
     assert "Scheduler" in text
@@ -1059,11 +1132,28 @@ def test_radar_shows_subsystems_with_concepts(radar_vuln_client):
     assert "Empty Subsystem" not in text
 
 
-def test_radar_shows_vuln_and_fix_counts(radar_vuln_client):
-    response = radar_vuln_client.get("/radar")
+def test_radar_shows_paper_counts(research_radar_client):
+    """Per-subsystem paper counts, and the total across subsystems.
+
+    Replaces test_radar_shows_vuln_and_fix_counts: the current radar reports papers,
+    not vulnerabilities. Scheduler has two papers via concept-rcu, Memory Management
+    one via concept-slab.
+    """
+    response = research_radar_client.get("/radar")
     text = response.text
-    sched_row = text[text.find("Scheduler"):text.find("Memory")]
-    assert "1" in sched_row
+    assert "3 research papers across 2 subsystems" in text
+
+    sched_row = text[text.find("Scheduler"):text.find("Memory Management")]
+    assert "<td>2</td>" in sched_row, sched_row
+
+
+def test_radar_nests_papers_under_their_concept(research_radar_client):
+    """The drill-down carries the paper titles and links to /paper/{source_id}."""
+    text = research_radar_client.get("/radar").text
+    assert "RCU" in text
+    assert "SLAB Allocator" in text
+    assert "Scalable RCU Grace Periods" in text
+    assert "/paper/src-rcu-1" in text
 
 
 def test_dashboard_links_to_radar(radar_vuln_client):
