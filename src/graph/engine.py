@@ -8,7 +8,7 @@ import sqlite3
 from typing import Any
 
 from graph.rules import Violation, validate_node
-from graph.schema import DATE_ATTRS, EDGE_VALID_PAIRS, REQUIRED_ATTRS
+from graph.schema import DATE_ATTRS, EDGE_VALID_PAIRS, NODE_KINDS, REQUIRED_ATTRS
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?$")
 
@@ -23,6 +23,12 @@ class AdmissibilityError(Exception):
 def add_node(
     conn: sqlite3.Connection, node_id: str, kind: str, attrs: dict[str, Any] | None = None
 ) -> None:
+    # INV-KK-SCHEMA-KIND-DECLARATION-HONOURED: this is the sole kind enforcement.
+    # nodes.kind carries no SQLite CHECK (see schema.SCHEMA_SQL for why), so without
+    # this check an unknown kind would be written silently. Mirrors add_edge's
+    # "Unknown edge kind" guard.
+    if kind not in NODE_KINDS:
+        raise ValueError(f"Unknown node kind: {kind}")
     resolved = attrs or {}
     required = REQUIRED_ATTRS.get(kind, ())
     missing = [a for a in required if a not in resolved]

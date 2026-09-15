@@ -149,19 +149,29 @@ ID_PREFIXES = {
     "Reviewer": "rvr-",
 }
 
+# INV-KK-SCHEMA-KIND-DECLARATION-HONOURED: kind is deliberately NOT constrained by a
+# SQLite CHECK. It used to be, and the constraint is still absent from data/master.db,
+# which was rebuilt at some point without it (the quoted table name in its
+# sqlite_master entry is the tell). Because every statement here is
+# CREATE TABLE IF NOT EXISTS, neither init_db nor the web app's lifespan can ever
+# repair an existing table, so the CHECK only ever applied to freshly created
+# databases. The result was that test fixtures and production disagreed about which
+# kinds are legal. Enforcement therefore lives in Python, in engine.add_node, which
+# validates against NODE_KINDS the same way add_edge already validates against
+# EDGE_VALID_PAIRS. One rule, applied identically to every database.
 SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS nodes (
     id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL CHECK (kind IN ({node_placeholders})),
-    attrs TEXT NOT NULL DEFAULT '{{}}'
+    kind TEXT NOT NULL,
+    attrs TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS edges (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL CHECK (kind IN ({edge_placeholders})),
+    kind TEXT NOT NULL,
     source_id TEXT NOT NULL REFERENCES nodes(id),
     target_id TEXT NOT NULL REFERENCES nodes(id),
-    attrs TEXT NOT NULL DEFAULT '{{}}',
+    attrs TEXT NOT NULL DEFAULT '{}',
     UNIQUE (kind, source_id, target_id)
 );
 
@@ -169,10 +179,7 @@ CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
 CREATE INDEX IF NOT EXISTS idx_nodes_kind ON nodes(kind);
-""".format(
-    node_placeholders=", ".join(f"'{k}'" for k in NODE_KINDS),
-    edge_placeholders=", ".join(f"'{k}'" for k in EDGE_KINDS),
-)
+"""
 
 
 def init_db(path: Path) -> sqlite3.Connection:
