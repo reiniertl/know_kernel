@@ -38,12 +38,21 @@ def set_abstract(
     source_id: str,
     text: str,
     source_label: str = "manual",
+    recompute: bool = False,
 ) -> AbstractResult:
     """Store an abstract on a Source node and stamp its provenance.
 
     Raises ValueError if `source_id` names no node or names a node of another
     kind, if `text` is empty after stripping, or if `source_label` is not one
     of VALID_ABSTRACT_SOURCES.
+
+    `recompute` refreshes the paper's completeness verdict after the write.
+    It defaults to OFF so bulk callers such as ingest.abstract_fetcher do not
+    pay a verdict write per row; they end with one batch pass instead
+    (data/recompute_completeness.py). The single-paper web editor passes True,
+    because a human is watching and expects the page to reflect their edit.
+    Refreshing is best-effort by INV-KK-COMPLETENESS-ADVISORY: an advisory
+    verdict failing to update must never fail the edit that triggered it.
 
     Source is not revalidated after the write. validate_node against Source
     applies the must-have-an-Advisory rule, which the great majority of real
@@ -71,6 +80,13 @@ def set_abstract(
         "abstract_source": source_label,
         "abstract_fetched_at": stamped,
     })
+
+    if recompute:
+        # Lazy import: paper_completeness reads this module's sibling
+        # paper_summary, and a top-level import here would close the cycle.
+        from ingest.paper_completeness import recompute_paper_if_present
+
+        recompute_paper_if_present(conn, source_id)
 
     return AbstractResult(
         source_id=source_id,

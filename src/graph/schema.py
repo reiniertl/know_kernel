@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity", "ResearchBrief", "HumanReview", "Reviewer", "Venue", "PaperSummary")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity", "ResearchBrief", "HumanReview", "Reviewer", "Venue", "PaperSummary", "PaperCompleteness")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -48,6 +48,8 @@ EDGE_KINDS = (
     "published-at",
     # IFC-KK-PAPER-SUMMARY: links a PaperSummary to the paper it summarises.
     "summarizes-paper",
+    # IFC-KK-PAPER-COMPLETENESS: links a verdict to the paper it describes.
+    "completeness-of",
 )
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
@@ -62,6 +64,7 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     # ResearchBrief at a Concept: a paper and a concept are different things to
     # summarise, and the two kinds coexist.
     "summarizes-paper": ("PaperSummary", "Source"),
+    "completeness-of": ("PaperCompleteness", "Source"),
     "alternative-to": ("Concept", "Concept"),
     "refines": ("Concept", "Concept"),
     "contradicts": ("Concept", "Concept"),
@@ -131,6 +134,13 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     # key must be present so a reader never has to distinguish missing from empty.
     # model, set_at and reviewed_by are optional: see IFC-KK-PAPER-SUMMARY.
     "PaperSummary": ("text", "state"),
+    # Every dimension is required: a verdict missing one is not a partial
+    # verdict, it is an unreadable one, and INV-KK-COMPLETENESS-ADVISORY makes
+    # the verdict useless for anything except being read.
+    "PaperCompleteness": (
+        "computed_at", "has_abstract", "has_summary", "summary_state",
+        "links_concept", "links_subsystem", "links_kernel", "links_invariant",
+    ),
 }
 
 DATE_ATTRS = frozenset({"source_date", "window_start", "window_end", "review_date"})
@@ -165,6 +175,7 @@ ID_PREFIXES = {
     "Reviewer": "rvr-",
     "Venue": "venue-",
     "PaperSummary": "psum-",
+    "PaperCompleteness": "pcomp-",
 }
 
 # INV-KK-SCHEMA-KIND-DECLARATION-HONOURED: kind is deliberately NOT constrained by a

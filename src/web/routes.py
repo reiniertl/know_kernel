@@ -1232,7 +1232,11 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         conn = request.app.state.conn
         body = await request.json()
         try:
-            result = set_abstract(conn, source_id, body["abstract"], "manual")
+            # recompute=True: one paper, a human is watching, and the page
+            # should reflect the edit. Bulk callers leave it off.
+            result = set_abstract(
+                conn, source_id, body["abstract"], "manual", recompute=True
+            )
             conn.commit()
             return JSONResponse(dataclasses.asdict(result))
         except ValueError as exc:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 
@@ -101,6 +102,36 @@ def check_summary_state_valid(conn: sqlite3.Connection, node_id: str) -> Violati
             "summary-state-vocabulary",
             f"PaperSummary state '{state}' is not one of: " + ", ".join(SUMMARY_STATES),
         )
+    return None
+
+
+def check_completeness_dimensions_binary(
+    conn: sqlite3.Connection, node_id: str
+) -> Violation | None:
+    """IFC-KK-PAPER-COMPLETENESS, decision D-A: presence, never counts.
+
+    Every dimension is a bare boolean. A count or a score here would be a
+    different feature wearing the same node kind, and the first thing anyone
+    would do with a number is compare it against a threshold — which is exactly
+    what D-A ruled out and INV-KK-COMPLETENESS-ADVISORY forbids acting on.
+    """
+    from ingest.paper_completeness import BINARY_DIMENSIONS
+
+    row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (node_id,)).fetchone()
+    if row is None:
+        return None
+    attrs = json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
+    for dim in BINARY_DIMENSIONS:
+        if dim not in attrs:
+            return Violation(
+                node_id, "completeness-dimension-missing", f"Verdict is missing '{dim}'"
+            )
+        if not isinstance(attrs[dim], bool):
+            return Violation(
+                node_id,
+                "completeness-dimension-not-binary",
+                f"Dimension '{dim}' must be a bool, got {type(attrs[dim]).__name__}",
+            )
     return None
 
 
@@ -342,6 +373,7 @@ RULES_BY_KIND = {
     "HumanReview": [],
     "Venue": [check_venue_name_unique],
     "PaperSummary": [check_summary_state_valid],
+    "PaperCompleteness": [check_completeness_dimensions_binary],
 }
 
 

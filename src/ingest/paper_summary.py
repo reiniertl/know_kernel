@@ -143,6 +143,7 @@ def set_summary(
     state: str,
     model: str = "",
     reviewed_by: str = "",
+    recompute: bool = False,
 ) -> SummaryResult:
     """Create or replace the single PaperSummary attached to a Source.
 
@@ -155,6 +156,10 @@ def set_summary(
     state in REVIEWED_STATES names no reviewer.
 
     The Source is not revalidated after the write; see carve-out 1.
+
+    `recompute` refreshes the paper's completeness verdict, defaulting to OFF
+    for the reason set_abstract documents: bulk writers end with one batch
+    pass, the single-paper web editor passes True.
     """
     if state not in SUMMARY_STATES:
         raise ValueError(
@@ -198,6 +203,11 @@ def set_summary(
         add_node(conn, summary_id, "PaperSummary", attrs)
         add_edge(conn, "summarizes-paper", summary_id, source_id)
         created = True
+
+    if recompute:
+        from ingest.paper_completeness import recompute_paper_if_present
+
+        recompute_paper_if_present(conn, source_id)
 
     return SummaryResult(
         ok=True,

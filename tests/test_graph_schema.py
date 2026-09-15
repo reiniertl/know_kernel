@@ -29,8 +29,10 @@ def test_node_kinds_complete():
         # D-F: a paper summary is its own node, not Source attrs, because the
         # state vocabulary is ordered and the completeness verdict reads it.
         "PaperSummary",
+        # D-A: a persisted, purely informational per-paper verdict.
+        "PaperCompleteness",
     }
-    assert len(NODE_KINDS) == 29
+    assert len(NODE_KINDS) == 30
 
 
 def test_edge_kinds_complete():
@@ -50,9 +52,11 @@ def test_edge_kinds_complete():
         # IFC-KK-PAPER-SUMMARY: links a PaperSummary to its paper. Not to be
         # confused with summarizes-for, which points a ResearchBrief at a Concept.
         "summarizes-paper",
+        # IFC-KK-PAPER-COMPLETENESS: links a verdict to its paper.
+        "completeness-of",
     }
     assert set(EDGE_KINDS) == expected
-    assert len(EDGE_KINDS) == 39
+    assert len(EDGE_KINDS) == 40
 
 
 def test_edge_valid_pairs_covers_all_edge_kinds():
