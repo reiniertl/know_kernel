@@ -26,8 +26,11 @@ def test_node_kinds_complete():
         "Opportunity", "ResearchBrief", "HumanReview", "Reviewer",
         # D-1 Option A: venue is a first-class node, not an attrs string.
         "Venue",
+        # D-F: a paper summary is its own node, not Source attrs, because the
+        # state vocabulary is ordered and the completeness verdict reads it.
+        "PaperSummary",
     }
-    assert len(NODE_KINDS) == 28
+    assert len(NODE_KINDS) == 29
 
 
 def test_edge_kinds_complete():
@@ -44,9 +47,12 @@ def test_edge_kinds_complete():
         "opportunity-for", "supported-by", "summarizes-for", "reviewed-by",
         # INV-KK-VENUE-SOURCE-EDGE: links a Source to its Venue.
         "published-at",
+        # IFC-KK-PAPER-SUMMARY: links a PaperSummary to its paper. Not to be
+        # confused with summarizes-for, which points a ResearchBrief at a Concept.
+        "summarizes-paper",
     }
     assert set(EDGE_KINDS) == expected
-    assert len(EDGE_KINDS) == 38
+    assert len(EDGE_KINDS) == 39
 
 
 def test_edge_valid_pairs_covers_all_edge_kinds():

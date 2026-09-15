@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity", "ResearchBrief", "HumanReview", "Reviewer", "Venue")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity", "ResearchBrief", "HumanReview", "Reviewer", "Venue", "PaperSummary")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -46,6 +46,8 @@ EDGE_KINDS = (
     "summarizes-for",
     "reviewed-by",
     "published-at",
+    # IFC-KK-PAPER-SUMMARY: links a PaperSummary to the paper it summarises.
+    "summarizes-paper",
 )
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
@@ -56,6 +58,10 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     # to at most one. The raw Source.attrs.venue string is retained as provenance
     # but is no longer what the viewer groups on.
     "published-at": ("Source", "Venue"),
+    # IFC-KK-PAPER-SUMMARY. Distinct from summarizes-for, which points a
+    # ResearchBrief at a Concept: a paper and a concept are different things to
+    # summarise, and the two kinds coexist.
+    "summarizes-paper": ("PaperSummary", "Source"),
     "alternative-to": ("Concept", "Concept"),
     "refines": ("Concept", "Concept"),
     "contradicts": ("Concept", "Concept"),
@@ -121,6 +127,10 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "HumanReview": ("reviewer", "score", "verdict", "rationale", "review_date", "artifact_class"),
     "Reviewer": ("name",),
     "Venue": ("name", "venue_type"),
+    # text may be empty (states absent and rejected carry no usable text), but the
+    # key must be present so a reader never has to distinguish missing from empty.
+    # model, set_at and reviewed_by are optional: see IFC-KK-PAPER-SUMMARY.
+    "PaperSummary": ("text", "state"),
 }
 
 DATE_ATTRS = frozenset({"source_date", "window_start", "window_end", "review_date"})
@@ -154,6 +164,7 @@ ID_PREFIXES = {
     "HumanReview": "hrev-",
     "Reviewer": "rvr-",
     "Venue": "venue-",
+    "PaperSummary": "psum-",
 }
 
 # INV-KK-SCHEMA-KIND-DECLARATION-HONOURED: kind is deliberately NOT constrained by a

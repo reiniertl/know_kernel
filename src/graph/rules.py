@@ -80,6 +80,30 @@ def check_venue_name_unique(conn: sqlite3.Connection, node_id: str) -> Violation
     return None
 
 
+def check_summary_state_valid(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    """INV-KK-SUMMARY-STATE-VOCABULARY: the state vocabulary is closed.
+
+    The completeness verdict reads the state rather than the text, so a state
+    outside the vocabulary is not a cosmetic problem: it makes the verdict
+    unanswerable. Imported lazily to keep graph.rules free of an ingest import.
+    """
+    from ingest.paper_summary import SUMMARY_STATES
+
+    row = conn.execute(
+        "SELECT json_extract(attrs, '$.state') FROM nodes WHERE id = ?", (node_id,)
+    ).fetchone()
+    state = row[0] if row else None
+    if not state:
+        return Violation(node_id, "summary-state", "PaperSummary must have a state")
+    if state not in SUMMARY_STATES:
+        return Violation(
+            node_id,
+            "summary-state-vocabulary",
+            f"PaperSummary state '{state}' is not one of: " + ", ".join(SUMMARY_STATES),
+        )
+    return None
+
+
 def check_kinv_belongs_to_subsystem(conn: sqlite3.Connection, node_id: str) -> Violation | None:
     row = conn.execute(
         "SELECT 1 FROM edges WHERE kind = 'belongs-to' AND source_id = ? LIMIT 1",
@@ -317,6 +341,7 @@ RULES_BY_KIND = {
     "ResearchBrief": [],
     "HumanReview": [],
     "Venue": [check_venue_name_unique],
+    "PaperSummary": [check_summary_state_valid],
 }
 
 
