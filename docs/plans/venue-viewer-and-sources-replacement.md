@@ -1,11 +1,12 @@
 # Implementation Plan: Venue Viewer, Venue Editor, and Retirement of `/sources`
 
 **Created:** 2026-09-14
-**Revised:** 2026-09-15 — WP0, WP1 and WP8 executed; WP0.5 added; WP3 and WP5 widened;
-operator decisions D-3/D-4/D-5 recorded in §3.
-**Status:** WP0 ✅, WP1 ✅ (`da66f41`), WP8 ✅ (`09bf666`). **WP0.5 is next and gates
-every later "suite green" exit criterion.** Still blocked on §14 D-1 and D-2 for
-WP2/WP4/WP5.
+**Revised:** 2026-09-15 — every work package executed; D-1 and D-2 answered; §9
+reconciled against the commits that actually landed.
+**Status:** COMPLETE. WP0 ✅, WP0.5 ✅ (`d0200bd`), WP1 ✅ (`da66f41`), WP2+WP6 ✅
+(`068915f`), WP3 ✅ (`5826796`), WP4 ✅ (`7a59e59`), WP5 ✅ (`be361fb` radar repair,
+`cac9860` viewer and editor), WP7 ✅ (`f22ecd0`), WP8 ✅ (`09bf666`). D-1 and D-2 are
+answered — see §14. Suite: **1,360 passing, 0 failures.**
 **Source audits:**
 - silk run `cb-audit-venue-viewer-01` (cb-audit, FINAL_STATUS SUCCESS, 6 stages, 0 violations) — scope and first-pass findings
 - silk run `cb-audit-venue-plan-02` (cb-audit, FINAL_STATUS SUCCESS, 6 stages, 0 violations) — full-file analysis, this plan
@@ -14,7 +15,9 @@ WP2/WP4/WP5.
 add a venue editor; author the missing `MOD-KK-WEB` and venue spec nodes; repair the
 pre-existing damage that blocks the work.
 **Prerequisite:** WP0 (pytest install) — see §7.
-**Blocking decisions:** two, in §14. **D-1 blocks WP2/WP4/WP5 and has no default.**
+**Blocking decisions:** both answered, in §14. D-1 = Option A (`Venue` as a
+first-class node kind); D-2 = admin for merge, any authenticated user for a
+single-Source edit.
 
 ---
 
@@ -855,7 +858,7 @@ collection error aborts the run. With `--continue-on-collection-errors`: **68 fa
 1228 passed, 2 errors**, in four distinct classes (63 dead tests, 3 radar, 2 drift,
 2 uncollectable). See the corrections block in §2.6. No commit; measurement only.
 
-### WP0.5 — Migrate the MCP server to mcp 2.x (decision D-3 in §3)
+### WP0.5 — Migrate the MCP server to mcp 2.x (decision D-3 in §3) ✅ DONE 2026-09-15 (commit `d0200bd`)
 **Severity:** CRITICAL · **Skill:** `/cb-green` · **Blocks:** every later "suite green" gate
 
 - `pyproject.toml` declares `mcp>=1.0`, which floats to **mcp 2.2.0**. mcp 2.x renamed
@@ -869,7 +872,12 @@ collection error aborts the run. With `--continue-on-collection-errors`: **68 fa
   returns the original function, so the direct-call tests keep working), `mcp.run()`
   at line 608. Audit the whole file for other 1.x-only APIs.
 - Remove the `--continue-on-collection-errors` paragraph WP1 added to `README.md`.
-- **Exit:** plain `pytest` collects with no flag; 0 errors.
+- **Exit:** plain `pytest` collects with no flag; 0 errors. ✅
+  → Migrated `src/mcp_server/server.py` to `mcp.server.mcpserver.MCPServer`. The 18
+  `@mcp.tool()` decorators and the direct-call tests in `tests/test_mcp_server.py`
+  needed no change, as the probe in this section predicted. Plain `pytest` now
+  collects the whole suite; the `--continue-on-collection-errors` paragraph is gone
+  from `README.md`.
 
 ### WP1 — Delete the dead tests ✅ DONE 2026-09-14 (commit `da66f41`)
 **Severity:** CRITICAL · **Skill:** `/cb-green` · **Parallel with:** WP2, WP3, WP7, WP8
@@ -889,7 +897,7 @@ collection error aborts the run. With `--continue-on-collection-errors`: **68 fa
   **Green was NOT reached**, by design: 5 failures remain, all outside this WP and
   routed to WP0.5, WP3 and WP5.
 
-### WP2 — Decide and specify venue representation
+### WP2 — Decide and specify venue representation ✅ DONE 2026-09-15 (commit `068915f`, carrying WP6)
 **Severity:** CRITICAL · **Skill:** `/cb-green`, spec-only · **Blocks:** WP4, WP5 · **Needs:** D-1, D-2
 
 - Resolve D-1 (§14). Author the nodes in §5.1 (if Option A) and the venue-model nodes
@@ -897,7 +905,7 @@ collection error aborts the run. With `--continue-on-collection-errors`: **68 fa
 - Specify normalisation semantics against the §2.5 collision table.
 - **Exit:** nodes applied; `spec:check` still 0 errors; no new dangling ids.
 
-### WP3 — Reconcile declared vs actual, three surfaces
+### WP3 — Reconcile declared vs actual, three surfaces ✅ DONE 2026-09-15 (commit `5826796`)
 **Severity:** ERROR · **Skill:** `/cb-green` · **Parallel with:** WP1, WP2, WP7, WP8
 
 Widened by decision D-5 (§3) from the SQLite CHECK alone to **all three** consumers of
@@ -923,7 +931,7 @@ are each a currently-failing test.
 - **Exit:** a fresh test DB and `data/master.db` accept and reject the same `kind`
   values; `NODE_KINDS`/`EDGE_KINDS` are fully covered by rules and by the viz map.
 
-### WP4 — Author the web spec nodes
+### WP4 — Author the web spec nodes ✅ DONE 2026-09-15 (commit `7a59e59`)
 **Severity:** ERROR · **Skill:** `/cb-green`, spec-only · **Depends:** WP2
 
 - Author §5.2 nodes with full pre/postconditions.
@@ -931,7 +939,7 @@ are each a currently-failing test.
   this also clears one of the 8 warnings in §2.13.
 - **Exit:** `spec:check` 0 errors; new nodes carry artifacts and `predicate-nl`.
 
-### WP5 — Implement
+### WP5 — Implement ✅ DONE 2026-09-15 (commits `be361fb` radar repair, `cac9860` viewer and editor)
 **Severity:** ERROR · **Skill:** `/cb-green` · **Depends:** WP4 (and WP1 for a green suite)
 
 Remove:
@@ -949,13 +957,16 @@ Add:
 - `"/api/venue/"` in `WEB_MUTATION_ALLOWLIST` (`routes.py:31-36`)
 - Tests per §10
 
-Repair (decision D-4, §3):
+Repair (decision D-4, §3) ✅ DONE 2026-09-15 (commit `be361fb`):
 - Rewrite the three `/radar` tests — `test_radar_returns_200:1046`,
   `test_radar_shows_subsystems_with_concepts:1052`,
   `test_radar_shows_vuln_and_fix_counts:1062` — against research-radar semantics.
   **The radar page is not broken and must not be changed.** See §2.4a.
 - Folded in here rather than given its own WP because `/venues` needs the identical
   paper-chain fixture scaffolding. Build one fixture, share it.
+  → The fixture was built first and the repair shipped ahead of the viewer, so WP5
+  landed as **two** commits rather than one. `/radar`'s route and template are
+  byte-identical to their pre-WP5 state, as the exit criterion required.
 
 **Scope note:** the venue viewer does **not** replace `/radar`. `/radar` stays exactly
 as it is. The venue viewer **adopts radar's shape** in place of `/sources`.
@@ -963,13 +974,13 @@ as it is. The venue viewer **adopts radar's shape** in place of `/sources`.
 **Exit:** `pytest` green; `spec:check` 0 errors; `/venues` renders; `/sources` 404s;
 the radar route and template are byte-identical to their pre-WP5 state.
 
-### WP6 — Decide venue-mutation authorisation
+### WP6 — Decide venue-mutation authorisation ✅ DONE 2026-09-15 (folded into WP2, commit `068915f`)
 **Severity:** ERROR · **Skill:** fold into WP2 · **Needs:** D-2
 
 Per §2.12. If admin-only: either make `require_admin` reachable from `MOD-KK-WEB`
 or host the editor in the gate app. Decide **before** WP4 authors the invariant.
 
-### WP7 — Close the dangling citations
+### WP7 — Close the dangling citations ✅ DONE 2026-09-15 (commit `f22ecd0`)
 **Severity:** ERROR · **Skill:** `/cb-green`, spec-only · **Parallel**
 
 - Author nodes for the 8 live dangling ids in §2.8, or delete the citation where the
@@ -997,28 +1008,59 @@ or host the editor in the gate app. Decide **before** WP4 authors the invariant.
 and WP0.5), `src/graph/schema.py` (WP3, and WP5 under Option A), `src/graph/rules.py`
 (WP3 surface 2, and Option A), `src/mcp_server/server.py` (WP0.5),
 **26 files for WP8** — not the 2 named in §2.14; the full list is in commit `09bf666`.
+→ Two more were modified that this manifest did not predict:
+`src/graph/engine.py` (WP3 — `add_node` now rejects a kind outside `NODE_KINDS`) and
+`src/web/templates/graph_viz.html` (WP3 surface 3 and WP5 — an `edgeColor` entry for
+`summarizes-for` and then for `published-at`). `.gitignore` was also modified, by the
+spec store recovery in §9 item 5.
 
-**Deleted:** `src/web/templates/concept_list.html`.
+**Deleted:** `src/web/templates/concept_list.html`. ✅
 
-**Explicitly untouched — assert in review:** `src/authgate/*` (unless D-2 = admin-only),
-`src/mcp_server/*`, `src/export/*`, `src/graph/briefing.py`, `src/graph/scoring.py`,
-`src/ingest/extractor.py`, `src/ingest/feed.py`, all `data/*.py` one-off scripts.
+**Explicitly untouched — assert in review:** `src/authgate/*`, `src/export/*`,
+`src/graph/briefing.py`, `src/graph/scoring.py`, `src/ingest/extractor.py`,
+`src/ingest/feed.py`, all `data/*.py` one-off scripts.
+→ Verified against `git diff --name-only 58a31c7^..f22ecd0 -- src/`: all of these
+held. D-2 came out admin-for-merge, but `src/authgate/` still needed no change —
+`require_admin` was imported, not modified. `src/mcp_server/*` was **removed from
+this list**: it was never truly untouched once WP0.5 existed, and the Modified list
+above has named `src/mcp_server/server.py` since WP0.5 was added.
 
 ---
 
 ## 9. Commit sequence
+
+**Planned nine commits; eleven landed.** Two were never anticipated by this plan
+— items 4 and 5 below. WP5 split in two because the shared fixture was finished
+before the viewer was. WP6 folded into WP2, as §7 said it would. The order below
+is the actual one.
 
 1. WP0 — no commit (environment). ✅
 2. `test: remove tests for pages deleted on 2026-07-29` (WP1) ✅ `da66f41`
 3. `chore: strip BOM, repair mojibake, add .gitattributes` (WP8) ✅ `09bf666`
    — executed alongside WP1 as one grouped housekeeping run, hence out of the
    original order.
-4. `fix: migrate MCP server to the mcp 2.x MCPServer API` (WP0.5) ← **next**
-5. `fix: reconcile declared schema with live database` (WP3)
-6. `spec: model venue representation` (WP2)
-7. `spec: author venue viewer and editor nodes` (WP4)
-8. `feat: replace /sources with venue viewer and add venue editor` (WP5)
-9. `spec: close dangling MOD-KK-WEB citations` (WP7)
+4. `docs: record the venue plan and apply operator decisions D-3/D-4/D-5` ✅ `58a31c7`
+   — **unanticipated.** This document itself, committed once WP0's observed baseline
+   discharged the caveat in §2.6.
+5. `fix: persist the spec store so the graph survives a rebuild` ✅ `d6de283`
+   — **unanticipated, and the most serious finding of the run.** The entire KK
+   specification (91 nodes) was missing from `spec/spec.db`. The journal had gone
+   uncoalesced since 2026-07-13 because `ril journal coalesce` runs `git add`
+   internally, and that call failed against a blanket `combobul/` entry in
+   `.gitignore` — silently, so the loss accumulated for two months. Recovered by
+   coalesce + rebuild (103 nodes). The recurrence was closed by narrowing the ignore
+   so `combobul/spec/mutations` and `combobul/spec/snapshots` are tracked while
+   `spec.db` and the engine source stay ignored. **WP2, WP4 and WP7 could not have
+   run until this landed**, which is why it precedes them here.
+6. `fix: reconcile declared schema with live database` (WP3) ✅ `5826796`
+7. `fix: migrate MCP server to the mcp 2.x MCPServer API` (WP0.5) ✅ `d0200bd`
+   — ran after WP3 rather than before it; the two are independent.
+8. `test: rewrite the /radar tests against research-radar semantics` (WP5, decision
+   D-4) ✅ `be361fb`
+9. `spec: model venue representation` (WP2 + WP6) ✅ `068915f`
+10. `spec: author venue viewer and editor nodes` (WP4) ✅ `7a59e59`
+11. `feat: replace /sources with venue viewer and add venue editor` (WP5) ✅ `cac9860`
+12. `spec: close dangling MOD-KK-WEB citations` (WP7) ✅ `f22ecd0`
 
 Run `npm run spec:check` before each commit (CLAUDE.md rule 7). Attribution line per
 CLAUDE.md. Note git identity is unset (§2.15).
@@ -1111,9 +1153,15 @@ EOF
 
 ---
 
-## 14. Open decisions
+## 14. Decisions — both answered 2026-09-15
 
-**D-1 — Venue representation. BLOCKING. No default.**
+Both were answered by the operator before WP2 was authored. The option tables are
+kept as the rationale record; the answers are stated with each.
+
+**D-1 — Venue representation. ANSWERED: Option A.** `Venue` is a first-class node
+kind, linked from a Source by a `published-at` edge. Shipped in `068915f`
+(`IFC-KK-VENUE`, `INV-KK-VENUE-NORMALISED`, `INV-KK-VENUE-NAME-UNIQUE`,
+`INV-KK-VENUE-SOURCE-EDGE`, `ALG-KK-VENUE-BACKFILL`) and `cac9860`.
 
 | | Option A: first-class node kind | Option B: attribute + normalisation |
 |---|---|---|
@@ -1126,9 +1174,12 @@ EOF
 | Cost | High | Low |
 | Fidelity | Matches "similar to radar" literally | Approximates it |
 
-**D-2 — Authorisation for venue mutation.** Any logged-in user, or admin-only?
-See §2.12 blast-radius table. Suggested default: **admin-only for merge**, any user
-for single-Source edit. Must be decided before WP4.
+**D-2 — Authorisation for venue mutation. ANSWERED: the suggested default was
+adopted.** `PUT /api/venue/{source_id}` touches one Source and requires only an
+authenticated user, matching `PUT /api/abstract/{source_id}`. `POST /api/venue/merge`
+can repoint up to 897 Sources and requires `role == 'admin'` via
+`authgate.app.require_admin`. Specified by `INV-KK-VENUE-MUTATION-AUTHORISED`
+(`068915f`); this is the first role check on any `MOD-KK-WEB` mutating endpoint.
 
 ---
 
