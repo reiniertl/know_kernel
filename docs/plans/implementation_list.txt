@@ -1,149 +1,650 @@
 ================================================================================
- Authentication Gate, Sessions, Implicit Reviewer Identity
- /cb-green Implementation Prompts
- Generated from: docs/plans/auth-gate-and-session-implementation.md
- Source audit:   silk run audit-auth-session-01 (cb-audit, SUCCESS, 0 violations)
- Date:           2026-08-19
+IMPLEMENTATION PROMPT LIST
+Venue Viewer, Venue Editor, and Retirement of /sources
 ================================================================================
 
-6 skill invocations. Each authors exactly the spec surface for the code it
-writes, then implements it — no spec-only pass, no code-without-spec pass.
+Source plan:   docs/plans/venue-viewer-and-sources-replacement.md
+Source audits: silk runs cb-audit-venue-viewer-01, cb-audit-venue-plan-02
+               (both cb-audit, FINAL_STATUS SUCCESS, 6 stages, 0 violations)
+Generated:     2026-09-14
+Revised:       2026-09-15 (after PROMPTS 1 and 2 executed; decisions D-3/D-4/D-5
+               answered by the operator; PROMPT 2B added; PROMPTS 3 and 6 widened)
 
-  PROMPT 1  Auth store foundation      MOD-KK-AUTH + 3 IFC + 2 ALG + 4 INV
-  PROMPT 2  User creation CLI + roster mirroring       2 ALG + 1 INV
-  PROMPT 3  Gate, login, logout, mount  1 IFC + 4 ALG + 2 INV
-  PROMPT 4  Admin user management       4 ALG + 1 INV
-  PROMPT 5  Implicit reviewer identity  1 INV + 3 amended ALG
-  PROMPT 6  Trivial bundle              entry points, gitignore, README,
-                                        stale test assertions, 1 amended INV
+EXECUTION ORDER: 1 [DONE] -> 2 [DONE] -> 2B -> 3 -> 4 -> 5 -> 6 -> 7
+CRITICAL PATH:   4 -> 5 -> 6
+PARALLELISABLE:  2B, 3 and 7 may run alongside 4 by another operator.
 
-/cb-fix is NOT used anywhere in this list — the skill is reported broken. The
-one pre-existing test defect it would have handled (tests/test_graph_schema.py
-stale kind counts) is folded into PROMPT 6.
+STATUS
+  PROMPT 1   DONE 2026-09-14. No commit (measurement only).
+  PROMPT 2   DONE 2026-09-14. Commits da66f41, 09bf666.
+  PROMPT 2B  NEXT. Blocks every later prompt's "full suite green" exit criterion.
+  PROMPT 3   Widened - see D-5.
+  PROMPT 4   Blocked on D-1 and D-2.
+  PROMPT 6   Widened - see D-4.
 
-ORDERING IS MANDATORY. 1 -> 2 -> 3 -> 4 -> 5 -> 6.
-  - 2 depends on the store from 1.
-  - 3 depends on the store from 1 and is what makes 5 possible.
-  - 5 depends on request.state.user, injected by the gate from 3.
-  - 6 switches the documented entry point and must land last.
-PROMPT 6 fixes a PRE-EXISTING red test. Until 6 lands, expect
-tests/test_graph_schema.py::test_node_kinds_complete and
-::test_edge_kinds_complete to fail. They are NOT caused by this work. Do not
-"fix" them in prompts 1-5 and do not let them block a green verdict there.
+BLOCKING DECISIONS - must be answered before PROMPT 4 is issued:
+  D-1  Venue representation: first-class node kind, or attribute + normalisation?
+       No default. Full comparison in the plan, section 14.
+       STATUS: OPEN.
+  D-2  Authorisation for venue mutation: any logged-in user, or admin-only?
+       Suggested default: admin-only for merge, any user for single-Source edit.
+       STATUS: OPEN.
 
-TWO OPEN DECISIONS carried from the plan (§14). Both have defaults written into
-the prompts below; both are flagged inline as DECISION points:
-  D-13  REMEMBER_TTL = 30 days   (alternatives: 7d, 90d)   — appears in PROMPT 1
-  D-14  "Reviewing as <user>" static line kept              — appears in PROMPT 5
+DECISIONS ANSWERED 2026-09-15 - raised by PROMPT 1's observed baseline:
+  D-3  The `mcp>=1.0` pin floats to mcp 2.2.0, which renamed FastMCP to MCPServer.
+       tests/test_e2e_pipeline.py and tests/test_mcp_server.py fail at import, and a
+       collection error aborts the ENTIRE run, so plain `pytest` yields zero results.
+       ANSWERED: MIGRATE src/mcp_server/server.py to the mcp 2.x MCPServer API.
+       Do NOT pin mcp<2. Issued as PROMPT 2B.
+  D-4  The three /radar tests fail. Investigated 2026-09-15: the radar PAGE IS NOT
+       BROKEN. /radar was created 2026-06-29 (eb1a7d0) as a subsystem VULNERABILITY
+       radar - heading "Subsystem Radar", subsystems with vuln and fix counts. It was
+       rewritten 2026-07-15 (534d725 "rewrite radar as research-focused
+       papers-by-concept view", then 5f08345 regrouping it subsystem/concept/paper).
+       The tests were last touched 2026-07-09 (aaf455f), six days before the rewrite,
+       and still assert the old semantics. Proof the page is sound: the
+       radar_vuln_client fixture contains ZERO Source and ZERO Evidence nodes, and
+       the current route requires the chain Concept -extracted-from-> Evidence
+       -sourced-from-> Source(paper type), so the page correctly renders "0 research
+       papers across 0 subsystems". Against real data the same query returns 1,433
+       papers across 18 subsystems in data/master.db.
+       ANSWERED: REWRITE the three tests against research-radar semantics with a
+       fixture carrying papers. Do NOT change the page. Folded into PROMPT 6, which
+       needs the same paper-chain fixture scaffolding for /venues.
+       NOTE ON SCOPE: the venue viewer does NOT replace /radar. /radar stays exactly
+       as it is. The venue viewer ADOPTS RADAR'S SHAPE in place of /sources.
+  D-5  Two further declared-vs-actual drift failures, neither route-related:
+       graph.rules.RULES_BY_KIND has no entry for ResearchBrief or HumanReview (two
+       node kinds in NODE_KINDS with zero validation rules), and the /viz edgeColor
+       map has no entry for 'summarizes-for' (an edge kind in EDGE_KINDS that renders
+       uncoloured).
+       ANSWERED: FOLD both into PROMPT 3, widening it from the SQLite CHECK
+       constraint alone to declared-vs-actual drift across all three surfaces.
+
+NOTE ON SKILL SELECTION
+  /cb-fix is excluded per operator instruction (skill is broken). Work that would
+  normally route to /cb-fix is issued as /cb-green below.
+  PROMPT 1 is /cb-free and not /cb-ops: it needs `pip install`, which is NOT on the
+  CB-OPS-INV-OPERATIONAL-ONLY allowlist (that allowlist covers npm install/ci and
+  git operations only). It has no spec surface and cannot be a /cb-green.
+  PROMPT 2 is the single grouped execution for all trivial/mechanical findings.
+
 
 ================================================================================
-PROMPT 1 of 6 — Auth store foundation: MOD-KK-AUTH, credential and session storage
+PROMPT 1
 ================================================================================
 
+/cb-free — Establish a real test baseline (WP0)
+            *** DONE 2026-09-14. No commit (measurement only). ***
+
+  OUTCOME (observed, supersedes the prediction below):
+    Install resolved to 38 packages, no conflicts, exactly as the dry run predicted.
+    Plain `pytest -q` runs ZERO tests: tests/test_e2e_pipeline.py and
+    tests/test_mcp_server.py fail at import (mcp 2.x renamed FastMCP to MCPServer)
+    and a collection error aborts the whole run. This became D-3 / PROMPT 2B.
+    With --continue-on-collection-errors: 68 failed, 1228 passed, 2 errors.
+    tests/test_web.py holds 167 test functions, not 141 - the static count was
+    wrong; 141 are top-level and 26 are inside TestDisplayNameForNode.
+    The 68 failures resolve into four classes, not one:
+      63  dead tests, deleted routes           -> PROMPT 2
+       3  /radar, page sound, tests stale      -> D-4, PROMPT 6
+       1  /viz edgeColor missing summarizes-for-> D-5, PROMPT 3
+       1  RULES_BY_KIND missing 2 node kinds   -> D-5, PROMPT 3
+       2  modules uncollectable (mcp 2.x)      -> D-3, PROMPT 2B
+    Predicted 64 route-deletion failures, observed 63: six of the listed functions
+    assert 404 and so were passing spuriously against the now-absent routes.
+
+  - What: pytest is not installed in venv/ or system-wide, so the test suite has
+    never been executed in this environment and every test-related finding in the
+    plan is a STATIC derivation, not an observed result. Install the project with
+    dev and ingest extras (`./venv/bin/pip install -e ".[dev,ingest]"`; a dry run
+    resolved cleanly to 38 packages, no conflicts), then run `./venv/bin/pytest -q`
+    and record the true pass/fail counts. Compare the observed result against the
+    static prediction in plan section 2.6: 64 of 141 test functions in
+    tests/test_web.py are predicted to fail because they call routes deleted on
+    2026-07-29. Report the delta between predicted and observed. Do not fix
+    anything in this prompt — this is measurement only. Note the environment
+    already has node 22.23.1 (snap), npm 10.9.8, git 2.43.0 and a Linux-rebuilt
+    better-sqlite3, all installed 2026-09-14.
+  - Spec areas: none. No DAG read or write is required.
+  - Code path: no source mutation. Touches venv/ only (gitignored).
+  - Pre-commit hook: no commit. Nothing tracked changes.
+  - Test: runs the full existing suite as the deliverable. Capture the exact
+    counts and the list of failing test names for PROMPT 2.
+
 
 ================================================================================
-PROMPT 2 of 6 — User creation CLI and reviewer-roster mirroring
+PROMPT 2
 ================================================================================
 
-/cb-green — Add kk-useradd / kk-userlist / kk-passwd CLIs that create users in auth.db and mirror them into the Reviewer roster in master.db
+/cb-green — Housekeeping: dead tests, README correction, encoding repair (WP1 + WP8)
+            *** DONE 2026-09-14. Commits da66f41, 09bf666. ***
+            *** silk run 97abb0a13fbd4b16, FINAL_STATUS SUCCESS, 0 violations. ***
 
-  - What: Make users creatable from the command line, and make every created
-    user automatically appear on the existing reviewer roster. This is the
-    bootstrap path for the first admin, and it is the mechanism that lets a
-    later prompt delete the reviewer dropdown.
+  OUTCOME (observed, supersedes the figures below):
+    (a) 69 test functions deleted, not 64. Resolved against the live FastAPI router
+    rather than the static table: that reproduced the listed 64 exactly, and found 5
+    more that call-site matching structurally CANNOT see because they make no dead
+    call - they GET "/" and then assert a nav or dashboard link to a deleted page:
+    test_dashboard_kind_links, test_nav_has_code_link, test_dashboard_links_to_vulns,
+    test_nav_has_vulns_link, test_research_nav_link_visible. 64 + 5 = 69 reconciles
+    exactly with the 63 observed route-class failures (6 of the 64 assert 404 and so
+    were passing spuriously).
+    TWO FIXTURE CORRECTIONS to the instruction below:
+      paginated_client  KEPT. The claim that it "is used only by the pagination tests
+                        and dies with them" is FALSE - test_sources_pagination still
+                        uses it, and that test is explicitly retained. Deleting the
+                        fixture would have broken it. It is now that test's SOLE user,
+                        so PROMPT 6 must delete fixture and test together.
+      research_client   DELETED. Genuinely orphaned (13 users, 0 survivors). Not named
+                        in the instruction below.
+    Also removed 5 section comments left heading no code. Comments still heading live
+    code were left alone even where they cite an absent node (e.g. "# --- INV-KK-WEB-
+    PAGINATION tests ---" above paginated_client) - retitling those is PROMPT 7.
+    tests/test_web.py: 167 -> 98 tests. ruff clean. Exit assertion passes: all 66
+    surviving HTTP calls resolve against the 30 registered routes.
+    (c) ENCODING WAS 26 FILES, NOT 2. A tree-wide scan found the UTF-8 BOM in 26
+    tracked files and mojibake in 21 (24 characters: 22 em dashes, 2 rightwards
+    arrows). All repaired; re-scan reports zero of both. .gitattributes added.
+    EXIT CRITERION NOT MET, BY DESIGN. `pytest -q` is not green: 5 failed, 1222
+    passed, 2 errors. Every residual is out of scope and routed to D-3/D-4/D-5.
 
-    Design context (settled, do not re-litigate — plan §3 D-6, D-7, D-9):
-    The operator offered to REMOVE the reviewer roster entirely. That option is
-    REJECTED. Rationale: HumanReview nodes carry a reviewed-by edge to Reviewer
-    nodes, so the roster is the graph-side record of authorship — removing it
-    would force master.db to depend on auth.db to answer "who wrote this
-    review", inverting the storage separation. Removal would also touch ~10
-    source/test files and ~9 spec nodes and is a refactor of shipped behaviour
-    requiring separate rule-#4 approval. Instead the roster becomes a
-    PROJECTION of the user list: creating a user creates its roster entry.
-    The roster name IS the auth username (D-7). Usernames are unique by primary
-    key in auth.db, so INV-KK-REVIEWER-NAME-UNIQUE (case-insensitive, enforced
-    at src/ingest/reviewer_registry.py:24-37) can never be violated by user
-    creation. A separate display name is deliberately deferred.
-    Users are DEACTIVATED, never deleted (D-9): a deleted user whose reviews
-    still reference their roster entry leaves dangling attribution.
+  - What: three mechanical, no-design-decision repairs grouped into one execution.
+    (a) DEAD TESTS. Five commits on 2026-07-29 deliberately removed whole page
+    families and cleaned src/ and templates correctly, but never touched the tests:
+    275daea (Research page), 648bee9 (Vulns list/detail/API), 4271c0a (Subsystems),
+    67c4c99 (All Nodes list), 27bf731 (Code Examples). tests/test_web.py last
+    changed in aaf455f on 2026-07-09 and has had zero commits since, so it has been
+    red for 47 days. 68 of its 138 HTTP calls target routes that no longer exist,
+    across 64 of 141 test functions. Delete those 64 test functions and any fixture
+    left unused by the deletion — note `paginated_client` at tests/test_web.py:822-840
+    is used only by the pagination tests and dies with them; verify each fixture
+    before removing it. The deleted route families are: GET /concepts (list, 19
+    calls), GET /research and /research/{id} (22), GET /vulns, /vulns/{id} and
+    /api/vuln-impact/{id} (19), GET /code-examples (3), GET /subsystems (1). The
+    complete list of the 64 function names is in plan section 2.6 — use it verbatim.
+    DO NOT delete `test_sources_pagination` (tests/test_web.py:925-928) — it targets
+    /sources which still exists and is retired later, in PROMPT 6. DO NOT delete
+    `test_no_write_endpoints` (tests/test_web.py:94-97) — it asserts POST / and
+    PUT/DELETE /concepts/concept-1 return 405, which remains true.
+    (b) README. README.md line 257 claims "326 tests, zero failures." Replace with
+    the true count observed in PROMPT 1.
+    (c) ENCODING. src/web/app.py and src/graph/engine.py both begin with a UTF-8 BOM
+    and contain mojibake where an em dash was intended — both docstrings read
+    "a-circumflex-euro-dagger" in place of the dash. Strip the BOM, repair the dash,
+    and add a .gitattributes with `* text=auto eol=lf`. Root cause is a Windows round
+    trip: the same defect produced a whole-tree LF->CRLF flip (43,417 insertions /
+    43,417 deletions with `git diff --ignore-all-space` empty) and a Windows PE32+
+    better_sqlite3.node binary, both corrected on 2026-09-14.
+  - Spec areas: no new or modified DAG nodes. The P3 reason to submit is: this
+    changeset deletes tests for routes that were removed in 2026-07-29 and repairs
+    file encoding; it introduces no behaviour, and the spec ids cited by the deleted
+    tests (INV-KK-WEB-PAGINATION, INV-KK-WEB-KIND-FILTER, ALG-KK-WEB-CODE-BROWSE,
+    ALG-KK-WEB-GRAPH-VIZ, ALG-KK-WEB-RESEARCH-LIST, ALG-KK-WEB-QUERY-ROUTES,
+    ALG-KK-WEB-KIND-DETAIL, and the malformed INV-KK-WEB-CODE-BROWSE- at
+    tests/test_web.py:981) are already absent from the DAG, so no node is orphaned by
+    the deletion. Confirm with `ril query nodes --filter KK` before submitting.
+    DO NOT touch INV-KK-WEB-READ-ONLY here — it is handled in PROMPT 7.
+  - Code path: tests/test_web.py (delete 64 functions + orphaned fixtures),
+    README.md:257, src/web/app.py (BOM + line 1 docstring), src/graph/engine.py
+    (BOM + line 1 docstring), .gitattributes (new file).
+  - Pre-commit hook: run `npm run spec:check` (expect 0 errors). Commit as two
+    logical commits per CLAUDE.md rule 7: "test: remove tests for pages deleted on
+    2026-07-29" covering (a) and (b), then "chore: strip BOM, repair mojibake, add
+    .gitattributes" covering (c). Include .gitattributes. Git identity is not
+    configured on this machine — use
+    `-c user.name='reinier' -c user.email='reiniertl@gmail.com'`.
+  - Test: no new tests. Exit criterion is `./venv/bin/pytest -q` green with an
+    honest test count. Assert no remaining test in tests/test_web.py calls a route
+    absent from the set registered in src/web/routes.py.
 
-    SPEC AUTHORING (via ril apply-batch):
-    Create algorithms:
-      ALG-KK-AUTH-USER-CREATE (pre: caller is an admin identity or the CLI;
-        username non-empty and not already present; post: a row exists in
-        auth.db.users carrying a pbkdf2 hash AND a Reviewer node named by that
-        username exists in master.db; both or neither)
-      ALG-KK-AUTH-CLI-USERADD (pre: kk-useradd [--admin] [--db PATH]
-        [--auth-db PATH] <username>, password read twice via getpass and never
-        accepted as an argv argument; post: delegates to ALG-KK-AUTH-USER-CREATE,
-        prints the created username and role, exit 0/1)
-    Create invariant:
-      INV-KK-AUTH-ROSTER-MIRRORS-USERS (predicate: forall u in users where
-        u.active = 1. exists r:Reviewer in master.db. r.name = u.username,
-        strong, runtime)
-    Create edges:
-      MOD-KK-AUTH --contains--> ALG-KK-AUTH-USER-CREATE, ALG-KK-AUTH-CLI-USERADD,
-        INV-KK-AUTH-ROSTER-MIRRORS-USERS
-      ALG-KK-AUTH-USER-CREATE --enforces--> INV-KK-AUTH-ROSTER-MIRRORS-USERS,
-        INV-KK-AUTH-NO-PLAINTEXT-PASSWORD
-      ALG-KK-AUTH-CLI-USERADD --enforces--> INV-KK-AUTH-NO-PLAINTEXT-PASSWORD
 
-    CODE IMPLEMENTATION:
-    1. src/authgate/roster.py — ensure_roster_entry(master_conn, username) -> str.
-       Calls find_reviewer then register_reviewer from
-       src/ingest/reviewer_registry.py (signatures verified:
-       find_reviewer(conn, name) -> str | None at line 24;
-       register_reviewer(conn, name) -> ReviewerResult at line 39;
-       ReviewerResult carries .reviewer_id and .name). Idempotent. Returns the
-       rvr- node id.
-       THIS MODULE IS THE ONLY PLACE THE GATE TOUCHES master.db. Do not import
-       graph or ingest modules anywhere else under src/authgate/.
-       Do NOT modify src/ingest/reviewer_registry.py — its API is sufficient.
-    2. src/authgate/cli.py:
-         useradd()  — kk-useradd [--admin] [--db PATH] [--auth-db PATH] <username>
-         userlist() — kk-userlist [--auth-db PATH]
-         passwd()   — kk-passwd [--auth-db PATH] <username>
-       argparse, matching the style of src/ingest/cli.py and src/export/cli.py.
-       Password via getpass.getpass, prompted twice, confirmed equal. NEVER an
-       argv flag (INV-KK-AUTH-NO-PLAINTEXT-PASSWORD).
-       WRITE ORDERING (two stores, not atomic — must be fail-loud, never
-       silently half-applied): write the user row -> ensure_roster_entry ->
-       commit auth.db -> commit master.db. If the roster write raises, roll back
-       BOTH and exit non-zero.
-       Console-script wiring lands in PROMPT 6, not here. Invoke via
-       `python -m authgate.cli` or the function directly for testing.
+================================================================================
+PROMPT 2B
+================================================================================
 
-  - Spec areas: 3 new nodes under MOD-KK-AUTH plus 5 edges. Reads (does not
-    modify) the roster surface in MOD-KK-REVIEW. Run before authoring:
-      npm run ril -- query-multi '[{"cmd":"node-info","args":["ALG-KK-REVIEWER-REGISTER","IFC-KK-REVIEWER","INV-KK-REVIEWER-NAME-UNIQUE","MOD-KK-REVIEW"]},{"cmd":"impact-analysis","args":["ALG-KK-REVIEWER-REGISTER","INV-KK-REVIEWER-NAME-UNIQUE"]}]' --json
-    Expected finding: ALG-KK-AUTH-USER-CREATE becomes a NEW caller of
-    ALG-KK-REVIEWER-REGISTER. If the live template permits it, add
-      ALG-KK-AUTH-USER-CREATE --depends-on--> ALG-KK-REVIEWER-REGISTER
-    Do NOT modify, weaken, or re-scope INV-KK-REVIEWER-NAME-UNIQUE,
-    INV-KK-REVIEW-REVIEWER-REGISTERED, or ALG-KK-REVIEWER-REGISTER. They keep
-    holding as-is and that is the point of the design.
+/cb-green — Migrate the MCP server to the mcp 2.x MCPServer API (D-3)
+            *** BLOCKS EVERY LATER PROMPT'S "FULL SUITE GREEN" EXIT CRITERION. ***
 
-  - Code path: NEW src/authgate/roster.py, src/authgate/cli.py.
-    NEW tests/test_authgate_cli.py.
-    READ-ONLY dependency on src/ingest/reviewer_registry.py (do not edit).
-    No web, graph, export, or MCP file is touched.
+  - What: pyproject.toml declares `mcp>=1.0`, which currently resolves to mcp 2.2.0.
+    mcp 2.x renamed FastMCP to MCPServer and moved it from mcp.server.fastmcp to
+    mcp.server.mcpserver. src/mcp_server/server.py:25 still does
+    `from mcp.server.fastmcp import FastMCP`, so importing the module raises
+    ModuleNotFoundError. Two test modules import it - tests/test_mcp_server.py:14
+    (`import mcp_server.server as srv`) and tests/test_e2e_pipeline.py:31
+    (`from mcp_server.server import init_snapshot`) - and a COLLECTION error aborts
+    the entire pytest run, so plain `pytest` currently yields zero test results for
+    the whole repository, not just these two modules. This is why README.md now
+    documents `pytest --continue-on-collection-errors` as a temporary workaround;
+    remove that workaround paragraph as part of this change.
+    The operator's decision (D-3) is MIGRATE. Do NOT pin mcp<2.
+    The migration surface is small and has been probed against the installed 2.2.0:
+      - line 25:  from mcp.server.fastmcp import FastMCP
+                  -> from mcp.server.mcpserver import MCPServer
+      - line 40:  mcp = FastMCP("know_kernel")
+                  -> mcp = MCPServer("know_kernel")
+                  MCPServer.__init__ takes `name` as its first positional parameter,
+                  so the call form is unchanged.
+      - lines 88-518: 18 @mcp.tool() decorators. MCPServer.tool() exists and, VERIFIED
+                  BY PROBE, still returns the ORIGINAL FUNCTION rather than a Tool
+                  wrapper - a decorated function remains directly callable and returns
+                  its normal value. This matters because tests/test_mcp_server.py calls
+                  the tools directly (srv.search_concepts("Queue"), srv.get_concept(...),
+                  srv.list_subsystems(), ...) rather than through the protocol. Confirm
+                  the probe holds rather than assuming it.
+      - line 608: mcp.run() - MCPServer.run() exists. Confirm the transport default
+                  is unchanged, since `kk-mcp` (a console script in pyproject) calls
+                  main() at line 595.
+    Read the migration guide before changing anything:
+    https://py.sdk.modelcontextprotocol.io/v2/migration/#fastmcp-renamed-to-mcpserver
+    Check the whole file for any other 1.x-only API, not just the four sites above -
+    the rename is the error you can see, but 2.x changed other APIs too.
+    Consider whether pyproject.toml should pin `mcp>=2` once migrated, so the
+    declaration matches the code instead of floating across a breaking rename. That
+    is a decision - ASK before changing the pin.
+  - Spec areas: MOD-KK-MCP if it exists; query `ril query nodes --filter KK` and
+    `ril query module-context MOD-KK-MCP --json` to find the real module id and any
+    ALG-KK-MCP-* nodes citing the server. If the spec names FastMCP or the 1.x import
+    path anywhere, those nodes must be updated - that is a genuine spec change and
+    must NOT be reported as "no spec surface". If the spec is silent on the library,
+    submit a P3 reason saying so explicitly.
+  - Code path: src/mcp_server/server.py (lines 25, 40, 595-608, plus any other 1.x
+    API found), README.md (remove the --continue-on-collection-errors paragraph added
+    by PROMPT 2), pyproject.toml only if the pin decision says so.
+  - Pre-commit hook: run `npm run spec:check` (expect 0 errors). Commit as
+    "fix: migrate MCP server to the mcp 2.x MCPServer API" with any .cbm mutation
+    files alongside. Git identity is not configured on this machine — use
+    `-c user.name='reinier' -c user.email='reiniertl@gmail.com'`.
+  - Test: exit criterion is that PLAIN `./venv/bin/pytest -q` collects successfully
+    with no --continue-on-collection-errors flag, and that the 2 previously
+    uncollectable modules run. Expected result after this prompt: 3 failed, 1224+
+    passed, 0 errors - the 3 residual failures being the /radar tests (D-4, PROMPT 6)
+    and the 2 drift failures (D-5, PROMPT 3); confirm the exact numbers rather than
+    assuming them. All 25 tests in tests/test_mcp_server.py must pass unmodified;
+    if any needs changing, that is a signal the migration changed behaviour and must
+    be reported, not silently accommodated.
 
-  - Pre-commit hook: one commit, "feat: kk-useradd CLI with roster mirroring".
-    Contents: .cbm mutation file(s), src/authgate/roster.py,
-    src/authgate/cli.py, tests/test_authgate_cli.py. npm run spec:check must
-    hold at 0 errors.
 
-  - Test: NEW tests/test_authgate_cli.py covering plan §10 items 19-23:
-    kk-useradd creates BOTH the auth.db row and the Reviewer node in master.db;
-    re-running for an existing username exits non-zero and creates no second
-    roster entry; ensure_roster_entry is idempotent when the entry already
-    exists; --admin sets role='admin'; the password never appears in argv or in
-    captured stdout/stderr.
-    Add one test asserting the fail-loud ordering: if ensure_roster_entry
-    raises, no user row survives in auth.db.
+================================================================================
+PROMPT 3
+================================================================================
 
-  >>> GENERAL INSTRUCTIONS <<<
+/cb-green — Reconcile declared schema with actual state, 3 surfaces (WP3 + D-5)
+
+  - What: THREE declared-vs-actual drift surfaces, all the same defect class: a
+    declaration in src/graph/schema.py that some other artifact has silently fallen
+    out of step with. Surfaces (2) and (3) were found by PROMPT 1's observed baseline,
+    are each a currently-failing test, and were folded in here by operator decision
+    D-5. Fix all three.
+
+    (2) RULES_BY_KIND drift. graph.rules.RULES_BY_KIND has NO entry for the node kinds
+    `ResearchBrief` and `HumanReview`, both of which are in schema.NODE_KINDS. Two
+    node kinds therefore carry zero validation rules. Verified directly, not only via
+    the test: `set(NODE_KINDS) - set(RULES_BY_KIND) == {'HumanReview', 'ResearchBrief'}`.
+    Failing test: tests/test_graph_rules.py::test_rules_by_kind_covers_all_node_kinds,
+    which asserts `set(RULES_BY_KIND.keys()) == set(NODE_KINDS)`. Decide whether each
+    kind gets real rules or an explicit empty-rule entry - if empty, the emptiness must
+    be deliberate and commented, not incidental. That is a design decision - ASK.
+
+    (3) /viz edgeColor drift. The edgeColor map rendered by the /viz route
+    (src/web/routes.py:1040) has no entry for the edge kind `summarizes-for`, which is
+    in schema.EDGE_KINDS, so that edge renders uncoloured. Failing test:
+    tests/test_web.py::test_web_viz_edge_color_covers_all_edge_kinds, which asserts
+    every kind in EDGE_KINDS appears in the rendered page.
+
+    Consider whether ONE invariant should cover all three surfaces - "every kind
+    declared in schema.py is honoured by every consumer of that declaration
+    (SQL CHECK, RULES_BY_KIND, viz edgeColor)" - rather than three unrelated patches.
+    A single predicate is what stops a fourth consumer drifting next. That is a design
+    decision - ASK before choosing.
+
+    (1) THE SQLITE CHECK CONSTRAINT. src/graph/schema.py SCHEMA_SQL declares `nodes.kind TEXT NOT NULL CHECK
+    (kind IN (...27 kinds...))` and an equivalent CHECK on edges.kind. The live
+    data/master.db actually holds `CREATE TABLE "nodes" (id TEXT PRIMARY KEY, kind
+    TEXT NOT NULL, attrs TEXT NOT NULL DEFAULT '{}')` with NO CHECK at all; the
+    quoted table name indicates the table was rebuilt at some point and the
+    constraint was dropped. edges has likewise lost its CHECK. src/web/app.py runs
+    `conn.executescript(SCHEMA_SQL)` on every startup but every statement is CREATE
+    TABLE IF NOT EXISTS, so it can never repair an existing table, and there is no
+    migration mechanism anywhere despite schema.py's docstring claiming "SQLite
+    schema definition and migrations". Consequence: every pytest fixture and every
+    :memory: app gets the CHECK while production does not, so the two disagree about
+    which node kinds are legal. This blocks PROMPT 6 under D-1 Option A — inserting
+    kind='Venue' would raise IntegrityError in tests and succeed in production.
+    Note also that graph.engine.add_node does NOT validate kind in Python (it checks
+    only REQUIRED_ATTRS), so the SQL CHECK is the sole kind enforcement; by contrast
+    graph.engine.add_edge DOES validate in Python against EDGE_VALID_PAIRS and raises
+    ValueError("Unknown edge kind: ...").
+    Reconcile the two. Whether that means adding a real migration step or changing
+    the declaration is a design decision — ASK before choosing.
+  - Spec areas: MOD-KK-GRAPH (currently holds only 3 nodes:
+    ALG-KK-GRAPH-CLASSIFY-SOURCE-MOTIVATIONS, INV-KK-MOTIV-EVIDENCE-GROUNDED,
+    INV-KK-MOTIV-LABEL-VOCABULARY). Expect to author a new invariant asserting that
+    the declared schema and the live database agree on legal node and edge kinds,
+    and possibly an algorithm node for the migration path. Surface (3) also touches
+    MOD-KK-WEB via the /viz route. If one unifying invariant is chosen over three
+    patches, it belongs in MOD-KK-GRAPH and MOD-KK-WEB must depend on it. Query
+    `ril query module-context MOD-KK-GRAPH --json` and
+    `ril template invariant --json` for authoring rules.
+  - Code path: src/graph/schema.py (SCHEMA_SQL, NODE_KINDS, EDGE_KINDS, init_db),
+    src/web/app.py lines 26-35 (the lifespan executescript call),
+    src/graph/engine.py add_node if Python-side kind validation is chosen,
+    src/graph/rules.py RULES_BY_KIND for surface (2), and the edgeColor map reached
+    from src/web/routes.py:1040 (/viz) for surface (3) - it may live in the viz
+    template rather than in routes.py; locate it before editing.
+  - Pre-commit hook: run `npm run spec:check` (expect 0 errors) and the full pytest
+    suite. Commit as "fix: reconcile declared schema with live database" with the
+    .cbm mutation files alongside the code change. Git identity is not configured on
+    this machine — use `-c user.name='reinier' -c user.email='reiniertl@gmail.com'`.
+  - Test: new tests asserting a fresh DB and data/master.db accept and reject the
+    same kind values. Assert the migration (if chosen) is idempotent and re-runnable.
+    Existing tests in tests/test_graph_engine.py and tests/test_graph_schema.py must
+    pass unmodified. The two currently-red tests must go green WITHOUT being edited -
+    tests/test_graph_rules.py::test_rules_by_kind_covers_all_node_kinds and
+    tests/test_web.py::test_web_viz_edge_color_covers_all_edge_kinds. They are correct
+    as written; they are detecting real drift. Weakening either to make it pass is a
+    direct violation of CLAUDE.md rule 2 (the spec verifies the code, not the reverse).
+
+
+================================================================================
+PROMPT 4
+================================================================================
+
+/cb-green — Model venue representation and mutation authorisation (WP2 + WP6)
+            *** SPEC-ONLY. NO CODE. REQUIRES D-1 AND D-2 ANSWERED FIRST. ***
+
+  - What: venue has no referent in the model and must be given one before any UI or
+    editor work. Facts, all verified against data/master.db on 2026-09-14: venue is
+    a free-text key inside the JSON attrs blob of Source nodes; 3,574 Source nodes
+    exist; 3,467 carry a venue (97.0%); 107 do not; there are 34 distinct venue
+    strings. Venue is absent from every enforcement point in src/graph/schema.py —
+    NODE_KINDS (27 kinds), EDGE_KINDS (37 kinds), EDGE_VALID_PAIRS, REQUIRED_ATTRS
+    (Source requires only url, source_type, license), ID_PREFIXES, DATE_ATTRS — and
+    from rules.RULES_BY_KIND, and there is no Venue node kind or venue edge kind in
+    the spec DAG. No code in src/ writes Source.venue: src/ingest/batch_score.py:161
+    and :167-168 read it for display, src/ingest/abstract_fetcher.py:108 mentions it
+    in prose, and data/fetch_abstracts.py:47,53-55,66 is a one-off script that reads
+    and filters on it. The 3,467 values were written by ad-hoc scripts in data/, so
+    there is no existing writer to extend and the editor is genuinely new code.
+    The values are unnormalised, which makes a raw GROUP BY produce wrong buckets.
+    Known collisions: OSDI 2026 (136) / OSDI (30) / OSDI 2025 (1); SOSP (49) /
+    SOSP 2025 (5); EuroSys (60) / EuroSys 2025 (poster) (1); ASPLOS (46) /
+    ASPLOS 2025 (2); USENIX ATC (60) / USENIX ATC 2025 (1). The four arXiv cs.*
+    values (cs.DC 897, cs.AR 888, cs.CR 705, cs.OS 356) cover 2,846 Sources — 82% of
+    the corpus — and are arXiv categories, not venues; arXiv (19) and arXiv/PVLDB (1)
+    are further variants. The 107 Sources with no venue break down by source_type as
+    kernel-doc 43, article 22, preprint 17, vulnerability-database 16, discourse 9,
+    and need an explicitly specified placement. The full 34-row distribution table is
+    in plan section 2.5 and is the test oracle for PROMPT 6.
+    Beware a name collision: INV-KK-FEED-CONFIG-VENUE-TYPE is the only venue-aware
+    node in the DAG and constrains venue_type in data/feed_configs.json to a ten-value
+    vocabulary (conference, journal, workshop, symposium, news, aggregator,
+    mailing-list, preprint, documentation, vulnerability-db). That field is unrelated
+    to Source.venue. feed_configs.json also carries "feed_type": "venue" on many
+    entries, a third distinct meaning. Record the distinction, or rename.
+    Also settle D-2 here. The gate authenticates every mounted request
+    (INV-KK-AUTH-GATE-COVERS-MOUNT) so authentication is free, but require_admin at
+    src/authgate/app.py:59-68 is called only by the four /admin/* handlers and NO
+    MOD-KK-WEB mutating endpoint has any role check. Blast radius argues for one:
+    PUT /api/abstract/{id} touches 1 Source, POST /api/review/{id} touches 1
+    HumanReview plus 1 edge, but a venue merge of OSDI 2026 into OSDI would rewrite
+    up to 897 Sources.
+  - Spec areas: MOD-KK-GRAPH and MOD-KK-WEB. Under D-1 Option A expect IFC-KK-VENUE
+    (fields name, venue_type, series, aliases), INV-KK-VENUE-NAME-UNIQUE,
+    INV-KK-VENUE-SOURCE-EDGE, ALG-KK-VENUE-BACKFILL, plus schema additions:
+    NODE_KINDS += Venue, EDGE_KINDS += published-at,
+    EDGE_VALID_PAIRS["published-at"] = ("Source","Venue"), REQUIRED_ATTRS["Venue"],
+    ID_PREFIXES["Venue"] = "venue-", RULES_BY_KIND["Venue"]. Under either option
+    expect INV-KK-VENUE-NORMALISED (canonical form; the OSDI/SOSP/EuroSys/ASPLOS/ATC
+    collisions resolve to one venue each) and INV-KK-VENUE-MUTATION-AUTHORISED (per
+    D-2). Existing nodes to read first: INV-KK-FEED-CONFIG-VENUE-TYPE,
+    INV-KK-WEB-MUTATION-ALLOWLISTED, INV-KK-AUTH-GATE-COVERS-MOUNT. Use
+    `ril query module-context MOD-KK-GRAPH --json`,
+    `ril query module-context MOD-KK-WEB --json`,
+    `ril query impact-analysis MOD-KK-WEB MOD-KK-GRAPH --json` and
+    `ril template <kind> --json`.
+  - Code path: NONE in this prompt. Spec authoring via `ril apply-batch` only. The
+    schema.py edits listed above land in PROMPT 6, not here.
+  - Pre-commit hook: run `npm run spec:check` (expect 0 errors, no increase in the
+    1,055 warning baseline attributable to the new nodes). Commit the .cbm mutation
+    files as "spec: model venue representation". No source files in this commit.
+  - Test: none — spec-only. Verify with `ril query node-info <new-ids> --json` that
+    every authored node carries predicate-nl and the intended edges.
+
+
+================================================================================
+PROMPT 5
+================================================================================
+
+/cb-green — Author the venue viewer and editor spec nodes (WP4)
+            *** SPEC-ONLY. NO CODE. DEPENDS ON PROMPT 4. ***
+
+  - What: author the MOD-KK-WEB nodes that the implementation in PROMPT 6 will be
+    written against. Three algorithms are needed: ALG-KK-WEB-VENUES (the viewer),
+    ALG-KK-WEB-VENUE-EDIT (single-Source venue write) and ALG-KK-WEB-VENUE-MERGE
+    (alias/merge). Model the viewer node on ALG-KK-WEB-RADAR, whose description is
+    "Render /radar: query research papers joined to Concepts via Evidence, resolve
+    each Concept's Subsystem, group into Subsystem -> Concept -> Papers hierarchy.
+    Sort subsystems and concepts by paper count descending." The venue equivalent
+    groups Venue -> Papers. Model the editor nodes on ALG-KK-WEB-ABSTRACT-EDIT,
+    which is the established shape for a human-driven write to a Source attribute.
+    Postconditions must cover: grouping by canonical venue, ordering, the nesting of
+    papers inside a venue entry, and the explicit placement of the 107 Sources that
+    carry no venue (an Unattributed bucket or exclusion by source_type — do not leave
+    this implicit; silently dropping them loses 3% of the corpus from a page whose
+    job is coverage).
+    Attach INV-KK-WEB-QUERY-BOUNDED to ALG-KK-WEB-VENUES with a satisfies edge. That
+    invariant is strength=strong, enforcementBasis=structural, predicate "forall
+    route in web_list_routes. count(enrichment_calls(route)) <= route.per_page", and
+    it is currently reported by spec:check as AUTH-WARN-ORPHANED-INV — wiring it here
+    clears one of the 8 standing MOD-KK-WEB/MOD-KK-GRAPH warnings. The bar it sets is
+    ALG-KK-WEB-RADAR's query discipline: exactly three queries regardless of corpus
+    size (one join for source/concept pairs, one batched IN(...) subsystem lookup,
+    one batched _batch_review_status call at src/web/routes.py:104-133), plus pure
+    Python classification with no DB access (_classify_concept_motivations_fast at
+    src/web/routes.py:827-859). The anti-pattern to avoid is /feed at
+    src/web/routes.py:393-490, which calls _get_concept_subsystems and
+    classify_source_motivations inside a per-item loop and satisfies the invariant
+    only by the letter.
+    Author INV-KK-VENUE-MUTATION-AUTHORISED per the D-2 answer from PROMPT 4, and
+    IFC-KK-VENUE-EDIT for the result shape the domain functions return.
+    Attach artifacts with `ril associate` at authoring time: 0 of the 25 existing
+    MOD-KK-WEB nodes carry a source location and only 7 of 25 carry artifact
+    associations, all 25 are riStatus=unchecked and predicateAuthority=nl-only. Do
+    not extend that pattern.
+  - Spec areas: MOD-KK-WEB. New: ALG-KK-WEB-VENUES, ALG-KK-WEB-VENUE-EDIT,
+    ALG-KK-WEB-VENUE-MERGE, IFC-KK-VENUE-EDIT, INV-KK-VENUE-MUTATION-AUTHORISED.
+    Modified by new edges: INV-KK-WEB-QUERY-BOUNDED (satisfies edge from the viewer),
+    INV-KK-WEB-MUTATION-ALLOWLISTED (the editor routes fall under it). Read first:
+    `ril query node-info ALG-KK-WEB-RADAR ALG-KK-WEB-ABSTRACT-EDIT
+    INV-KK-WEB-QUERY-BOUNDED INV-KK-WEB-MUTATION-ALLOWLISTED --json`,
+    `ril query module-context MOD-KK-WEB --json`, `ril template algorithm --json`.
+    MOD-KK-WEB currently holds 15 algorithms and 10 invariants; the full list is in
+    plan section 2.13.
+  - Code path: NONE. Spec authoring via `ril apply-batch` only.
+  - Pre-commit hook: run `npm run spec:check` (expect 0 errors and one fewer
+    AUTH-WARN-ORPHANED-INV). Commit the .cbm files as "spec: author venue viewer and
+    editor nodes". No source files.
+  - Test: none — spec-only. Verify the satisfies edge landed with
+    `ril query node-info INV-KK-WEB-QUERY-BOUNDED --json`.
+
+
+================================================================================
+PROMPT 6
+================================================================================
+
+/cb-green — Implement the venue viewer, the venue editor, and retire /sources (WP5)
+            *** DEPENDS ON PROMPTS 2, 3, 4 AND 5. ***
+
+  - What: write the code against the nodes authored in PROMPT 5.
+    REMOVE. src/web/routes.py:240-261 is the sources_list handler: query params page
+    (>=1) and per_page (10-200, default 50), a single
+    "SELECT id, kind, attrs FROM nodes WHERE kind = 'Source' ORDER BY id LIMIT ?
+    OFFSET ?" with per_page+1 to compute has_next, display_name resolution, rendering
+    concept_list.html with title="Sources", active_kind="Source",
+    all_kinds=_all_kinds(conn). It has no docstring and no spec citation, unlike every
+    peer route, so there is no node to supersede. Delete it. Delete
+    src/web/templates/concept_list.html — it is rendered by exactly one route, this
+    one, verified by grep across src/ and tests/; its kind-filter dropdown at lines
+    5-11 is already a dead control because the onchange navigates to ?kind=VALUE and
+    sources_list ignores the parameter and hardcodes kind='Source'. Delete the nav
+    entry at src/web/templates/base.html:45. Delete test_sources_pagination, now at
+    tests/test_web.py:780 (line numbers shifted when PROMPT 2 removed 69 functions),
+    AND the paginated_client fixture at tests/test_web.py:759, which after PROMPT 2 has
+    test_sources_pagination as its SOLE remaining user and is orphaned by its removal.
+    Verify that rather than assuming it.
+    REPAIR THE RADAR TESTS (D-4). The three /radar tests are red and the PAGE IS NOT
+    BROKEN - see D-4 in the header for the full evidence. /radar was rewritten on
+    2026-07-15 (534d725, 5f08345) from a subsystem VULNERABILITY radar into a research
+    papers-by-concept view; the tests were last touched 2026-07-09 and still assert the
+    old semantics ("Subsystem Radar" heading, Scheduler/Memory Management rows carrying
+    vuln and fix counts). The current heading is "Research Radar"
+    (src/web/templates/radar.html:3). The radar_vuln_client fixture at
+    tests/test_web.py:968 contains ZERO Source and ZERO Evidence nodes, so the page
+    correctly renders "0 research papers across 0 subsystems" and the assertions find
+    nothing. REWRITE the three tests - test_radar_returns_200:1046,
+    test_radar_shows_subsystems_with_concepts:1052, test_radar_shows_vuln_and_fix_counts:1062
+    - against research-radar semantics, backed by a fixture carrying the full chain
+    Concept -extracted-from-> Evidence -sourced-from-> Source(source_type in
+    'paper','preprint','conference-paper','conference-proceedings'). DO NOT CHANGE THE
+    PAGE. Against real data the same query returns 1,433 papers across 18 subsystems in
+    data/master.db, so the route is sound. This is folded into PROMPT 6 rather than
+    given its own execution because /venues needs the IDENTICAL paper-chain fixture
+    scaffolding - build one and share it.
+    SCOPE NOTE: the venue viewer does NOT replace /radar. /radar stays. The venue
+    viewer ADOPTS RADAR'S SHAPE in place of /sources.
+    ADD. A new domain module src/ingest/venue_store.py that is the SOLE writer of
+    venue data, mirroring src/ingest/source_abstract.py exactly: a module docstring
+    naming the interface node and stating why one place owns the write, a frozen
+    vocabulary constant, @dataclass result types, and functions that validate before
+    writing via graph.engine.update_node_attrs. Provide set_venue(conn, source_id,
+    venue, ...), merge_venues(conn, from_venue, to_venue) and a pure
+    normalise_venue(raw) -> str with no DB access. CRITICAL CARVE-OUT: do NOT re-run
+    validate_node after the write. set_abstract documents the reason and the venue
+    editor hits it identically — rules.check_source_has_advisory requires every Source
+    to have an Advisory, which the great majority of real Sources do not satisfy, so
+    revalidating would reject a good venue edit for an unrelated pre-existing gap.
+    Venue is an optional attr and the write cannot make a valid Source invalid. Also
+    do NOT add venue to REQUIRED_ATTRS["Source"] — 107 Sources have no venue and
+    adding it there would invalidate every existing Source and every add_node call in
+    the ingest pipeline, which is the same reasoning source_abstract.py gives for the
+    abstract fields.
+    Add GET /venues rendering a new src/web/templates/venues.html. Model the template
+    on src/web/templates/radar.html (117 lines): a two-level expand/collapse with a
+    venue row carrying paper count, a hidden <tr> per venue containing the paper
+    table (title link to /paper/{source_id}, external "source ->" link, review badge,
+    type badge, date), and inline toggle JS keyed on a slugged id built like
+    radar's sub.name|replace(' ','-')|replace('/','-').
+    Add PUT /api/venue/{source_id:path} and POST /api/venue/merge as THIN routes that
+    delegate to venue_store and map ValueError to 404/422, exactly as
+    edit_abstract at src/web/routes.py:1156-1180 delegates to set_abstract.
+    Add "/api/venue/" to WEB_MUTATION_ALLOWLIST at src/web/routes.py:31-36. That tuple
+    IS the structural enforcement of INV-KK-WEB-MUTATION-ALLOWLISTED
+    (invariantStrength=strong, enforcementBasis=structural, predicate "forall endpoint
+    in MOD-KK-WEB. endpoint.method in {POST, PUT, DELETE} implies endpoint.path in
+    WEB_MUTATION_ALLOWLIST"); the comment above it states the allowlist is the thing
+    that grows and the predicate does not move. One prefix covers both routes.
+    Apply the D-2 authorisation rule to both mutating routes.
+  - Spec areas: MOD-KK-WEB. Implements ALG-KK-WEB-VENUES, ALG-KK-WEB-VENUE-EDIT,
+    ALG-KK-WEB-VENUE-MERGE, IFC-KK-VENUE-EDIT, INV-KK-VENUE-MUTATION-AUTHORISED (all
+    authored in PROMPT 5) and must satisfy INV-KK-WEB-QUERY-BOUNDED and
+    INV-KK-WEB-MUTATION-ALLOWLISTED. Under D-1 Option A also touches MOD-KK-GRAPH via
+    the schema additions and ALG-KK-VENUE-BACKFILL. Associate the new source files to
+    their nodes with `ril associate`.
+  - Code path: DELETE src/web/routes.py:240-261, src/web/templates/concept_list.html,
+    src/web/templates/base.html:45, tests/test_web.py:925-928. NEW
+    src/ingest/venue_store.py, src/web/templates/venues.html,
+    tests/test_venue_store.py. MODIFY src/web/routes.py (three new handlers, the
+    allowlist tuple at lines 31-36), src/graph/schema.py and src/graph/rules.py under
+    Option A only. Untouched, assert in review: src/mcp_server/*, src/export/*,
+    src/graph/briefing.py, src/graph/scoring.py, src/ingest/extractor.py,
+    src/ingest/feed.py, all data/*.py one-off scripts, and src/authgate/* unless
+    D-2 resolves to admin-only.
+  - Pre-commit hook: run `npm run spec:check` (expect 0 errors) and the full pytest
+    suite green. Commit as "feat: replace /sources with venue viewer and add venue
+    editor" with the .cbm mutation files alongside the code. Under Option A take a
+    fresh backup of data/master.db before the 3,467-Source backfill —
+    data/master.db.bak-pre-abstracts is the existing precedent for that.
+  - Test: NEW tests/test_venue_store.py covering — normalise_venue maps each
+    collision pair from plan section 2.5 to one canonical value; normalise_venue is
+    pure with no DB or I/O; set_venue rejects a non-Source node, rejects empty input,
+    and stamps provenance; set_venue does NOT re-run validate_node, proven by a Source
+    with no Advisory accepting a venue edit; merge_venues is idempotent and re-running
+    changes nothing; merge_venues reports the row count it touched. NEW cases in
+    tests/test_web.py — GET /venues returns 200 with one row per canonical venue;
+    papers nest under their venue and per-venue counts match the section 2.5 table
+    post-normalisation; the 107 no-venue Sources appear in the specified bucket; a
+    QUERY-COUNT assertion that /venues issues at most 3 queries regardless of corpus
+    size; GET /sources returns 404; PUT /api/venue/{id} returns 200 for a Source, 404
+    for a non-Source, 422 for empty; an allowlist test asserting every registered
+    POST/PUT/DELETE path starts with a WEB_MUTATION_ALLOWLIST prefix; and an
+    authorisation test per D-2. REWRITTEN: the three /radar tests per D-4, green
+    against the shared paper-chain fixture, with the page unmodified. FIXTURE: build a
+    venue fixture carrying the collision
+    pairs (OSDI 2026, OSDI, OSDI 2025, SOSP, SOSP 2025) plus at least two no-venue
+    Sources with distinct source_types. Build it AFTER PROMPT 3 has landed — fresh
+    fixture DBs get the SQL CHECK that production lost, so under Option A they reject
+    kind='Venue' until the schema reconciliation is in. REGRESSION, must pass
+    unmodified: all /feed, /paper, /reviews, /reviewers, /health, /impact and
+    /api/search tests. (/radar is NO LONGER in the regression set - its three tests are
+    rewritten in this same prompt per D-4. Every OTHER /radar test must still pass
+    unmodified, and the radar route and template must not be edited at all.)
+
+
+================================================================================
+PROMPT 7
+================================================================================
+
+/cb-green — Close the dangling MOD-KK-WEB spec citations (WP7)
+
+  - What: docstring citations are this project's only spec-to-code link, and most of
+    them point at nothing. Cross-referencing every (INV|ALG|IFC|MOD|ERR|ANN)-KK-*
+    token in src/ and tests/ against the 94 KK nodes in the DAG gives 316 distinct
+    ids cited and 246 absent (78%). Within src/web/ and tests/test_web.py, 64 are
+    cited and 46 are dangling. This prompt closes the 8 that are cited from src/web/
+    itself, which are the load-bearing ones: ALG-KK-WEB-SERVE (src/web/routes.py:1
+    and src/web/app.py:1), ALG-KK-WEB-SEARCH (routes.py:320), ALG-KK-WEB-DISPLAY-NAME
+    (routes.py:81), ALG-KK-WEB-KIND-DROPDOWN (routes.py:99), ALG-KK-WEB-IMPACT-PAGE
+    (routes.py:373), ALG-KK-WEB-DIAGNOSTICS-PAGE (routes.py:362),
+    INV-KK-WEB-FULL-ACCESS (routes.py:4 and routes.py:265) and
+    INV-KK-WEB-SEARCH-FULL-ACCESS (routes.py:320). For each: author the node if the
+    route survives, or delete the citation if it does not. Note
+    ALG-KK-WEB-KIND-DROPDOWN annotates _all_kinds at routes.py:98-101, which after
+    PROMPT 6 is called by no surviving route — check and remove the helper if it is
+    dead.
+    SEPARATELY AND IMPORTANTLY: delete the INV-KK-WEB-READ-ONLY line from the module
+    docstring at src/web/routes.py:3. It asserts "only GET endpoints are registered
+    here" and that is FALSE — six mutating endpoints are registered in that file:
+    POST /api/reviewers, POST /api/review/{source_id}, PUT /api/review/{review_id},
+    DELETE /api/review/{review_id}, PUT /api/abstract/{source_id}, POST
+    /api/feed/send/{source_id}, and PROMPT 6 adds two more. It was superseded in
+    practice by INV-KK-WEB-MUTATION-ALLOWLISTED but never retired from the docstring.
+    DELETE IT, DO NOT AUTHOR IT. CLAUDE.md rule 2 forbids weakening a predicate to
+    suppress a finding, but this is not a real invariant the code violates — it is a
+    stale false claim, and removing it is the correct action. If you disagree, ask
+    before acting.
+  - Spec areas: MOD-KK-WEB. New algorithm and invariant nodes for the surviving
+    routes listed above. Only 2 DAG KK-WEB nodes are cited nowhere in src/web or
+    tests/test_web.py — ALG-KK-WEB-PAPER-DETAIL-REVIEW and MOD-KK-WEB itself. Read
+    `ril query module-context MOD-KK-WEB --json` and `ril template algorithm --json`
+    / `ril template invariant --json` for authoring rules. Associate artifacts with
+    `ril associate` so the new nodes do not join the 25 existing ones at 0 source
+    locations.
+  - Code path: src/web/routes.py (module docstring lines 1-5, the citation comments
+    at lines 81, 99, 265, 320, 362, 373, and possibly deleting the _all_kinds helper
+    at lines 98-101), src/web/app.py line 1.
+  - Pre-commit hook: run `npm run spec:check` (expect 0 errors) and the full pytest
+    suite. Commit the .cbm files with the code as "spec: close dangling MOD-KK-WEB
+    citations".
+  - Test: no new behavioural tests. Add a guard test asserting that every
+    (INV|ALG|IFC|MOD)-KK-* id cited in src/web/ exists in the DAG, so the drift
+    cannot silently return. Existing tests must pass unmodified.
+
+
+================================================================================
+GENERAL INSTRUCTIONS — APPEND VERBATIM TO EVERY PROMPT ABOVE
+================================================================================
+
   - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
   - IMPORTANT: COMMIT TO WOR. REDUCE TURNS
   - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
@@ -156,545 +657,5 @@ PROMPT 2 of 6 — User creation CLI and reviewer-roster mirroring
   - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
 
 ================================================================================
-PROMPT 3 of 6 — The gate: parent app, login/logout, mounted know_kernel, identity injection
-================================================================================
-
-/cb-green — Build the authentication gate app that owns /login and /logout, mounts the existing know_kernel app at /, and injects the resolved identity into every downstream request
-
-  - What: The structural core of the feature. A NEW parent FastAPI app owns the
-    auth routes and a single gate middleware, and mounts the EXISTING,
-    UNMODIFIED know_kernel app at "/". After this prompt the application is
-    behind a wall.
-
-    Design context (settled, do not re-litigate — plan §3 D-1, D-2, D-3, D-8, D-11):
-    D-1 PARENT GATE, CHILD MOUNT. One structural choke point, mirroring the
-    existing WEB_MUTATION_ALLOWLIST pattern at src/web/routes.py:27-36. A
-    middleware also covers FastAPI's auto-generated /docs, /redoc and
-    /openapi.json, which per-route dependencies would silently miss.
-    Consequences, all verified: (a) INV-KK-WEB-MUTATION-ALLOWLISTED never
-    changes because /login and /logout are NOT in MOD-KK-WEB — DO NOT add them
-    to WEB_MUTATION_ALLOWLIST; (b) the 167 tests in tests/test_web.py keep
-    passing untouched because they build their client from create_app directly
-    (tests/test_web.py:17-45); (c) tests/test_source_abstract.py:209-221 sweeps
-    client.app.routes asserting every POST/PUT/DELETE is on the allowlist — it
-    MUST STAY pointed at create_app or it will pick up the gate's routes and
-    fail. Do not convert either fixture.
-    ACCEPTED RISK R-1: `uvicorn web.app:app` still serves everything
-    anonymously. The inner app cannot self-defend under this design. Entry
-    points are switched in PROMPT 6 and the risk is documented there.
-    D-2 MOUNT AT "/" ONLY, never a sub-path — templates use absolute links
-    (src/web/templates/base.html:44-51) and paper_detail.html fetches
-    /api/review/... Explicit parent routes registered BEFORE the Mount win the
-    match, so /login resolves in the gate.
-    D-3 IDENTITY CROSSES THE MOUNT VIA request.state. Starlette propagates
-    request.state through a Mount via the ASGI scope["state"] dict. VERIFIED
-    EMPIRICALLY against the installed starlette 1.2.1 — a parent
-    @app.middleware("http") that sets request.state.user is readable as
-    request.state.user inside the mounted app. NO TOKEN IN THE URL: tokens in
-    URLs leak via history, logs, and Referer. Login sets a cookie and 302s.
-    D-8 TWO COOKIES: 24h sliding session + 30d rotating remember-me. This is
-    what produces the operator's requirement — an expired session with a valid
-    remember token mints a new session inline and the request proceeds, so the
-    user sees nothing.
-    D-11 NO HARDENING: no rate limiting, no CSRF tokens, no password reset, no
-    lockout, no 2FA. SameSite=Lax on both cookies is the whole CSRF story.
-    https_only is a config flag defaulting to False (deployment is 127.0.0.1).
-
-    SPEC AUTHORING (via ril apply-batch):
-    Create interface:
-      IFC-KK-IDENTITY (fields: username TEXT, role TEXT, reviewer TEXT — the
-        shape injected into request.state.user. reviewer currently always
-        equals username but is a distinct key so a display name can arrive
-        later without touching call sites.)
-    Create algorithms:
-      ALG-KK-AUTH-LOGIN (pre: POST body carries username + password; post: on
-        success a sessions row exists, the kk_session cookie is set, a
-        kk_remember cookie + remember_tokens row exist iff "remember me" was
-        ticked, and the response is 302 to a validated local next; on failure
-        login.html re-renders with ONE generic message and HTTP 401)
-      ALG-KK-AUTH-LOGOUT (post: the session row is deleted, the remember-token
-        row if any is deleted, both cookies are cleared, response is 302 /login)
-      ALG-KK-AUTH-SESSION-RESUME (pre: session absent or expired and a
-        kk_remember cookie is present; post: if the token hash matches a
-        non-expired row for an active user, the old remember row is deleted, a
-        new one written, a new cookie set, a new session minted, and the request
-        proceeds; otherwise the request is anonymous)
-      ALG-KK-AUTH-GATE (post: every request either carries request.state.user,
-        or is on AUTH_EXEMPT_PATHS, or is answered 302/401 before reaching the
-        mount)
-    Create invariants:
-      INV-KK-AUTH-GATE-COVERS-MOUNT (predicate: forall request r. r.path not in
-        AUTH_EXEMPT_PATHS implies r reaching the mounted app carries a resolved
-        identity, strong, structural — the AUTH_EXEMPT_PATHS tuple IS the
-        enforcement, exactly as WEB_MUTATION_ALLOWLIST is for
-        INV-KK-WEB-MUTATION-ALLOWLISTED)
-      INV-KK-AUTH-NEXT-IS-LOCAL (predicate: forall next parameter n. n starts
-        with "/" and does not start with "//", strong, runtime — rejects open
-        redirects, falls back to "/")
-    Include in INV-KK-AUTH-GATE-COVERS-MOUNT's description this scope note:
-      "The gate covers HTTP only. The MCP server is stdio (src/mcp_server/
-      server.py:609 mcp.run()), ingest and export are local argparse CLIs, and
-      master.db remains readable to anyone with filesystem access. This is not
-      system-wide access control."
-    Create edges:
-      MOD-KK-AUTH --contains--> IFC-KK-IDENTITY, ALG-KK-AUTH-LOGIN,
-        ALG-KK-AUTH-LOGOUT, ALG-KK-AUTH-SESSION-RESUME, ALG-KK-AUTH-GATE,
-        INV-KK-AUTH-GATE-COVERS-MOUNT, INV-KK-AUTH-NEXT-IS-LOCAL
-      ALG-KK-AUTH-GATE --enforces--> INV-KK-AUTH-GATE-COVERS-MOUNT
-      ALG-KK-AUTH-LOGIN --enforces--> INV-KK-AUTH-NEXT-IS-LOCAL
-      ALG-KK-AUTH-SESSION-RESUME --enforces--> INV-KK-AUTH-REMEMBER-ROTATES
-      ALG-KK-AUTH-LOGIN --depends-on--> ALG-KK-AUTH-VERIFY-CREDENTIAL
-
-    CODE IMPLEMENTATION:
-    1. src/authgate/gate.py:
-         AUTH_EXEMPT_PATHS = ("/login", "/healthz", "/static/")
-           Comment it as THE structural enforcement of
-           INV-KK-AUTH-GATE-COVERS-MOUNT, in the same voice as the comment at
-           src/web/routes.py:27-30.
-         is_exempt(path) -> bool
-         safe_next(raw) -> str        # INV-KK-AUTH-NEXT-IS-LOCAL
-         install_gate(app, auth_conn_getter) — registers @app.middleware("http"):
-           1. exempt path            -> pass through, no identity
-           2. valid session cookie   -> slide_session, inject identity
-           3. absent/expired session + kk_remember -> consume_remember (rotate),
-                                        create_session, set cookies, inject
-           4. otherwise -> if request.headers.get("HX-Request"):
-                              Response(status_code=401,
-                                       headers={"HX-Redirect": "/login"})
-                           else:
-                              RedirectResponse(f"/login?next={quote(path)}", 302)
-           The HX branch is REQUIRED: src/web/templates/base.html:50-56 fires
-           hx-get /api/search on every keystroke; a 302 would be swapped into
-           the dropdown as HTML.
-         Identity shape, exactly: {"username": ..., "role": ..., "reviewer": ...}
-    2. src/authgate/templates/login.html — STANDALONE, does NOT extend
-       base.html (D-10: the gate must render without the knowledge app being
-       importable or its DB open). Username, password, a "Remember me on this
-       device" checkbox UNCHECKED by default, a hidden next field, one generic
-       error slot. Copy the monospace styling from src/web/templates/base.html:8
-       so it does not look foreign.
-    3. src/authgate/app.py:
-         create_gate_app(db_path, auth_db_path) -> FastAPI
-         lifespan: open auth.db, run AUTH_SCHEMA_SQL, purge_expired, store on
-           app.state.auth_conn, close on shutdown. FAIL CLOSED — if auth.db
-           cannot be opened the gate must refuse to start, never start open.
-         Routes: GET /login, POST /login, POST /logout, GET /healthz.
-         install_gate(...) BEFORE the mount.
-         app.mount("/", create_app(db_path))     # src/web/app.py:18 factory
-         app = create_gate_app(os.environ.get("KNOW_KERNEL_DB", ":memory:"),
-                               auth_db_path())
-         main() for uvicorn authgate.app:app
-    4. pyproject.toml dependencies — add python-multipart (the login form posts
-       urlencoded; it is installed transitively today but UNDECLARED, so a clean
-       install of the declared set cannot run the login). Do NOT add
-       itsdangerous — server-side sessions removed the need.
-
-  - Spec areas: 7 new nodes under MOD-KK-AUTH plus 12 edges. Reads, and must
-    NOT modify, the web module's mutation surface. Run before authoring:
-      npm run ril -- query-multi '[{"cmd":"node-info","args":["MOD-KK-WEB","INV-KK-WEB-MUTATION-ALLOWLISTED"]},{"cmd":"impact-analysis","args":["INV-KK-WEB-MUTATION-ALLOWLISTED","MOD-KK-WEB"]}]' --json
-    Expected finding, and the reason this design was chosen: /login and /logout
-    are POST endpoints but they live in MOD-KK-AUTH, and
-    INV-KK-WEB-MUTATION-ALLOWLISTED is quantified over MOD-KK-WEB only
-    ("forall endpoint in MOD-KK-WEB. endpoint.method in {POST, PUT, DELETE}
-    implies endpoint.path in WEB_MUTATION_ALLOWLIST"). The invariant therefore
-    still holds untouched. DO NOT extend WEB_MUTATION_ALLOWLIST and DO NOT
-    weaken or re-scope that invariant.
-
-  - Code path: NEW src/authgate/gate.py, src/authgate/app.py,
-    src/authgate/templates/login.html. MODIFY pyproject.toml:9-15 (add
-    python-multipart only). NEW tests/test_authgate.py.
-    src/web/routes.py, src/web/app.py and src/web/templates/ are NOT touched by
-    this prompt — reviewer identity and nav changes land in PROMPT 5.
-
-  - Pre-commit hook: one commit, "feat: authentication gate with login and
-    mounted app". Contents: .cbm mutation file(s), the three new authgate
-    files, pyproject.toml, tests/test_authgate.py. npm run spec:check at 0
-    errors. Full pytest run: everything green EXCEPT the two known pre-existing
-    tests/test_graph_schema.py failures (fixed in PROMPT 6).
-
-  - Test: NEW tests/test_authgate.py covering plan §10 items 24-34.
-    Fixture design matters and is what protects the existing suite — build a
-    `gated` fixture that seeds a master.db (with one Source), an auth.db with an
-    admin ("boss") and a plain user ("reinier"), calls ensure_roster_entry for
-    both, then wraps create_gate_app in TestClient. TestClient persists cookies,
-    so one login() helper authenticates the rest of a test. Leave the fixture
-    ANONYMOUS by default and log in explicitly per test.
-    Cases: anonymous GET / -> 302 /login?next=/; GET /login -> 200 anonymous;
-    POST /login valid -> 302 to the validated next with a session cookie set;
-    POST /login invalid -> 401, one generic message, no cookie; after login
-    GET / -> 200; GET /docs and GET /openapi.json gated while anonymous;
-    HX-Request while anonymous -> 401 with HX-Redirect: /login; POST /logout
-    clears the cookie and the next GET / -> 302; an expired session WITH a valid
-    remember cookie -> request succeeds and a new session cookie is issued; an
-    expired session WITHOUT one -> 302 /login; next=https://evil.example and
-    next=//evil.example are both rejected in favour of "/".
-    Expire sessions by writing expires_at directly, never by sleeping.
-    REGRESSION, must pass unmodified: pytest tests/test_web.py -q (all 167) and
-    pytest tests/test_source_abstract.py -q including the router sweep.
-
-  >>> GENERAL INSTRUCTIONS <<<
-  - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
-  - IMPORTANT: COMMIT TO WOR. REDUCE TURNS
-  - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
-  - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
-  - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
-  - CRITICAL: DO NOT EMIT P3_SKIPPED. I WILL STOP YOU AND MAKE YOU GO BACK. If you do not need to modify the specification you must submit a reason
-  - FORBIDDEN: MULTI-AGENT execution is not allowed. DO NOT SPAWN MULTIPLE AGENTS
-  - CRITICAL: The triage should report the specification surface. The triage specification surface is deterministic.
-  - WHEN TO COMMIT: Before "silk run finalize"
-  - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
-
-================================================================================
-PROMPT 4 of 6 — Admin user management in the browser
-================================================================================
-
-/cb-green — Add admin-only user management routes and page to the gate app: list, create, deactivate, reset password
-
-  - What: Let an admin manage the roster of people who may log in, without
-    dropping to the CLI. Admin surface lives ENTIRELY in the gate app so
-    MOD-KK-WEB gains nothing and the admin surface cannot leak into the
-    knowledge graph.
-
-    Design context (settled — plan §3 D-9, requirements 9 and 10):
-    Exactly two roles, admin and user. NO self-registration anywhere in the
-    HTTP surface — the operator was explicit. The first admin is created by
-    kk-useradd --admin from PROMPT 2. Under 50 users at any time, so no
-    pagination, no search, no sorting, no groups. Deactivate, never delete.
-
-    SPEC AUTHORING (via ril apply-batch):
-    Create algorithms:
-      ALG-KK-AUTH-ADMIN-USER-LIST (pre: caller identity has role=admin;
-        post: all users returned with role, active, created_at; 403 otherwise)
-      ALG-KK-AUTH-ADMIN-USER-CREATE (pre: caller role=admin; post: delegates to
-        ALG-KK-AUTH-USER-CREATE, so the roster entry is created too; 403 otherwise)
-      ALG-KK-AUTH-ADMIN-USER-DEACTIVATE (pre: caller role=admin, target exists;
-        post: users.active=0 and the target's sessions and remember tokens are
-        deleted; refuses when the target is the last active admin; 403 otherwise)
-      ALG-KK-AUTH-ADMIN-PASSWORD-SET (pre: caller role=admin OR caller is the
-        target user; post: the stored hash is replaced; existing sessions are
-        left alone)
-    Create invariant:
-      INV-KK-AUTH-NO-SELF-REGISTRATION (predicate: forall user-creating path p.
-        caller(p) is an admin identity or caller(p) is the CLI, strong,
-        structural)
-    Create edges:
-      MOD-KK-AUTH --contains--> ALG-KK-AUTH-ADMIN-USER-LIST,
-        ALG-KK-AUTH-ADMIN-USER-CREATE, ALG-KK-AUTH-ADMIN-USER-DEACTIVATE,
-        ALG-KK-AUTH-ADMIN-PASSWORD-SET, INV-KK-AUTH-NO-SELF-REGISTRATION
-      ALG-KK-AUTH-ADMIN-USER-CREATE --enforces--> INV-KK-AUTH-NO-SELF-REGISTRATION,
-        INV-KK-AUTH-ROSTER-MIRRORS-USERS
-      ALG-KK-AUTH-CLI-USERADD --enforces--> INV-KK-AUTH-NO-SELF-REGISTRATION
-      ALG-KK-AUTH-ADMIN-USER-CREATE --depends-on--> ALG-KK-AUTH-USER-CREATE
-
-    CODE IMPLEMENTATION:
-    1. src/authgate/templates/admin_users.html — a table of username / role /
-       active / created_at, an add form (username, password, role), and
-       deactivate + reset-password controls per row. Same monospace styling.
-    2. src/authgate/app.py — add:
-         GET  /admin/users
-         POST /admin/users
-         POST /admin/users/{username}/deactivate
-         POST /admin/users/{username}/password
-       Every handler asserts request.state.user["role"] == "admin" and returns
-       403 otherwise. Factor the check into one helper (require_admin) so the
-       rule has a single definition site.
-       POST /admin/users calls ensure_roster_entry in the same handler, with the
-       same fail-loud two-store ordering as PROMPT 2: user row -> roster entry
-       -> commit auth.db -> commit master.db; on roster failure roll back both
-       and return 500 with a clear message.
-       The gate needs the master.db connection for the roster write — reach it
-       through the mounted app's state or hold a second connection in the gate's
-       lifespan. Choose ONE and comment why; do not open a connection per request.
-
-  - Spec areas: 5 new nodes under MOD-KK-AUTH plus 8 edges, including two edges
-    onto nodes authored in PROMPTS 2 and 3 (ALG-KK-AUTH-USER-CREATE,
-    ALG-KK-AUTH-CLI-USERADD). Run before authoring:
-      npm run ril -- query-multi '[{"cmd":"node-info","args":["MOD-KK-AUTH","ALG-KK-AUTH-USER-CREATE","ALG-KK-AUTH-CLI-USERADD","INV-KK-AUTH-ROSTER-MIRRORS-USERS"]},{"cmd":"impact-analysis","args":["ALG-KK-AUTH-USER-CREATE"]}]' --json
-    No node outside MOD-KK-AUTH is modified.
-
-  - Code path: NEW src/authgate/templates/admin_users.html. MODIFY
-    src/authgate/app.py (new routes + require_admin helper). EXTEND
-    tests/test_authgate.py.
-
-  - Pre-commit hook: one commit, "feat: admin user management". Contents: .cbm
-    mutation file(s), the new template, src/authgate/app.py,
-    tests/test_authgate.py. npm run spec:check at 0 errors.
-
-  - Test: EXTEND tests/test_authgate.py with plan §10 items 35-39: a non-admin
-    GET /admin/users -> 403; an admin GET /admin/users -> 200 listing all users;
-    an admin POST /admin/users creates a user who can then log in AND has a
-    Reviewer node in master.db; a non-admin POST /admin/users -> 403 creating
-    nothing in either store; deactivating a user invalidates that user's live
-    session on their next request; the last active admin cannot be deactivated.
-
-  >>> GENERAL INSTRUCTIONS <<<
-  - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
-  - IMPORTANT: COMMIT TO WOR. REDUCE TURNS
-  - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
-  - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
-  - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
-  - CRITICAL: DO NOT EMIT P3_SKIPPED. I WILL STOP YOU AND MAKE YOU GO BACK. If you do not need to modify the specification you must submit a reason
-  - FORBIDDEN: MULTI-AGENT execution is not allowed. DO NOT SPAWN MULTIPLE AGENTS
-  - CRITICAL: The triage should report the specification surface. The triage specification surface is deterministic.
-  - WHEN TO COMMIT: Before "silk run finalize"
-  - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
-
-================================================================================
-PROMPT 5 of 6 — Implicit reviewer identity: delete the dropdown, derive the reviewer from the session
-================================================================================
-
-/cb-green — Take the review author from the logged-in session, delete the reviewer dropdown from the paper page, and show the user in the nav
-
-  - What: The operator's requirement, verbatim: "I also want the drop down list
-    to go away. Once a user is logged in we should expect the user to be
-    implicitly the reviewer." Two halves: the UI stops offering a choice, and
-    the SERVER stops accepting one.
-
-    Design context (settled — plan §3 D-12):
-    Server-side authority is the real change. submit_review must stop reading
-    body["reviewer"] ENTIRELY. This is not a security measure — it is
-    correctness: otherwise attribution is decorative and any hand-crafted
-    request can impersonate any roster member.
-    VERIFIED FACT that makes this cheap: there are NO HTTP-level tests for any
-    /api/review* endpoint anywhere in tests/ (confirmed: grep -rn "api/review"
-    tests/ returns nothing). review_paper is covered at function level in
-    tests/test_paper_scorer.py, which does not go through the web layer and is
-    NOT affected. Nothing existing breaks.
-    VERIFIED FACT about the picker: src/web/templates/paper_detail.html:292 is
-    the ONLY reviewer picker in the entire UI. The <select> elements in
-    src/web/templates/reviews.html:8 and :14 are verdict and min-score FILTERS —
-    leave them alone.
-
-    SPEC AUTHORING (via ril apply-batch):
-    Create invariant:
-      INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION (predicate: forall review
-        submission s. s.reviewer = request.state.user.reviewer, strong, runtime)
-    Amend three existing algorithm nodes:
-      ALG-KK-WEB-REVIEW-SUBMIT — precondition changes from "body carries a
-        registered reviewer name" to "the request carries a resolved identity;
-        the reviewer is derived from it"; postcondition gains "the request
-        body's reviewer field, if present, is ignored".
-      ALG-KK-WEB-PAPER-DETAIL — postcondition drops "the reviewer roster is
-        supplied to the template".
-      ALG-KK-WEB-REVIEWERS-PAGE — description gains "read-only projection of
-        the user list; new entries arrive via ALG-KK-AUTH-USER-CREATE".
-    Create edges:
-      MOD-KK-WEB --contains--> INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION
-      ALG-KK-WEB-REVIEW-SUBMIT --enforces--> INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION
-      ALG-KK-WEB-REVIEW-SUBMIT --depends-on--> ALG-KK-AUTH-GATE   (if the live
-        template permits; the handler now requires the gate's identity)
-
-    CODE IMPLEMENTATION:
-    1. src/web/routes.py:1071-1099 submit_review —
-         identity = getattr(request.state, "user", None)
-         if identity is None: return JSONResponse({"error": "Not authenticated"},
-                                                  status_code=401)   # defensive
-         reviewer = identity["reviewer"]
-       Pass that to review_paper. DELETE the body["reviewer"] read. Keep the
-       existing 404 / 409 / 422 mapping exactly as it is — INV-KK-REVIEW-
-       SINGLE-PER-REVIEWER still produces the 409 and must keep doing so.
-    2. src/web/routes.py:826 — DELETE the context entry
-         "reviewers": [r.name for r in list_reviewers(conn)],
-    3. src/web/routes.py:670 — DELETE the now-unused
-         from ingest.reviewer_registry import list_reviewers
-       inside paper_detail. DO NOT touch the identical import at
-       src/web/routes.py:1032, which the /reviewers page still needs.
-    4. src/web/templates/paper_detail.html:291-304 — DELETE the whole
-       <label>Reviewer:</label> + <select name="reviewer"> block AND the
-       {% if not reviewers %} "No reviewers registered..." warning that follows
-       it. Replace with one static line (DECISION D-14 — keep unless the
-       operator says otherwise):
-         <p style="margin:0;font-size:0.9em;color:#555;">
-           Reviewing as <strong>{{ request.state.user.reviewer }}</strong>
-         </p>
-    5. src/web/templates/paper_detail.html:437 — DELETE
-         if (!form.reviewer.value) { ... return; }
-    6. src/web/templates/paper_detail.html:439 — DELETE the
-         reviewer: form.reviewer.value,
-       line from the data object. Leave score, verdict, rationale untouched.
-    7. src/web/templates/base.html:43-60 nav — append after the existing links,
-       before the search span:
-         {% if request.state.user %}
-           <span style="margin-left:1rem;color:#555;">{{ request.state.user.username }}</span>
-           {% if request.state.user.role == 'admin' %}<a href="/admin/users">Admin</a>{% endif %}
-           <form method="post" action="/logout" style="display:inline;">
-             <button type="submit" style="font-family:monospace;">Logout</button>
-           </form>
-         {% endif %}
-       THE GUARD IS LOAD-BEARING. tests/test_web.py renders these templates
-       through create_app with NO gate and therefore NO request.state.user.
-       Jinja tolerates undefined attributes but request.state raises
-       AttributeError when the key is absent. VERIFY which form survives the
-       ungated render and pick it; the regression test below exists to catch
-       exactly this failure.
-    8. src/web/templates/reviews.html — NO CHANGE.
-
-  - Spec areas: 1 new invariant under MOD-KK-WEB, 3 amended algorithm nodes,
-    2-3 new edges. This is the ONLY prompt that modifies existing spec nodes —
-    run impact-analysis FIRST and report it:
-      npm run ril -- query-multi '[{"cmd":"node-info","args":["ALG-KK-WEB-REVIEW-SUBMIT","ALG-KK-WEB-PAPER-DETAIL","ALG-KK-WEB-REVIEWERS-PAGE","ALG-KK-WEB-PAPER-DETAIL-REVIEW","ALG-KK-WEB-REVIEW-EDIT","ALG-KK-WEB-REVIEW-DELETE"]},{"cmd":"impact-analysis","args":["ALG-KK-WEB-REVIEW-SUBMIT","ALG-KK-WEB-PAPER-DETAIL"]},{"cmd":"invariant-context","args":["INV-KK-REVIEW-REVIEWER-REGISTERED","INV-KK-REVIEW-SINGLE-PER-REVIEWER","INV-KK-REVIEW-EDIT-IMMUTABLE-REVIEWER"]}]' --json
-    MUST NOT CHANGE: INV-KK-REVIEW-REVIEWER-REGISTERED (still enforced inside
-    review_paper at src/ingest/paper_scorer.py:60-64 — the session username is
-    on the roster because PROMPT 2 put it there), INV-KK-REVIEW-SINGLE-PER-
-    REVIEWER, INV-KK-REVIEW-EDIT-IMMUTABLE-REVIEWER, INV-KK-WEB-MUTATION-
-    ALLOWLISTED (/api/review/ is already on the allowlist — the path does not
-    change), INV-KK-WEB-QUERY-BOUNDED (dropping the roster query REDUCES per-page
-    work; it cannot violate the bound).
-    Do NOT touch src/ingest/paper_scorer.py or src/ingest/reviewer_registry.py.
-
-  - Code path: MODIFY src/web/routes.py (lines 670, 826, 1071-1099),
-    src/web/templates/paper_detail.html (lines 291-304, 437, 439),
-    src/web/templates/base.html (lines 43-60). EXTEND tests/test_authgate.py.
-
-  - Pre-commit hook: one commit, "feat: implicit reviewer identity from
-    session". Contents: .cbm mutation file(s), the two templates,
-    src/web/routes.py, tests/test_authgate.py. npm run spec:check at 0 errors.
-    State the D-14 choice ("Reviewing as" line kept / dropped) in the commit body.
-
-  - Test: EXTEND tests/test_authgate.py with plan §10 items 40-45 and 48:
-    a gated GET /paper/{id} contains NO <select name="reviewer">; it shows
-    "Reviewing as <username>"; POST /api/review/{id} with only
-    {score, verdict, rationale} -> 201 and the stored HumanReview.reviewer
-    equals the session username; the SAME post carrying
-    "reviewer": "someone-else" still stores the session user; a second review of
-    the same paper by the same session user -> 409; the nav shows the username
-    and a Logout control and a non-admin sees no Admin link.
-    REGRESSION GUARD (item 48, protects the nav guard in step 7): an UNGATED
-    create_app render of "/" and "/paper/{id}" still returns 200 with no
-    identity present.
-    MUST STILL PASS UNMODIFIED: pytest tests/test_web.py -q (167) and
-    pytest tests/test_source_abstract.py -q.
-
-  >>> GENERAL INSTRUCTIONS <<<
-  - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
-  - IMPORTANT: COMMIT TO WOR. REDUCE TURNS
-  - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
-  - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
-  - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
-  - CRITICAL: DO NOT EMIT P3_SKIPPED. I WILL STOP YOU AND MAKE YOU GO BACK. If you do not need to modify the specification you must submit a reason
-  - FORBIDDEN: MULTI-AGENT execution is not allowed. DO NOT SPAWN MULTIPLE AGENTS
-  - CRITICAL: The triage should report the specification surface. The triage specification surface is deterministic.
-  - WHEN TO COMMIT: Before "silk run finalize"
-  - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
-
-================================================================================
-PROMPT 6 of 6 — Trivial bundle: entry points, packaging, gitignore, README, stale test assertions
-================================================================================
-
-/cb-green — Switch every documented entry point to the auth gate, wire the console scripts, ignore auth.db, document the login, and reconcile two stale schema test assertions
-
-  - What: The last mile. Five small, mechanically independent changes bundled
-    into ONE skill execution because none of them carries design risk. This
-    prompt is what actually closes the gate in production — until it lands, the
-    documented way to start the app still bypasses authentication.
-
-    (a) ENTRY POINTS. pyproject.toml [project.scripts]: kk-web changes from
-        "web.app:main" to "authgate.app:main"; add kk-useradd =
-        "authgate.cli:useradd", kk-userlist = "authgate.cli:userlist",
-        kk-passwd = "authgate.cli:passwd". Add "src/authgate" to
-        [tool.hatch.build.targets.wheel] packages (currently lists src/graph,
-        src/ingest, src/export, src/web, src/mcp_server at pyproject.toml:44).
-    (b) START SCRIPTS. start.bat and start.sh currently run
-        `python -m uvicorn web.app:app --host 127.0.0.1 --port 8000 --reload`.
-        Change to authgate.app:app. Add a KNOW_KERNEL_AUTH_DB export defaulting
-        to <script dir>/data/auth.db, and print it alongside the existing
-        "Database:" and "URL:" lines. KEEP --reload — server-side sessions
-        survive reloads by design (that is why D-4 chose them).
-    (c) GITIGNORE. Add data/auth.db, data/auth.db-wal, data/auth.db-shm.
-    (d) README. New "Users and login" section: bootstrap the first admin with
-        kk-useradd --admin <name>; the two environment variables
-        KNOW_KERNEL_DB and KNOW_KERNEL_AUTH_DB; and an EXPLICIT WARNING that
-        `uvicorn web.app:app` bypasses the gate entirely and must not be used.
-        That warning is the documented mitigation for accepted risk R-1 — the
-        inner app cannot defend itself under the parent-mount design.
-    (e) STALE TEST ASSERTIONS — PRE-EXISTING DEFECT, NOT CAUSED BY THIS WORK.
-        tests/test_graph_schema.py:19-28 test_node_kinds_complete asserts a
-        24-element set and len(NODE_KINDS) == 24, while src/graph/schema.py:8
-        ships 27 kinds (the missing three: ResearchBrief, HumanReview, Reviewer).
-        tests/test_graph_schema.py:32-46 test_edge_kinds_complete asserts a
-        35-element set and len(EDGE_KINDS) == 35, while src/graph/schema.py:10-48
-        ships 37 (the missing two: summarizes-for, reviewed-by).
-        Update both assertions to the shipped values. This is a TEST-SIDE fix
-        only — CLAUDE.md rule #2 runs the other way, so confirm first that the
-        SHIPPED kinds are the correct ones (they are: each was added by a
-        committed feature) and change the test, not the schema. Touch NOTHING
-        else in src/graph/schema.py.
-        (This would normally be a /cb-fix; that skill is reported broken, so it
-        rides here.)
-
-    SPEC AUTHORING (via ril apply-batch):
-    This prompt DOES have a specification touch — do not skip P3.
-    Amend INV-KK-AUTH-GATE-COVERS-MOUNT (authored in PROMPT 3): extend its
-    description to name the deployed entry point, because the entry point is
-    what makes the invariant true in production. Add, in substance:
-      "Enforcement depends on the deployed entry point being authgate.app:app.
-      Starting web.app:app directly bypasses the gate; start.bat, start.sh and
-      the kk-web console script are the enforcement surface, and README
-      documents the prohibition."
-    Amend MOD-KK-AUTH's description to state that it owns the application entry
-    point and that the know_kernel app is mounted beneath it.
-    If, and only if, the live template permits an artifact association, register
-    start.sh / start.bat / pyproject.toml against INV-KK-AUTH-GATE-COVERS-MOUNT
-    via `ril associate` so the enforcement surface is traceable.
-    No new node is created by this prompt.
-
-  - Spec areas: 2 amended nodes (INV-KK-AUTH-GATE-COVERS-MOUNT, MOD-KK-AUTH),
-    both authored earlier in this same sequence. Zero new nodes, zero new edges.
-    Run before amending:
-      npm run ril -- query-multi '[{"cmd":"node-info","args":["INV-KK-AUTH-GATE-COVERS-MOUNT","MOD-KK-AUTH"]},{"cmd":"impact-analysis","args":["INV-KK-AUTH-GATE-COVERS-MOUNT"]}]' --json
-    NOTE for triage, deterministic: there is NO spec node governing packaging,
-    console scripts, shell launchers, or test assertions. Verified — a filter
-    for SERVE across the graph returns only LMP/badger nodes
-    (ALG-LMP-SERVE, ALG-LMP-SERVE-TEST, etc.), and no ALG-KK-WEB-SERVE node
-    exists despite src/web/app.py:1 and src/web/routes.py:1 docstrings
-    referencing that id. Do NOT create one to satisfy this prompt; the
-    INV-KK-AUTH-GATE-COVERS-MOUNT amendment is the correct and sufficient
-    specification touch. If P3 feels empty, that is the reason to submit —
-    never P3_SKIPPED.
-
-  - Code path: MODIFY pyproject.toml (scripts at :33-38, wheel packages at :44),
-    start.bat (tail), start.sh (tail), .gitignore, README.md,
-    tests/test_graph_schema.py (lines 19-28 and 32-46 only).
-    No src/ file is modified by this prompt except none — src/ is untouched.
-
-  - Pre-commit hook: one commit, "chore: switch entry points to the auth gate".
-    Contents: .cbm mutation file(s) for the two amendments, pyproject.toml,
-    start.bat, start.sh, .gitignore, README.md, tests/test_graph_schema.py.
-    npm run spec:check at 0 errors. This commit must leave the FULL suite green
-    with zero known failures — the two pre-existing reds are fixed here.
-
-  - Test: NO new test file. tests/test_graph_schema.py::test_node_kinds_complete
-    and ::test_edge_kinds_complete must flip from red to green with the shipped
-    27 / 37 values. Then run the full suite (pytest tests/ -q) and confirm zero
-    failures. Manual smoke sequence, per plan §12:
-      kk-useradd --admin reinier ; ./start.sh
-      1. GET / redirects to /login
-      2. login without "remember me" -> dashboard, nav shows the user + Logout
-      3. refresh and follow links -> still logged in
-      4. restart the server -> still logged in (server-side session)
-      5. open a paper -> no dropdown, "Reviewing as reinier", submit a review,
-         attribution correct
-      6. /admin/users visible as admin; create a non-admin; as them -> 403
-      7. logout -> / bounces to /login
-      8. UPDATE sessions SET expires_at='2000-01-01T00:00:00+00:00' with a
-         remember cookie present -> refresh proceeds silently, new session row
-      9. curl -s -o /dev/null -w '%{http_code}' localhost:8000/api/search?q=x
-         while anonymous -> 302
-
-  >>> GENERAL INSTRUCTIONS <<<
-  - IMPORTANT: The context you get is not hallucinated, its deterministically extracted.
-  - IMPORTANT: COMMIT TO WOR. REDUCE TURNS
-  - REFERENCE: If specification authoring detail are needed, ask RIL for authoring rules.
-  - INVIOLABLE: SPECIFICATION SURFACE IS AUTHORITATIVE. VIOLATIONS WILL CAUSE DROPPING OF YOUR WORK
-  - INVIOLABLE: DO NOT EMIT P3_SKIPPED SPECIFICATION SKIPPING IS A DIRECT VIOLATION OF PROTOCOL
-  - CRITICAL: DO NOT EMIT P3_SKIPPED. I WILL STOP YOU AND MAKE YOU GO BACK. If you do not need to modify the specification you must submit a reason
-  - FORBIDDEN: MULTI-AGENT execution is not allowed. DO NOT SPAWN MULTIPLE AGENTS
-  - CRITICAL: The triage should report the specification surface. The triage specification surface is deterministic.
-  - WHEN TO COMMIT: Before "silk run finalize"
-  - DECISION PROTOCOL: If you arrive a point where a decision must be made ask for my direct feedback. DO NOT MAKE DECISIONS ON YOUR OWN.
-
-================================================================================
- END — 6 prompts. Full design rationale, verified baseline with file:line
- citations, 48-item test plan, fixture design, and risk register live in
- docs/plans/auth-gate-and-session-implementation.md.
+END
 ================================================================================
