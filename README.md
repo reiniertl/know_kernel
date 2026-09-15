@@ -254,16 +254,10 @@ pip install -e ".[dev]"
 pytest
 ```
 
-1,227 tests. As of 2026-09-14: 1,222 pass and 5 fail.
+1,303 tests. As of 2026-09-15: 1,300 pass and 3 fail.
 
-Two modules (`tests/test_e2e_pipeline.py`, `tests/test_mcp_server.py`) fail to
-import: the `mcp>=1.0` pin resolves to mcp 2.x, which renamed `FastMCP` to
-`MCPServer`. A collection error aborts the whole run, so until that pin is
-resolved use:
-
-```bash
-pytest --continue-on-collection-errors
-```
+The three failures are the `/radar` tests, which assert the page's pre-2026-07-15
+semantics; `/radar` itself works.
 
 ## License
 

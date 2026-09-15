@@ -22,7 +22,7 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from export.exporter import ALLOWED_KINDS
 from graph.engine import (
@@ -37,7 +37,11 @@ from graph.engine import (
 )
 from graph.scoring import compute_all_scores, heat_score, vulnerability_propagation
 
-mcp = FastMCP("know_kernel")
+# mcp 2.x renamed FastMCP to MCPServer and moved it to mcp.server.mcpserver. The
+# constructor still takes the server name positionally, .tool() still returns the
+# original function (so the tools below stay directly callable), and .run() still
+# defaults to the stdio transport, so the rest of this module is unchanged.
+mcp = MCPServer("know_kernel")
 
 _conn: sqlite3.Connection | None = None
 
