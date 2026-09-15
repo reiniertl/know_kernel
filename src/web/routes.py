@@ -1,7 +1,17 @@
 """Route handlers for the human-facing web API (ALG-KK-WEB-SERVE).
 
-INV-KK-WEB-READ-ONLY: only GET endpoints are registered here.
 INV-KK-WEB-FULL-ACCESS: all node kinds are served without filtering.
+INV-KK-WEB-MUTATION-ALLOWLISTED: state-changing endpoints are confined to the
+prefixes in WEB_MUTATION_ALLOWLIST below.
+
+This docstring used to carry a read-only invariant claiming that only GET
+endpoints were registered here. That stopped being true when the review
+endpoints landed and was never retired; eight mutating endpoints live in this
+file today. It was never a node in the spec graph either. The real constraint on
+mutation is INV-KK-WEB-MUTATION-ALLOWLISTED, which IS a node, is enforced
+structurally by the tuple below, and is tested. The retired id is deliberately
+not spelled out here — test_every_spec_id_cited_in_src_web_exists_in_the_dag
+treats any spec id written in this directory as a live citation.
 """
 
 from __future__ import annotations

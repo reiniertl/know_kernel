@@ -1,7 +1,12 @@
 """Tests for know_kernel web API — ALG-KK-WEB-SERVE.
 
-INV-KK-WEB-READ-ONLY: no write endpoints.
 INV-KK-WEB-FULL-ACCESS: all node kinds served to humans.
+INV-KK-WEB-MUTATION-ALLOWLISTED: every mutating route sits behind an allowlisted
+prefix, asserted by test_every_mutating_route_is_on_the_allowlist.
+
+The read-only invariant line that used to sit here made the same false claim as
+the one removed from src/web/routes.py: this suite has exercised write endpoints
+since the review API landed.
 """
 
 from __future__ import annotations
@@ -1299,3 +1304,53 @@ def test_every_mutating_route_is_on_the_allowlist(venue_client):
             if not path.startswith(WEB_MUTATION_ALLOWLIST):
                 offenders.append(f"{sorted(methods)} {path}")
     assert not offenders, offenders
+
+
+def test_every_spec_id_cited_in_src_web_exists_in_the_dag():
+    """No dangling citations from src/web/ (WP7 guard).
+
+    Docstring citations are this project's only spec-to-code link, and they had
+    drifted badly: 246 of 316 KK ids cited across src/ named no node. This test
+    pins the web layer at zero, so a citation of a node that was never authored,
+    or that has since been removed, fails here instead of quietly rotting.
+
+    Skipped when the RIL is unavailable (no node, or no built spec.db), because
+    the spec graph is a local cache rather than a checked-in artifact.
+    """
+    import json
+    import pathlib
+    import re
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["npm", "run", "ril", "--", "query", "nodes", "--json"],
+            capture_output=True, text=True, timeout=120,
+            cwd=pathlib.Path(__file__).resolve().parents[1],
+        )
+    except (OSError, subprocess.TimeoutExpired):  # pragma: no cover
+        pytest.skip("RIL unavailable")
+    start = proc.stdout.find("{")
+    if proc.returncode != 0 or start == -1:  # pragma: no cover
+        pytest.skip("RIL returned no node set")
+
+    payload = json.loads(proc.stdout[start:])
+    values = list(payload.values()) if isinstance(payload, dict) else payload
+    existing = {v["id"] for v in values if isinstance(v, dict) and "id" in v}
+    if not existing:  # pragma: no cover
+        pytest.skip("empty spec graph")
+
+    token = re.compile(r"\b(?:INV|ALG|IFC|MOD|ERR|ANN)-KK-[A-Z0-9-]+[A-Z0-9]")
+    web = pathlib.Path(__file__).resolve().parents[1] / "src" / "web"
+    dangling: dict[str, list[str]] = {}
+    for path in sorted(web.rglob("*")):
+        if not path.is_file() or path.suffix not in (".py", ".html"):
+            continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for cited in token.findall(line):
+                if cited not in existing:
+                    dangling.setdefault(cited, []).append(f"{path.name}:{lineno}")
+
+    assert not dangling, "spec ids cited in src/web/ that name no node: " + json.dumps(
+        dangling, indent=2, sort_keys=True
+    )
