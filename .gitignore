@@ -1,5 +1,15 @@
-# Combobul
-combobul/
+# Combobul — the vendored engine is not tracked, but the spec store IS.
+# The spec graph's source of truth is combobul/spec/{mutations,snapshots}; spec.db
+# is only a rebuildable cache. Ignoring the whole tree left the know_kernel spec
+# materialised nowhere but that cache: `ril journal coalesce` writes a .cbm here and
+# then runs `git add` on it, which failed silently against the old `combobul/` rule,
+# so the journal was never cleared and a single `ril rebuild` dropped all 103 KK
+# nodes on 2026-09-15. These negations keep the spec reproducible from a clone.
+combobul/*
+!combobul/spec/
+combobul/spec/*
+!combobul/spec/mutations/
+!combobul/spec/snapshots/
 .combobul/
 
 # Claude Code — runtime state (gitignored)
