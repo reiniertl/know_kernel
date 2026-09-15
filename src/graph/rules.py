@@ -56,6 +56,30 @@ def check_source_has_advisory(conn: sqlite3.Connection, node_id: str) -> Violati
     return None
 
 
+def check_venue_name_unique(conn: sqlite3.Connection, node_id: str) -> Violation | None:
+    """INV-KK-VENUE-NAME-UNIQUE: one canonical name, one Venue node.
+
+    Without this a venue renders as two rows in the viewer and a merge has no
+    single target to merge into.
+    """
+    row = conn.execute(
+        "SELECT json_extract(attrs, '$.name') FROM nodes WHERE id = ?", (node_id,)
+    ).fetchone()
+    name = row[0] if row else None
+    if not name:
+        return Violation(node_id, "venue-name", "Venue must have a name")
+    clash = conn.execute(
+        "SELECT id FROM nodes WHERE kind = 'Venue' AND id != ? "
+        "AND json_extract(attrs, '$.name') = ? LIMIT 1",
+        (node_id, name),
+    ).fetchone()
+    if clash is not None:
+        return Violation(
+            node_id, "venue-name-unique", f"Venue name '{name}' is already used by {clash[0]}"
+        )
+    return None
+
+
 def check_kinv_belongs_to_subsystem(conn: sqlite3.Connection, node_id: str) -> Violation | None:
     row = conn.execute(
         "SELECT 1 FROM edges WHERE kind = 'belongs-to' AND source_id = ? LIMIT 1",
@@ -292,6 +316,7 @@ RULES_BY_KIND = {
     # reviewed-by edge is enforced by EDGE_VALID_PAIRS at insert time.
     "ResearchBrief": [],
     "HumanReview": [],
+    "Venue": [check_venue_name_unique],
 }
 
 

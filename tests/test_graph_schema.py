@@ -24,8 +24,10 @@ def test_node_kinds_complete():
         "Kernel", "Problem", "Observation", "Discussion", "Benchmark",
         "Rejection", "Vulnerability", "Fix", "Proposal", "Trend",
         "Opportunity", "ResearchBrief", "HumanReview", "Reviewer",
+        # D-1 Option A: venue is a first-class node, not an attrs string.
+        "Venue",
     }
-    assert len(NODE_KINDS) == 27
+    assert len(NODE_KINDS) == 28
 
 
 def test_edge_kinds_complete():
@@ -40,9 +42,11 @@ def test_edge_kinds_complete():
         "fixes", "patches", "addresses", "contradicted-by",
         "resulted-in", "motivated-by", "trend-about",
         "opportunity-for", "supported-by", "summarizes-for", "reviewed-by",
+        # INV-KK-VENUE-SOURCE-EDGE: links a Source to its Venue.
+        "published-at",
     }
     assert set(EDGE_KINDS) == expected
-    assert len(EDGE_KINDS) == 37
+    assert len(EDGE_KINDS) == 38
 
 
 def test_edge_valid_pairs_covers_all_edge_kinds():

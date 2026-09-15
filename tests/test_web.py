@@ -755,35 +755,6 @@ def test_non_concept_detail_no_impact_link(rich_client):
 # --- INV-KK-WEB-PAGINATION tests ---
 
 
-@pytest.fixture
-def paginated_client(tmp_path):
-    """Client with 15 Concept nodes for pagination testing."""
-    db_path = tmp_path / "page_test.db"
-    conn = init_db(db_path)
-    for i in range(15):
-        add_node(conn, f"c-{i:02d}", "Concept", {
-            "name": f"Concept {i:02d}",
-            "description": f"Description {i}",
-            "artifact_class": "B",
-            "key_properties": [],
-            "tradeoffs": [],
-            "design_rationale": "test",
-        })
-    add_node(conn, "sub-1", "Subsystem", {"name": "TestSub"})
-    conn.commit()
-    conn.close()
-    app = create_app(str(db_path))
-    with TestClient(app) as c:
-        yield c
-
-
-def test_sources_pagination(paginated_client):
-    """INV-KK-WEB-PAGINATION: /sources supports pagination."""
-    response = paginated_client.get("/sources?per_page=10")
-    assert response.status_code == 200
-    assert "Page 1" in response.text
-
-
 # --- INV-KK-WEB-RELATED-CODE / INV-KK-WEB-RELATED-CODE-ABSENT tests ---
 
 
@@ -1165,3 +1136,166 @@ def test_nav_has_radar_link(radar_vuln_client):
     response = radar_vuln_client.get("/")
     assert 'href="/radar"' in response.text
     assert ">Radar<" in response.text
+
+
+# --- ALG-KK-WEB-VENUES / VENUE-EDIT / VENUE-MERGE tests ---
+
+
+@pytest.fixture
+def venue_client(tmp_path):
+    """Graph carrying the real collision pairs plus venue-less Sources.
+
+    Mirrors the shape of the live corpus: several raw spellings that must
+    collapse to one canonical venue (INV-KK-VENUE-NORMALISED), and Sources with
+    no venue at all, which must still be rendered.
+    """
+    from ingest.venue_store import set_venue
+
+    db_path = tmp_path / "venue_web.db"
+    conn = init_db(db_path)
+
+    def _src(sid, venue, source_type="paper", date="2026-06-01"):
+        add_node(conn, sid, "Source", {
+            "url": f"https://example.com/{sid}.pdf",
+            "source_type": source_type,
+            "license": "MIT",
+            "title": f"Paper {sid}",
+            "published_date": date,
+        })
+        if venue:
+            set_venue(conn, sid, venue, "conference")
+
+    _src("src-osdi-1", "OSDI 2026")
+    _src("src-osdi-2", "OSDI")
+    _src("src-osdi-3", "OSDI 2025")
+    _src("src-sosp-1", "SOSP")
+    _src("src-sosp-2", "SOSP 2025")
+    # Two venue-less Sources with distinct source_types.
+    _src("src-none-1", None, source_type="kernel-doc")
+    _src("src-none-2", None, source_type="discourse")
+
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        yield c
+
+
+def test_venues_returns_200(venue_client):
+    response = venue_client.get("/venues")
+    assert response.status_code == 200
+    assert "Venues" in response.text
+
+
+def test_venues_groups_by_canonical_name(venue_client):
+    """The three OSDI spellings are one entry, not three."""
+    text = venue_client.get("/venues").text
+    assert text.count(">OSDI<") == 1
+    assert text.count(">SOSP<") == 1
+    assert "OSDI 2026" not in text
+    assert "SOSP 2025" not in text
+
+
+def test_venues_paper_counts_match_the_collapsed_groups(venue_client):
+    text = venue_client.get("/venues").text
+    osdi = text[text.find(">OSDI<"):]
+    assert "<td>3</td>" in osdi[:200], osdi[:200]
+
+
+def test_venues_nests_papers_under_their_venue(venue_client):
+    text = venue_client.get("/venues").text
+    assert "/paper/src-osdi-1" in text
+    assert "/paper/src-sosp-1" in text
+
+
+def test_venues_shows_the_no_venue_bucket(venue_client):
+    """The venue-less Sources are surfaced, not silently dropped."""
+    text = venue_client.get("/venues").text
+    assert "No venue recorded" in text
+    assert "/paper/src-none-1" in text
+    assert "/paper/src-none-2" in text
+
+
+def test_venues_query_count_is_bounded(venue_client):
+    """INV-KK-WEB-QUERY-BOUNDED: a fixed number of queries, not per-paper."""
+    conn = venue_client.app.state.conn
+    seen = []
+    conn.set_trace_callback(seen.append)
+    try:
+        assert venue_client.get("/venues").status_code == 200
+    finally:
+        conn.set_trace_callback(None)
+    selects = [q for q in seen if q.strip().upper().startswith("SELECT")]
+    assert len(selects) <= 3, selects
+
+
+def test_sources_route_is_gone(venue_client):
+    assert venue_client.get("/sources").status_code == 404
+
+
+def test_venue_edit_sets_a_venue(venue_client):
+    response = venue_client.put("/api/venue/src-none-1", json={"venue": "NSDI 2025"})
+    assert response.status_code == 200
+    assert response.json()["venue"] == "NSDI"
+    assert "NSDI" in venue_client.get("/venues").text
+
+
+def test_venue_edit_404_for_unknown_source(venue_client):
+    assert venue_client.put("/api/venue/src-nope", json={"venue": "NSDI"}).status_code == 404
+
+
+def test_venue_edit_422_for_empty_venue(venue_client):
+    assert venue_client.put("/api/venue/src-none-1", json={"venue": "  "}).status_code == 422
+
+
+def test_venue_edit_422_for_missing_field(venue_client):
+    assert venue_client.put("/api/venue/src-none-1", json={}).status_code == 422
+
+
+def test_venue_merge_requires_admin(venue_client):
+    """INV-KK-VENUE-MUTATION-AUTHORISED: no user resolved means no merge."""
+    response = venue_client.post("/api/venue/merge", json={"from": "SOSP", "to": "OSDI"})
+    assert response.status_code == 403
+
+
+def test_venue_merge_succeeds_for_an_admin(tmp_path):
+    from ingest.venue_store import set_venue
+
+    db_path = tmp_path / "venue_admin.db"
+    conn = init_db(db_path)
+    for sid, venue in (("src-1", "OSDI"), ("src-2", "SOSP")):
+        add_node(conn, sid, "Source", {
+            "url": f"https://example.com/{sid}", "source_type": "paper",
+            "license": "MIT", "title": sid,
+        })
+        set_venue(conn, sid, venue, "conference")
+    conn.commit()
+    conn.close()
+
+    app = create_app(str(db_path))
+
+    @app.middleware("http")
+    async def _as_admin(request, call_next):
+        request.state.user = {"username": "root", "role": "admin"}
+        return await call_next(request)
+
+    with TestClient(app) as c:
+        response = c.post("/api/venue/merge", json={"from": "SOSP", "to": "OSDI"})
+        assert response.status_code == 200, response.text
+        assert response.json()["rows"] == 1
+        text = c.get("/venues").text
+        assert ">SOSP<" not in text
+
+
+def test_every_mutating_route_is_on_the_allowlist(venue_client):
+    """INV-KK-WEB-MUTATION-ALLOWLISTED, checked against the live router."""
+    from web.routes import WEB_MUTATION_ALLOWLIST
+
+    offenders = []
+    for route in venue_client.app.router.routes:
+        methods = getattr(route, "methods", set()) or set()
+        if methods & {"POST", "PUT", "DELETE"}:
+            path = getattr(route, "path", "")
+            if not path.startswith(WEB_MUTATION_ALLOWLIST):
+                offenders.append(f"{sorted(methods)} {path}")
+    assert not offenders, offenders

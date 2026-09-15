@@ -32,6 +32,7 @@ WEB_MUTATION_ALLOWLIST = (
     "/api/review/",
     "/api/reviewers",
     "/api/abstract/",
+    "/api/venue/",  # covers both the single-Source edit and the merge
     "/api/feed/send/",  # side-effecting shell-out, not a graph write
 )
 
@@ -93,12 +94,6 @@ def display_name_for_node(kind: str, attrs: dict, node_id: str) -> str:
     if kind == "Evidence":
         return f"Evidence {node_id[-8:]}"
     return node_id
-
-
-def _all_kinds(conn) -> list[str]:
-    """Return sorted list of distinct node kinds (ALG-KK-WEB-KIND-DROPDOWN)."""
-    rows = conn.execute("SELECT DISTINCT kind FROM nodes ORDER BY kind").fetchall()
-    return [r["kind"] for r in rows]
 
 
 def _batch_review_status(conn, source_ids: list[str]) -> dict[str, dict]:
@@ -237,27 +232,86 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             },
         )
 
-    @app.get("/sources", response_class=HTMLResponse)
-    async def sources_list(
-        request: Request,
-        page: int = Query(1, ge=1),
-        per_page: int = Query(50, ge=10, le=200),
-    ):
+    @app.get("/venues", response_class=HTMLResponse)
+    async def venues(request: Request):
+        """Papers grouped by venue (ALG-KK-WEB-VENUES).
+
+        Replaces the retired /sources listing. Groups on the Venue node reached
+        by the published-at edge, never on the raw Source.attrs.venue string:
+        the raw values carry edition collisions, so OSDI 2026 / OSDI 2025 / OSDI
+        would otherwise render as three entries instead of one
+        (INV-KK-VENUE-NORMALISED).
+
+        INV-KK-WEB-QUERY-BOUNDED: exactly three queries regardless of corpus
+        size — one join for the Source/Venue pairs, one for the venue-less
+        remainder, one batched review-status lookup. No per-paper enrichment
+        inside the grouping loop, which is where /feed goes wrong.
+        """
         conn = request.app.state.conn
-        offset = (page - 1) * per_page
+
+        # 1. Sources joined to their Venue.
         rows = conn.execute(
-            "SELECT id, kind, attrs FROM nodes WHERE kind = 'Source' ORDER BY id LIMIT ? OFFSET ?",
-            (per_page + 1, offset),
+            "SELECT v.id, json_extract(v.attrs, '$.name'), "
+            "json_extract(v.attrs, '$.venue_type'), s.id, s.attrs "
+            "FROM nodes v "
+            "JOIN edges e ON e.kind = 'published-at' AND e.target_id = v.id "
+            "JOIN nodes s ON s.id = e.source_id AND s.kind = 'Source' "
+            "WHERE v.kind = 'Venue'"
         ).fetchall()
-        has_next = len(rows) > per_page
-        rows = rows[:per_page]
-        nodes = _rows_to_dicts(rows)
-        for n in nodes:
-            n["display_name"] = display_name_for_node(n["kind"], n.get("attrs") or {}, n["id"])
+
+        # 2. Sources with no venue at all. Explicitly surfaced, never dropped —
+        # this page's job is coverage of the corpus.
+        orphan_rows = conn.execute(
+            "SELECT s.id, s.attrs FROM nodes s "
+            "WHERE s.kind = 'Source' AND s.id NOT IN "
+            "(SELECT source_id FROM edges WHERE kind = 'published-at')"
+        ).fetchall()
+
+        # 3. Review badges for everything on the page, in one IN(...) query.
+        all_sids = [r[3] for r in rows] + [r[0] for r in orphan_rows]
+        review_status = _batch_review_status(conn, all_sids)
+
+        def _paper(sid: str, attrs_raw) -> dict:
+            a = json.loads(attrs_raw) if isinstance(attrs_raw, str) else (attrs_raw or {})
+            return {
+                "source_id": sid,
+                "title": a.get("title", sid),
+                "url": a.get("url", ""),
+                "source_type": a.get("source_type", ""),
+                "published_date": a.get("published_date", a.get("source_date", "")),
+                "review": review_status.get(sid),
+            }
+
+        by_venue: dict[str, dict] = {}
+        for venue_id, name, venue_type, sid, s_attrs in rows:
+            entry = by_venue.get(venue_id)
+            if entry is None:
+                entry = by_venue[venue_id] = {
+                    "venue_id": venue_id,
+                    "name": name or venue_id,
+                    "venue_type": venue_type or "other",
+                    "papers": [],
+                }
+            entry["papers"].append(_paper(sid, s_attrs))
+
+        venue_list = list(by_venue.values())
+        for v in venue_list:
+            v["paper_count"] = len(v["papers"])
+            v["papers"].sort(key=lambda p: p["published_date"] or "", reverse=True)
+        venue_list.sort(key=lambda v: (-v["paper_count"], v["name"]))
+
+        unattributed = [_paper(sid, a) for sid, a in orphan_rows]
+        unattributed.sort(key=lambda p: p["published_date"] or "", reverse=True)
+
+        total_papers = sum(v["paper_count"] for v in venue_list) + len(unattributed)
         return templates.TemplateResponse(
             request,
-            "concept_list.html",
-            {"nodes": nodes, "title": "Sources", "active_kind": "Source", "all_kinds": _all_kinds(conn), "page": page, "per_page": per_page, "has_next": has_next},
+            "venues.html",
+            {
+                "venues": venue_list,
+                "unattributed": unattributed,
+                "total_papers": total_papers,
+            },
         )
 
     @app.get("/graph")
@@ -1169,6 +1223,71 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         body = await request.json()
         try:
             result = set_abstract(conn, source_id, body["abstract"], "manual")
+            conn.commit()
+            return JSONResponse(dataclasses.asdict(result))
+        except ValueError as exc:
+            msg = str(exc)
+            if "does not exist" in msg:
+                return JSONResponse({"error": msg}, status_code=404)
+            return JSONResponse({"error": msg}, status_code=422)
+        except KeyError as exc:
+            return JSONResponse({"error": f"Missing field: {exc}"}, status_code=422)
+
+    @app.put("/api/venue/{source_id:path}")
+    async def edit_venue(request: Request, source_id: str):
+        """Set one Source's venue by hand (ALG-KK-WEB-VENUE-EDIT).
+
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/venue/ is on
+        WEB_MUTATION_ALLOWLIST.
+
+        INV-KK-VENUE-MUTATION-AUTHORISED: this touches exactly one Source, so an
+        authenticated user is enough. The merge endpoint below is the one that
+        needs an admin.
+        """
+        from ingest.venue_store import set_venue
+        import dataclasses
+
+        conn = request.app.state.conn
+        body = await request.json()
+        try:
+            result = set_venue(
+                conn, source_id, body["venue"], body.get("venue_type", "other")
+            )
+            conn.commit()
+            return JSONResponse(dataclasses.asdict(result))
+        except ValueError as exc:
+            msg = str(exc)
+            if "does not exist" in msg:
+                return JSONResponse({"error": msg}, status_code=404)
+            return JSONResponse({"error": msg}, status_code=422)
+        except KeyError as exc:
+            return JSONResponse({"error": f"Missing field: {exc}"}, status_code=422)
+
+    @app.post("/api/venue/merge")
+    async def merge_venue(request: Request):
+        """Merge one venue into another (ALG-KK-WEB-VENUE-MERGE).
+
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/venue/ is on
+        WEB_MUTATION_ALLOWLIST.
+
+        INV-KK-VENUE-MUTATION-AUTHORISED: admin only. One call can repoint up to
+        897 Sources — the largest blast radius in this module, against one row
+        for the abstract editor — so this is deliberately stricter than the
+        single-Source edit above.
+        """
+        from ingest.venue_store import merge_venues
+        import dataclasses
+
+        identity = getattr(request.state, "user", None)
+        if not identity or identity.get("role") != "admin":
+            return JSONResponse(
+                {"error": "Administrator access required"}, status_code=403
+            )
+
+        conn = request.app.state.conn
+        body = await request.json()
+        try:
+            result = merge_venues(conn, body["from"], body["to"])
             conn.commit()
             return JSONResponse(dataclasses.asdict(result))
         except ValueError as exc:

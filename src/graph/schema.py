@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity", "ResearchBrief", "HumanReview", "Reviewer")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity", "ResearchBrief", "HumanReview", "Reviewer", "Venue")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -45,12 +45,17 @@ EDGE_KINDS = (
     "supported-by",
     "summarizes-for",
     "reviewed-by",
+    "published-at",
 )
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "belongs-to": [("Concept", "Subsystem"), ("KernelInvariant", "Subsystem")],
     "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence"), ("InteractionProtocol", "Evidence"), ("PerformanceProfile", "Evidence"), ("CompatibilityAssessment", "Evidence"), ("ComparativeAnalysis", "Evidence"), ("Problem", "Evidence"), ("Observation", "Evidence"), ("Discussion", "Evidence"), ("Benchmark", "Evidence"), ("Rejection", "Evidence"), ("Proposal", "Evidence"), ("ResearchBrief", "Evidence")],
     "sourced-from": ("Evidence", "Source"),
+    # INV-KK-VENUE-SOURCE-EDGE: a Source is linked to its Venue by this edge, and
+    # to at most one. The raw Source.attrs.venue string is retained as provenance
+    # but is no longer what the viewer groups on.
+    "published-at": ("Source", "Venue"),
     "alternative-to": ("Concept", "Concept"),
     "refines": ("Concept", "Concept"),
     "contradicts": ("Concept", "Concept"),
@@ -115,6 +120,7 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "ResearchBrief": ("title", "key_ideas", "relevance", "methodology", "source_date", "artifact_class"),
     "HumanReview": ("reviewer", "score", "verdict", "rationale", "review_date", "artifact_class"),
     "Reviewer": ("name",),
+    "Venue": ("name", "venue_type"),
 }
 
 DATE_ATTRS = frozenset({"source_date", "window_start", "window_end", "review_date"})
@@ -147,6 +153,7 @@ ID_PREFIXES = {
     "ResearchBrief": "rb-",
     "HumanReview": "hrev-",
     "Reviewer": "rvr-",
+    "Venue": "venue-",
 }
 
 # INV-KK-SCHEMA-KIND-DECLARATION-HONOURED: kind is deliberately NOT constrained by a
