@@ -13,7 +13,6 @@ import pytest
 
 from graph.briefing import (
     build_concept_brief,
-    classify_motivations,
     build_argument_paragraph,
     _empty_brief,
 )
@@ -414,7 +413,11 @@ def test_brief_nonexistent_concept(brief_db):
     assert brief["subsystem"] is None
 
 
-# --- classify_motivations tests (ALG-KK-GRAPH-CLASSIFY-MOTIVATIONS) ---
+# --- shared brief factory ---
+#
+# classify_motivations and its tests were removed with the concept-level "Why
+# This Matters" block (D-11 option (i), D-15). _make_brief survives because the
+# build_argument_paragraph tests below still need a populated brief.
 
 def _make_brief(**overrides):
     """Build an _empty_brief with selective field overrides."""
@@ -427,138 +430,14 @@ def _make_brief(**overrides):
     return brief
 
 
-def test_classify_security_triggered():
-    brief = _make_brief(vulnerabilities=[
-        {"id": "v1", "cve_id": "CVE-2026-0001", "description": "Buffer overflow", "severity": "high", "cvss_score": 8.0},
-    ])
-    result = classify_motivations(brief)
-    cats = [m["category"] for m in result]
-    assert "security" in cats
-
-
-def test_classify_security_not_triggered():
-    brief = _make_brief()
-    result = classify_motivations(brief)
-    cats = [m["category"] for m in result]
-    assert "security" not in cats
-
-
-def test_classify_security_headline_has_count():
-    brief = _make_brief(vulnerabilities=[
-        {"id": "v1", "cve_id": "CVE-2026-0001", "description": "Overflow A", "severity": "high", "cvss_score": 8.0},
-        {"id": "v2", "cve_id": "CVE-2026-0002", "description": "Overflow B", "severity": "critical", "cvss_score": 9.0},
-    ])
-    result = classify_motivations(brief)
-    sec = [m for m in result if m["category"] == "security"][0]
-    assert "2 active vulnerabilities" in sec["headline"]
-
-
-def test_classify_stability_from_failure_modes():
-    brief = _make_brief(failure_modes=[
-        {"id": "fm1", "symptom": "kernel panic on OOM", "blast_radius": "kernel-wide", "recoverability": "unrecoverable"},
-    ])
-    result = classify_motivations(brief)
-    cats = [m["category"] for m in result]
-    assert "stability" in cats
-
-
-def test_classify_stability_from_critical_problems():
-    brief = _make_brief(problems=[
-        {"id": "p1", "title": "Data corruption", "description": "Silent data corruption under load", "severity": "critical", "status": "open"},
-    ])
-    result = classify_motivations(brief)
-    cats = [m["category"] for m in result]
-    assert "stability" in cats
-
-
-def test_classify_stability_not_triggered():
-    brief = _make_brief(problems=[
-        {"id": "p1", "title": "Minor issue", "description": "Low severity issue", "severity": "low", "status": "open"},
-    ])
-    result = classify_motivations(brief)
-    cats = [m["category"] for m in result]
-    assert "stability" not in cats
-
-
-def test_classify_performance_from_profiles():
-    brief = _make_brief(profiles=[
-        {"id": "pp1", "metric": "allocation latency", "best_case": "50ns", "worst_case": "10us", "typical_case": "100ns", "conditions": "per-cpu hit", "complexity": "O(1)"},
-    ])
-    result = classify_motivations(brief)
-    cats = [m["category"] for m in result]
-    assert "performance" in cats
-
-
-def test_classify_performance_from_observation_keyword():
-    brief = _make_brief(observations=[
-        {"id": "o1", "claim": "Latency increased 30% after migration"},
-    ])
-    result = classify_motivations(brief)
-    cats = [m["category"] for m in result]
-    assert "performance" in cats
-
-
-def test_classify_scalability_from_keyword():
-    brief = _make_brief(problems=[
-        {"id": "p1", "title": "Lock issue", "description": "NUMA contention causes 40% throughput drop", "severity": "medium", "status": "open"},
-    ])
-    result = classify_motivations(brief)
-    cats = [m["category"] for m in result]
-    assert "scalability" in cats
-
-
-def test_classify_scalability_not_triggered():
-    brief = _make_brief(problems=[
-        {"id": "p1", "title": "Bug fix", "description": "Simple null check missing", "severity": "medium", "status": "open"},
-    ])
-    result = classify_motivations(brief)
-    cats = [m["category"] for m in result]
-    assert "scalability" not in cats
-
-
-def test_classify_hardware_from_subsystem_heuristic():
-    brief = _make_brief(
-        concept={"id": "test", "name": "VFIO", "description": "Virtual Function I/O", "key_properties": [], "tradeoffs": [], "design_rationale": ""},
-        subsystem={"name": "Virtualization", "description": ""},
-        scores={"heat": 5.0, "pain": 2.0, "impact": 0.0, "leverage": 0.0, "frontier": 0.0},
-    )
-    result = classify_motivations(brief)
-    cats = [m["category"] for m in result]
-    assert "hardware_enablement" in cats
-
-
-def test_classify_maintainability_from_regression_fix():
-    brief = _make_brief(fixes=[
-        {"id": "f1", "title": "Revert optimization", "fix_type": "regression-fix", "commit_hash": "abc123"},
-    ])
-    result = classify_motivations(brief)
-    cats = [m["category"] for m in result]
-    assert "maintainability" in cats
-
-
-def test_classify_maintainability_from_high_churn():
-    brief = _make_brief(fixes=[
-        {"id": "f1", "title": "Fix A", "fix_type": "bugfix", "commit_hash": "a1"},
-        {"id": "f2", "title": "Fix B", "fix_type": "bugfix", "commit_hash": "b2"},
-        {"id": "f3", "title": "Fix C", "fix_type": "bugfix", "commit_hash": "c3"},
-    ])
-    result = classify_motivations(brief)
-    cats = [m["category"] for m in result]
-    assert "maintainability" in cats
-
-
-def test_classify_returns_only_triggered():
-    brief = _make_brief()
-    result = classify_motivations(brief)
-    assert isinstance(result, list)
-    for m in result:
-        assert m["category"] in (
-            "security", "stability", "performance", "scalability",
-            "efficiency", "hardware_enablement", "maintainability",
-        )
-
-
 # --- build_argument_paragraph tests (ALG-KK-GRAPH-BUILD-ARGUMENT) ---
+#
+# These used to source their input from classify_motivations, which is gone.
+# build_argument_paragraph reads nothing but m["category"], and the removed
+# classifier returned exactly these two categories for _make_briefs_with_data,
+# measured against the pre-removal function before it was deleted. So the input
+# is unchanged and these tests still cover what they always covered.
+_ARGUMENT_MOTIVATIONS = [{"category": "security"}, {"category": "performance"}]
 
 def _make_briefs_with_data():
     """Build a briefs list with enough data for argument paragraph testing."""
@@ -585,7 +464,7 @@ def _make_briefs_with_data():
 
 def test_argument_paragraph_returns_string():
     briefs = _make_briefs_with_data()
-    motivations = classify_motivations(briefs[0])
+    motivations = _ARGUMENT_MOTIVATIONS
     result = build_argument_paragraph({}, briefs, motivations)
     assert isinstance(result, str)
     assert len(result) > 0
@@ -593,14 +472,14 @@ def test_argument_paragraph_returns_string():
 
 def test_argument_paragraph_mentions_source_count():
     briefs = _make_briefs_with_data()
-    motivations = classify_motivations(briefs[0])
+    motivations = _ARGUMENT_MOTIVATIONS
     result = build_argument_paragraph({}, briefs, motivations)
     assert "3 independent sources" in result
 
 
 def test_argument_paragraph_mentions_dependencies():
     briefs = _make_briefs_with_data()
-    motivations = classify_motivations(briefs[0])
+    motivations = _ARGUMENT_MOTIVATIONS
     result = build_argument_paragraph({}, briefs, motivations)
     assert "Buddy Allocator" in result
     assert "Page Cache" in result
@@ -608,7 +487,7 @@ def test_argument_paragraph_mentions_dependencies():
 
 def test_argument_paragraph_deterministic():
     briefs = _make_briefs_with_data()
-    motivations = classify_motivations(briefs[0])
+    motivations = _ARGUMENT_MOTIVATIONS
     r1 = build_argument_paragraph({}, briefs, motivations, window_days=90)
     r2 = build_argument_paragraph({}, briefs, motivations, window_days=90)
     assert r1 == r2
@@ -660,98 +539,3 @@ def test_brief_timeline_items_have_source_url(brief_db):
     brief = build_concept_brief(brief_db, "concept-slub")
     for item in brief["timeline"]:
         assert "source_url" in item, f"timeline item {item['kind']} missing source_url"
-
-
-# --- INV-KK-GRAPH-MOTIVATION-BLAST-RADIUS / ACTIONABLE / CROSS-LINKS tests ---
-
-
-def test_motivation_evidence_has_id():
-    brief = _make_brief(
-        vulnerabilities=[{"id": "v1", "cve_id": "CVE-2026-0001", "description": "Overflow", "severity": "high", "cvss_score": 8.0}],
-        failure_modes=[{"id": "fm1", "symptom": "panic", "blast_radius": "kernel-wide", "recoverability": "unrecoverable"}],
-    )
-    result = classify_motivations(brief)
-    for m in result:
-        for ev in m["evidence"]:
-            assert "id" in ev, f"{m['category']}/{ev['type']} evidence missing id"
-
-
-def test_motivation_evidence_has_source_url():
-    brief = _make_brief(
-        vulnerabilities=[{"id": "v1", "cve_id": "CVE-2026-0001", "description": "Overflow", "severity": "high", "cvss_score": 8.0, "source_url": "https://example.com/cve"}],
-        failure_modes=[{"id": "fm1", "symptom": "panic", "blast_radius": "kernel-wide", "recoverability": "unrecoverable", "source_url": ""}],
-    )
-    result = classify_motivations(brief)
-    for m in result:
-        for ev in m["evidence"]:
-            assert "source_url" in ev, f"{m['category']}/{ev['type']} evidence missing source_url"
-    sec = [m for m in result if m["category"] == "security"][0]
-    assert sec["evidence"][0]["source_url"] == "https://example.com/cve"
-
-
-def test_motivation_has_blast_radius():
-    brief = _make_brief(
-        vulnerabilities=[{"id": "v1", "cve_id": "CVE-2026-0001", "description": "Overflow", "severity": "high", "cvss_score": 8.0}],
-        prerequisites={"depends_on": [], "depended_on_by": [{"id": "c2", "name": "Buddy"}]},
-    )
-    result = classify_motivations(brief)
-    for m in result:
-        assert "blast_radius" in m
-        assert isinstance(m["blast_radius"]["count"], int)
-        assert isinstance(m["blast_radius"]["components"], list)
-
-
-def test_motivation_blast_radius_matches_prerequisites():
-    deps = [{"id": "c2", "name": "Buddy"}, {"id": "c3", "name": "Page Cache"}]
-    brief = _make_brief(
-        vulnerabilities=[{"id": "v1", "cve_id": "CVE-2026-0001", "description": "Overflow", "severity": "high", "cvss_score": 8.0}],
-        prerequisites={"depends_on": [], "depended_on_by": deps},
-    )
-    result = classify_motivations(brief)
-    sec = [m for m in result if m["category"] == "security"][0]
-    assert sec["blast_radius"]["count"] == 2
-    assert sec["blast_radius"]["components"] == deps
-
-
-def test_motivation_has_actionable():
-    brief = _make_brief(
-        vulnerabilities=[{"id": "v1", "cve_id": "CVE-2026-0001", "description": "Overflow", "severity": "high", "cvss_score": 8.0}],
-        failure_modes=[{"id": "fm1", "symptom": "panic", "blast_radius": "kernel-wide", "recoverability": "unrecoverable"}],
-    )
-    result = classify_motivations(brief)
-    for m in result:
-        assert "actionable" in m
-        assert isinstance(m["actionable"], str)
-        assert len(m["actionable"]) > 0
-
-
-def test_motivation_actionable_deterministic():
-    brief = _make_brief(
-        vulnerabilities=[{"id": "v1", "cve_id": "CVE-2026-0001", "description": "Overflow", "severity": "high", "cvss_score": 8.0}],
-    )
-    r1 = classify_motivations(brief)
-    r2 = classify_motivations(brief)
-    for m1, m2 in zip(r1, r2):
-        assert m1["actionable"] == m2["actionable"]
-
-
-def test_motivation_cross_links_hw_perf():
-    brief = _make_brief(
-        concept={"id": "test", "name": "VFIO", "description": "Virtual Function I/O for hardware passthrough", "key_properties": [], "tradeoffs": [], "design_rationale": ""},
-        subsystem={"name": "Virtualization", "description": ""},
-        profiles=[{"id": "pp1", "metric": "transfer rate", "best_case": "10GB/s", "worst_case": "1GB/s", "typical_case": "5GB/s", "conditions": "aligned", "complexity": "O(1)"}],
-        scores={"heat": 5.0, "pain": 2.0, "impact": 0.0, "leverage": 0.0, "frontier": 0.0},
-    )
-    result = classify_motivations(brief)
-    hw = [m for m in result if m["category"] == "hardware_enablement"]
-    assert len(hw) == 1
-    assert "performance" in hw[0]["cross_links"]
-
-
-def test_motivation_no_cross_links_when_solo():
-    brief = _make_brief(
-        vulnerabilities=[{"id": "v1", "cve_id": "CVE-2026-0001", "description": "Overflow", "severity": "high", "cvss_score": 8.0}],
-    )
-    result = classify_motivations(brief)
-    sec = [m for m in result if m["category"] == "security"][0]
-    assert sec["cross_links"] == []

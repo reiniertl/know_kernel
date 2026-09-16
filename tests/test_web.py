@@ -1865,3 +1865,101 @@ def test_feed_page_renders_the_concept_description(client):
     response = client.get("/feed")
     assert response.status_code == 200
     assert "A queue implementation without locks." in response.text
+
+
+# ---------------------------------------------------------------------------
+# "Why This Matters" removal — ALG-KK-WEB-PAPER-DETAIL, D-11 option (i), D-15.
+#
+# The block was built by classify_motivations(brief), which takes a concept
+# brief and NO source id, so it was a pure function of the paper's concept set
+# rather than of the paper. Measured before removal: 1238 of the 1433
+# concept-bearing papers (86.4%) share their whole concept set with another
+# paper, and 372 papers rendered byte-identical text under a heading presenting
+# it as a finding about the paper in front of the reader.
+#
+# THESE TESTS NEED THEIR OWN FIXTURE. The default `client` graph attaches a
+# Concept with no vulnerabilities, so the removed classifier returned [] for it
+# and the block never rendered even before the removal — tests written against
+# that fixture pass in both directions and prove nothing. This fixture hangs a
+# Vulnerability off the concept via an `exploits` edge, which is what the old
+# security branch keyed on, so the block DID render here before the change.
+#
+# The paper-grounded classify_source_motivations is NOT affected and still
+# serves /feed; the radar keyword classifier still serves /radar.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def motivating_client(tmp_path):
+    db_path = tmp_path / "motivating.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-1", "Concept", {
+        "name": "Lock-free Queue",
+        "description": "A queue implementation without locks.",
+        "artifact_class": "B",
+        "key_properties": ["atomic operations"],
+        "tradeoffs": ["ABA problem"],
+        "design_rationale": "Eliminates lock contention.",
+    })
+    add_node(conn, "ev-1", "Evidence", {
+        "artifact_class": "A",
+        "contamination_level": "weak-copyleft",
+    })
+    add_node(conn, "src-1", "Source", {
+        "url": "https://example.com/paper.pdf",
+        "source_type": "paper",
+        "license": "MIT",
+        "title": "A Paper",
+    })
+    # The trigger for the removed security branch.
+    add_node(conn, "vuln-1", "Vulnerability", {
+        "cve_id": "CVE-TEST-001",
+        "title": "Queue heap overflow",
+        "description": "Heap overflow in the lock-free queue reclaim path.",
+        "severity": "high",
+        "cvss_score": "7.5",
+        "affected_versions": "5.15-6.1",
+        "status": "open",
+        "source_date": "2024-03-01",
+        "artifact_class": "B",
+    })
+    add_edge(conn, "extracted-from", "concept-1", "ev-1")
+    add_edge(conn, "sourced-from", "ev-1", "src-1")
+    add_edge(conn, "exploits", "vuln-1", "concept-1")
+    conn.commit()
+    conn.close()
+
+    app = create_app(str(db_path))
+    with TestClient(app) as c:
+        yield c
+
+
+def test_paper_page_renders_no_why_this_matters_block(motivating_client):
+    response = motivating_client.get("/paper/src-1")
+    assert response.status_code == 200
+    assert "Why This Matters" not in response.text
+
+
+def test_paper_page_renders_no_motivation_evidence_furniture(motivating_client):
+    """None of the removed block's evidence framing survives.
+
+    The concept description itself is NOT asserted absent: it legitimately
+    appears in the concept card grid, which lists what attaches to the paper
+    rather than making a claim about it. The defect was the HARDWARE ENABLEMENT
+    branch citing brief["concept"]["description"][:200] AS EVIDENCE under a
+    heading that framed it as a finding about this paper.
+    """
+    response = motivating_client.get("/paper/src-1")
+    for marker in ("If addressed:", "Blast radius:", "SECURITY", "CVE-TEST-001"):
+        assert marker not in response.text, f"motivation furniture survives: {marker}"
+
+
+def test_paper_page_still_lists_its_concepts(motivating_client):
+    """Removing the block must not take the concept card grid with it.
+
+    build_concept_brief survives the removal because it still supplies the
+    subsystem; this pins that the page keeps showing which concepts attach.
+    """
+    response = motivating_client.get("/paper/src-1")
+    assert response.status_code == 200
+    assert "Lock-free Queue" in response.text

@@ -30,7 +30,7 @@ from graph.engine import (
     ranked_recommendations,
     transitive_impact,
 )
-from graph.briefing import build_concept_brief, classify_motivations
+from graph.briefing import build_concept_brief
 from graph.scoring import research_score
 
 
@@ -774,7 +774,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         placeholders = ",".join("?" for _ in evidence_ids)
 
         concepts = []
-        all_motivations: dict[str, dict] = {}
         all_subsystems: set[str] = set()
 
         if evidence_ids:
@@ -791,7 +790,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 c_attrs = json.loads(crow[1]) if isinstance(crow[1], str) else (crow[1] or {})
 
                 brief = build_concept_brief(conn, cid)
-                motivs = classify_motivations(brief)
                 rs = research_score(conn, cid)
 
                 sub_name = ""
@@ -807,25 +805,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                     "research_score": rs,
                     "subsystem": sub_name,
                 })
-
-                for m in motivs:
-                    cat = m["category"]
-                    if cat not in all_motivations:
-                        all_motivations[cat] = m
-                    else:
-                        existing = all_motivations[cat]
-                        existing["evidence"] = existing.get("evidence", []) + m.get("evidence", [])
-                        if m.get("blast_radius") and m["blast_radius"].get("count", 0) > 0:
-                            if not existing.get("blast_radius"):
-                                existing["blast_radius"] = m["blast_radius"]
-                            else:
-                                seen_ids = {c["id"] for c in existing["blast_radius"].get("components", [])}
-                                for comp in m["blast_radius"].get("components", []):
-                                    if comp["id"] not in seen_ids:
-                                        existing["blast_radius"]["components"].append(comp)
-                                existing["blast_radius"]["count"] = len(existing["blast_radius"]["components"])
-
-        merged_motivations = list(all_motivations.values())
 
         _CLAIM_KINDS = ("Problem", "Observation", "Discussion", "Benchmark", "Proposal", "Rejection")
         _TEXT_FIELD = {
@@ -923,7 +902,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "source": node,
                 "s_attrs": s_attrs,
                 "concepts": concepts,
-                "motivations": merged_motivations,
                 "subsystems": sorted(all_subsystems),
                 "paper_evidence": paper_evidence,
                 "existing_reviews": existing_reviews,
