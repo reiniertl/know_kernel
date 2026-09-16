@@ -254,7 +254,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-1,360 tests, zero failures.
+1,466 tests, zero failures.
 
 ## License
 
