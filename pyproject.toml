@@ -30,6 +30,7 @@ dev = [
 [project.scripts]
 kk-ingest = "ingest.cli:main"
 kk-feed = "ingest.cli_feed:main"
+kk-summaries = "ingest.cli_summaries:main"
 kk-web = "authgate.app:main"
 kk-export = "export.cli:main"
 kk-mcp = "mcp_server.server:main"
