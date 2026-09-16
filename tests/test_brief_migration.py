@@ -285,3 +285,168 @@ def test_checkpoint_folds_the_wal_back_into_the_tracked_file(tmp_path):
     check = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     assert check.execute("SELECT count(*) FROM nodes").fetchone()[0] == 1
     check.close()
+
+
+# --- the character-list corruption ----------------------------------------
+#
+# ResearchBrief stored key_ideas as a JSON STRING, not a list. The first version
+# of set_summary did list(key_ideas), which on a string yields one element per
+# CHARACTER, and that shipped: all 458 migrated rows became character lists and
+# the paper page rendered one list item per letter.
+#
+# The fixture above builds key_ideas as a Python list, which is the shape the
+# real data never had — that is exactly why the original tests passed. These use
+# the real shape.
+
+REAL_BRIEF_KEY_IDEAS = json.dumps([
+    "Compiler operator fusion creates power bursts triggering voltage droop on mobile NPUs",
+    "Measurement-guided graph rewriting mitigates fusion-induced power spikes",
+])
+
+
+def test_a_brief_storing_key_ideas_as_a_json_string_migrates_to_a_real_list(conn):
+    """The production shape. list() on this string produced one item per letter."""
+    source_id = _paper(conn)
+    _brief(conn, "rb-1", "ev-1", source_id, key_ideas=REAL_BRIEF_KEY_IDEAS)
+
+    migrate_mod.migrate(conn)
+
+    stored = get_summary(conn, source_id)["attrs"]["key_ideas"]
+    assert stored == json.loads(REAL_BRIEF_KEY_IDEAS)
+    assert len(stored) == 2
+    # The failure mode, named so a regression is unmistakable in the output.
+    assert not all(len(item) <= 1 for item in stored), "key_ideas exploded into characters"
+
+
+def test_no_migrated_key_ideas_item_is_a_single_character(conn):
+    source_id = _paper(conn)
+    _brief(conn, "rb-1", "ev-1", source_id, key_ideas=REAL_BRIEF_KEY_IDEAS)
+
+    migrate_mod.migrate(conn)
+
+    for item in get_summary(conn, source_id)["attrs"]["key_ideas"]:
+        assert len(item) > 1
+
+
+@pytest.mark.parametrize("supplied,expected", [
+    # The production shape: a JSON string is parsed, never iterated.
+    ('["one idea", "two idea"]', ["one idea", "two idea"]),
+    # An already-correct list passes through.
+    (["one idea", "two idea"], ["one idea", "two idea"]),
+    # A bare string is ONE idea, not a sequence of letters.
+    ("a single idea", ["a single idea"]),
+    # Junk is dropped rather than stored in a broken shape.
+    ("", []),
+    (None, []),
+    (42, []),
+    (["real", "", "   ", None, 7], ["real"]),
+])
+def test_normalise_key_ideas_never_produces_characters(supplied, expected):
+    from ingest.paper_summary import normalise_key_ideas
+
+    assert normalise_key_ideas(supplied) == expected
+
+
+def test_set_summary_cannot_store_a_character_list():
+    """The guarantee at the writer, independent of any caller."""
+    from ingest.paper_summary import normalise_key_ideas
+
+    result = normalise_key_ideas('["Compiler operator fusion creates power bursts"]')
+
+    assert result == ["Compiler operator fusion creates power bursts"]
+    assert len(result) == 1
+
+
+# --- the repair -----------------------------------------------------------
+
+_REPAIR_SPEC = importlib.util.spec_from_file_location(
+    "repair_key_ideas",
+    pathlib.Path(__file__).resolve().parents[1] / "data" / "repair_key_ideas.py",
+)
+repair_mod = importlib.util.module_from_spec(_REPAIR_SPEC)
+_REPAIR_SPEC.loader.exec_module(repair_mod)
+
+
+def _corrupt(c, source_id, raw_json):
+    """Write the exact damage the shipped bug produced: list(str)."""
+    node_id = c.execute(
+        "SELECT n.id FROM edges e JOIN nodes n ON n.id = e.source_id "
+        "WHERE e.kind = 'summarizes-paper' AND e.target_id = ?",
+        (source_id,),
+    ).fetchone()[0]
+    attrs = json.loads(c.execute("SELECT attrs FROM nodes WHERE id = ?", (node_id,)).fetchone()[0])
+    attrs["key_ideas"] = list(raw_json)
+    c.execute("UPDATE nodes SET attrs = ? WHERE id = ?", (json.dumps(attrs), node_id))
+    return node_id
+
+
+def test_repair_recovers_a_character_list_exactly(conn):
+    from ingest.paper_summary import set_summary
+
+    source_id = _paper(conn)
+    set_summary(conn, source_id, "", "absent", model="unknown-legacy")
+    _corrupt(conn, source_id, REAL_BRIEF_KEY_IDEAS)
+
+    stats = repair_mod.repair(conn)
+
+    assert stats["corrupted"] == 1
+    assert stats["repaired"] == 1
+    assert stats["unrecoverable"] == 0
+    assert get_summary(conn, source_id)["attrs"]["key_ideas"] == json.loads(REAL_BRIEF_KEY_IDEAS)
+
+
+def test_repair_leaves_well_formed_rows_untouched(conn):
+    from ingest.paper_summary import set_summary
+
+    source_id = _paper(conn)
+    set_summary(conn, source_id, "", "absent", key_ideas=["a real idea", "another one"])
+
+    stats = repair_mod.repair(conn)
+
+    assert stats["corrupted"] == 0
+    assert stats["intact"] == 1
+    assert get_summary(conn, source_id)["attrs"]["key_ideas"] == ["a real idea", "another one"]
+
+
+def test_repair_is_idempotent(conn):
+    from ingest.paper_summary import set_summary
+
+    source_id = _paper(conn)
+    set_summary(conn, source_id, "", "absent")
+    _corrupt(conn, source_id, REAL_BRIEF_KEY_IDEAS)
+
+    repair_mod.repair(conn)
+    again = repair_mod.repair(conn)
+
+    assert again["corrupted"] == 0
+    assert again["repaired"] == 0
+
+
+def test_repair_preserves_the_other_fields(conn):
+    from ingest.paper_summary import set_summary
+
+    source_id = _paper(conn)
+    set_summary(conn, source_id, "", "absent", model="unknown-legacy",
+                relevance="Matters for the scheduler.", methodology="measurement study")
+    _corrupt(conn, source_id, REAL_BRIEF_KEY_IDEAS)
+
+    repair_mod.repair(conn)
+
+    attrs = get_summary(conn, source_id)["attrs"]
+    assert attrs["model"] == "unknown-legacy"
+    assert attrs["relevance"] == "Matters for the scheduler."
+    assert attrs["methodology"] == "measurement study"
+    assert attrs["state"] == "absent"
+
+
+def test_repair_dry_run_changes_nothing(conn):
+    from ingest.paper_summary import set_summary
+
+    source_id = _paper(conn)
+    set_summary(conn, source_id, "", "absent")
+    _corrupt(conn, source_id, REAL_BRIEF_KEY_IDEAS)
+
+    stats = repair_mod.repair(conn, dry_run=True)
+
+    assert stats["repaired"] == 1
+    assert repair_mod.is_character_list(get_summary(conn, source_id)["attrs"]["key_ideas"])

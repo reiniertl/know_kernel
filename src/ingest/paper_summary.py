@@ -43,6 +43,7 @@ Two carve-outs, both mandatory and both already proven necessary elsewhere:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import date
@@ -84,6 +85,35 @@ def summary_is_present(state: str | None) -> bool:
     web layer cannot disagree about what "has a summary" means.
     """
     return state in PRESENT_STATES
+
+
+def normalise_key_ideas(raw: object) -> list[str]:
+    """Coerce whatever a caller supplies into a list of non-empty strings.
+
+    NEVER call list() on this value directly. The retired brief kind stored
+    key_ideas as a JSON *string*, and list() on a string yields one element per
+    CHARACTER: passing a brief's field straight through turned
+    '["Compiler operator fusion..."]' into ['[', '"', 'C', 'o', ...]. That
+    shipped, corrupted all 458 migrated rows, and rendered one list item per
+    character on the paper page. A string is parsed here, never iterated.
+
+    Returns [] for anything unusable, which callers treat as "not supplied" and
+    omit from the stored attrs rather than writing an empty list.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        try:
+            raw = json.loads(text)
+        except (ValueError, TypeError):
+            # A bare string is one idea, not a sequence of letters.
+            return [text]
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
 
 
 @dataclass
@@ -205,8 +235,9 @@ def set_summary(
     }
     # Written only when supplied. update_node_attrs merges, so omitting a field
     # here leaves whatever a previous call stored rather than blanking it.
-    if key_ideas:
-        attrs["key_ideas"] = list(key_ideas)
+    normalised_ideas = normalise_key_ideas(key_ideas)
+    if normalised_ideas:
+        attrs["key_ideas"] = normalised_ideas
     if relevance:
         attrs["relevance"] = relevance
     if methodology:
