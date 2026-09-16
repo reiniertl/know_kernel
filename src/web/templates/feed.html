@@ -37,7 +37,7 @@
       </td>
       <td><span class="badge badge-kind">{{ item.source_type }}</span></td>
       <td><a href="/concepts/{{ item.concept_id }}">{{ item.concept_name }}</a></td>
-      <td style="font-size:0.85em; color:#444;">{{ item.summary }}</td>
+      <td style="font-size:0.85em; color:#444;">{{ item.concept_description }}</td>
       <td>
         {% for s in item.subsystems %}
         <span class="badge" style="font-size:0.7em; padding:0.15em 0.4em; margin:0.1em; display:inline-block; background:#34495e; color:#fff; border-radius:3px;">{{ s }}</span>

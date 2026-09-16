@@ -1800,3 +1800,68 @@ def test_the_removed_brief_query_was_a_separate_statement_and_is_gone(tmp_path):
     # The enrichment still reached the page without it.
     with _client_for(db_path) as c:
         assert ENRICHED["relevance"] in c.get(f"/paper/{sid}").text
+
+
+# ---------------------------------------------------------------------------
+# Feed card field naming — ALG-KK-WEB-FEED-CARD, ALG-KK-WEB-FEED-LIST,
+# ALG-KK-WEB-FEED-SEND, INV-KK-FEED-SUMMARY-MAX-WORDS.
+#
+# The card shipped the CONCEPT's description under a key named "summary". That
+# was merely loose until PaperSummary landed on the same Source; after that, a
+# consumer reading card["summary"] got concept boilerplate while believing it
+# held the paper's summary, and /api/feed/send forwarded it outward. The key is
+# now "concept_description".
+#
+# These endpoints had NO tests before this change, which is why the mislabel
+# survived. The leak test below is the one that matters: it fails if anybody
+# ever wires the real summary into this field without renaming it again.
+# ---------------------------------------------------------------------------
+
+
+def test_feed_card_ships_no_key_named_summary(client):
+    """The mislabelled key is gone from the JSON, not merely unused."""
+    response = client.get("/api/feed/card/src-1")
+    assert response.status_code == 200
+    item = response.json()["item"]
+    assert "summary" not in item
+
+
+def test_feed_card_concept_description_holds_the_concept_description(client):
+    """The renamed key carries what it claims to: the attached Concept's text."""
+    response = client.get("/api/feed/card/src-1")
+    item = response.json()["item"]
+    assert item["concept_description"] == "A queue implementation without locks."
+
+
+def test_paper_summary_does_not_leak_into_the_concept_description(client):
+    """A Source carrying a real PaperSummary must not see it reach this field.
+
+    Written through ingest.paper_summary.set_summary rather than a hand-built
+    node so the fixture has the shape production writes — the key_ideas
+    corruption got through because a fixture used a shape production never had.
+    """
+    from ingest.paper_summary import set_summary
+
+    conn = client.app.state.conn
+    set_summary(
+        conn,
+        "src-1",
+        text="MEASURED PAPER SUMMARY PROSE that must never appear on the card.",
+        state="llm-extracted",
+        model="test-model",
+    )
+    conn.commit()
+
+    item = client.get("/api/feed/card/src-1").json()["item"]
+    assert item["concept_description"] == "A queue implementation without locks."
+    assert "MEASURED PAPER SUMMARY PROSE" not in item["concept_description"]
+    assert "MEASURED PAPER SUMMARY PROSE" not in client.get(
+        "/api/feed/card/src-1"
+    ).text
+
+
+def test_feed_page_renders_the_concept_description(client):
+    """/feed renders the renamed template variable, not an empty cell."""
+    response = client.get("/feed")
+    assert response.status_code == 200
+    assert "A queue implementation without locks." in response.text

@@ -557,7 +557,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "concept_id": first_cid,
                 "concept_name": ", ".join(concept_names) if concept_names else "",
                 "motivations": classify_source_motivations(conn, sid),
-                "summary": _truncate_words(first_desc, 100),
+                "concept_description": _truncate_words(first_desc, 100),
                 "subsystems": subsystems,
             })
 
@@ -626,9 +626,9 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         if subsystems:
             sub_tags = " ".join(f"[{s}]" for s in subsystems)
             lines.append(f"   \U0001f4c2 {sub_tags}")
-        summary = item.get("summary", "")
-        if summary:
-            lines.append(f"   _{summary}_")
+        concept_description = item.get("concept_description", "")
+        if concept_description:
+            lines.append(f"   _{concept_description}_")
         paper_url = item.get("url", "")
         if paper_url:
             lines.append(f"   \U0001f4c4 {paper_url}")
@@ -669,7 +669,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "concept": c_attrs.get("name", cid),
             "concept_url": f"{_BASE_URL}/concepts/{cid}",
             "research_card_url": f"{_BASE_URL}/paper/{source_id}",
-            "summary": _truncate_words(c_attrs.get("description", ""), 100),
+            "concept_description": _truncate_words(c_attrs.get("description", ""), 100),
             "subsystems": _get_concept_subsystems(conn, cid),
             "motivations": classify_source_motivations(conn, source_id),
         }
@@ -719,7 +719,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "concept": c_attrs.get("name", cid),
             "concept_url": f"{_BASE_URL}/concepts/{cid}",
             "research_card_url": f"{_BASE_URL}/paper/{source_id}",
-            "summary": _truncate_words(c_attrs.get("description", ""), 100),
+            "concept_description": _truncate_words(c_attrs.get("description", ""), 100),
             "subsystems": _get_concept_subsystems(conn, cid),
             "motivations": classify_source_motivations(conn, source_id),
         }
