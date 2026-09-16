@@ -1622,3 +1622,181 @@ def test_summary_edit_refreshes_the_completeness_verdict(summary_client):
     ).fetchone()
     assert row is not None
     assert json.loads(row[0])["has_summary"] is True
+
+
+# --- ONE BLOCK, NOT TWO (ALG-KK-WEB-PAPER-DETAIL) ------------------------
+#
+# Appended rather than woven in, so every test above this line is the pre-merge
+# suite passing unmodified. That is what makes the regression claim checkable
+# rather than asserted.
+
+ENRICHED = {
+    "key_ideas": ["Delegates paging policy to user space.", "Uses eBPF hooks."],
+    "relevance": "Matters for the memory-management subsystem and the eBPF verifier.",
+    "methodology": "eBPF-based tracing",
+}
+
+
+def _build_enriched_db(tmp_path, name, state="llm-extracted",
+                       text="A model wrote this summary of the paper.", concepts=0, **enrich):
+    """A paper whose single summary carries the three absorbed fields."""
+    from ingest.paper_completeness import recompute_paper
+    from ingest.paper_summary import set_summary
+
+    fields = dict(ENRICHED)
+    fields.update(enrich)
+    db_path = tmp_path / name
+    conn = init_db(db_path)
+    sid = _summary_paper(conn)
+    set_summary(
+        conn, sid, text, state, model="claude-sonnet-5",
+        key_ideas=fields.get("key_ideas"),
+        relevance=fields.get("relevance", ""),
+        methodology=fields.get("methodology", ""),
+    )
+    for i in range(concepts):
+        add_node(conn, f"ev-{i}", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+        add_node(conn, f"c-{i}", "Concept", {
+            "name": f"Concept {i}", "description": "d", "artifact_class": "B",
+            "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+        })
+        add_edge(conn, "sourced-from", f"ev-{i}", sid)
+        add_edge(conn, "extracted-from", f"c-{i}", f"ev-{i}")
+    recompute_paper(conn, sid)
+    conn.commit()
+    conn.close()
+    return db_path, sid
+
+
+def test_all_four_fields_render_in_one_section(tmp_path):
+    db_path, sid = _build_enriched_db(tmp_path, "merged.db")
+    with _client_for(db_path) as c:
+        body = c.get(f"/paper/{sid}").text
+
+    assert "A model wrote this summary of the paper." in body
+    assert ENRICHED["key_ideas"][0] in body
+    assert ENRICHED["relevance"] in body
+    assert ENRICHED["methodology"] in body
+
+    # All three land INSIDE the summary section, not after it. The section runs
+    # from its id to the start of the completeness section.
+    section = body[body.index('id="summary-section"'):body.index('id="completeness-section"')]
+    for needle in (ENRICHED["key_ideas"][0], ENRICHED["relevance"], ENRICHED["methodology"]):
+        assert needle in section
+
+
+def test_the_page_has_no_separate_brief_section(tmp_path):
+    db_path, sid = _build_enriched_db(tmp_path, "nobrief.db")
+    with _client_for(db_path) as c:
+        body = c.get(f"/paper/{sid}").text
+
+    assert "Research Brief" not in body
+    assert "No research brief extracted yet." not in body
+
+
+def test_enrichment_sits_under_the_single_state_badge(tmp_path):
+    """One trust marker covers the whole artifact, so the badge precedes it."""
+    db_path, sid = _build_enriched_db(tmp_path, "badge.db")
+    with _client_for(db_path) as c:
+        body = c.get(f"/paper/{sid}").text
+
+    assert body.index("unreviewed &mdash; model output") < body.index(ENRICHED["key_ideas"][0])
+
+
+def test_prose_only_summary_renders_no_empty_enrichment_headings(tmp_path):
+    db_path, sid = _build_enriched_db(
+        tmp_path, "proseonly.db", key_ideas=None, relevance="", methodology="")
+    with _client_for(db_path) as c:
+        body = c.get(f"/paper/{sid}").text
+
+    assert "A model wrote this summary of the paper." in body
+    section = body[body.index('id="summary-section"'):body.index('id="completeness-section"')]
+    assert "Key Ideas" not in section
+    assert "Relevance" not in section
+    assert 'id="summary-key-ideas"' not in section
+
+
+def test_enrichment_without_prose_still_renders(tmp_path):
+    """The shape of all 458 migrated rows under D-10 (b): no text, state absent.
+
+    A guard keyed on prose alone would render nothing here, silently hiding the
+    content the whole merge existed to preserve.
+    """
+    db_path, sid = _build_enriched_db(tmp_path, "noprose.db", state="absent", text="")
+    with _client_for(db_path) as c:
+        body = c.get(f"/paper/{sid}").text
+
+    assert ENRICHED["key_ideas"][0] in body
+    assert ENRICHED["relevance"] in body
+    assert ENRICHED["methodology"] in body
+    # ...but the state is still reported honestly: enrichment is not prose, and
+    # must not be dressed up as a summary somebody wrote.
+    assert "No summary yet." in body
+    assert "unreviewed &mdash; model output" not in body
+
+
+def test_abstract_still_precedes_the_merged_summary(tmp_path):
+    db_path, sid = _build_enriched_db(tmp_path, "order.db")
+    with _client_for(db_path) as c:
+        body = c.get(f"/paper/{sid}").text
+
+    assert body.index('id="abstract-section"') < body.index('id="summary-section"')
+    assert body.index('id="summary-section"') < body.index('id="completeness-section"')
+
+
+def test_the_page_no_longer_queries_for_a_brief(tmp_path):
+    """The brief had its own query. Removing the block removes the query."""
+    db_path, sid = _build_enriched_db(tmp_path, "noquery.db", concepts=3)
+    with _client_for(db_path) as c:
+        selects = _selects_for(c, f"/paper/{sid}")
+
+    assert not [q for q in selects if "ResearchBrief" in q]
+
+
+def test_enrichment_costs_no_extra_query(tmp_path):
+    """It arrives on the summary row that was already being fetched."""
+    db_path, sid = _build_enriched_db(tmp_path, "onequery.db", concepts=4)
+    with _client_for(db_path) as c:
+        assert len(_selects_for(c, f"/paper/{sid}", "summarizes-paper")) == 1
+
+
+def test_the_removed_brief_query_was_a_separate_statement_and_is_gone(tmp_path):
+    """The concrete saving, measured rather than asserted.
+
+    The removed block ran its own SELECT whenever the paper had Evidence, which
+    it does here. This runs that exact query shape against the same database to
+    show two things: it is a statement distinct from every one the page still
+    issues, and it can no longer return anything, because the kind it selected on
+    is retired. A page that no longer issues it therefore issues one fewer.
+    """
+    db_path, sid = _build_enriched_db(tmp_path, "count.db", concepts=3)
+
+    with _client_for(db_path) as c:
+        selects = _selects_for(c, f"/paper/{sid}")
+        conn = c.app.state.conn
+        evidence_ids = [
+            r[0] for r in conn.execute(
+                "SELECT ev.id FROM nodes ev JOIN edges se ON se.kind = 'sourced-from' "
+                "AND se.source_id = ev.id AND se.target_id = ? WHERE ev.kind = 'Evidence'",
+                (sid,),
+            ).fetchall()
+        ]
+        assert evidence_ids, "the saving only existed on papers with Evidence"
+
+        placeholders = ",".join("?" for _ in evidence_ids)
+        removed_query = (
+            f"SELECT rb.attrs FROM nodes rb "
+            f"JOIN edges re ON re.kind = 'extracted-from' "
+            f"AND re.source_id = rb.id AND re.target_id IN ({placeholders}) "
+            f"WHERE rb.kind = 'ResearchBrief' LIMIT 1"
+        )
+        assert conn.execute(removed_query, evidence_ids).fetchone() is None
+
+    # It is not among the statements the page still runs, and nothing else
+    # selects on the retired kind either.
+    assert removed_query not in selects
+    assert not [q for q in selects if "ResearchBrief" in q]
+
+    # The enrichment still reached the page without it.
+    with _client_for(db_path) as c:
+        assert ENRICHED["relevance"] in c.get(f"/paper/{sid}").text

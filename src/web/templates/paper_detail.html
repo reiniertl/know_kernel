@@ -101,6 +101,27 @@
     {% if paper_summary and paper_summary.text %}
     <p style="margin:0.3em 0;{% if _state == 'rejected' %}color:#888;text-decoration:line-through;{% endif %}">{{ paper_summary.text }}</p>
     {% endif %}
+    {# The three fields absorbed under D-9, rendered here rather than in a section
+       of their own: they describe the same paper as the prose above and belong
+       under the same state badge. Each heading is omitted entirely when its field
+       is missing, so a prose-only summary looks finished rather than broken. A row
+       carrying these with no prose is normal, not degraded — it is what a migrated
+       row looks like until the extractor writes prose for it. #}
+    {% if paper_summary and paper_summary.key_ideas %}
+    <h4 style="margin:0.6em 0 0.2em 0;font-size:0.9em;">Key Ideas</h4>
+    <ol style="margin:0.2em 0;" id="summary-key-ideas">
+      {% for idea in paper_summary.key_ideas %}
+      <li>{{ idea }}</li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+    {% if paper_summary and paper_summary.relevance %}
+    <h4 style="margin:0.6em 0 0.2em 0;font-size:0.9em;">Relevance</h4>
+    <p style="margin:0.2em 0;" id="summary-relevance">{{ paper_summary.relevance }}</p>
+    {% endif %}
+    {% if paper_summary and paper_summary.methodology %}
+    <p style="margin:0.4em 0 0 0;"><span class="badge badge-kind" id="summary-methodology">{{ paper_summary.methodology }}</span></p>
+    {% endif %}
     <p style="margin:0.3em 0 0 0;font-size:0.8em;color:#888;" id="summary-provenance">
       {% if _state == 'human-authored' %}
         Written by hand.
@@ -173,30 +194,6 @@
   </p>
   {% else %}
   <p style="color:#888;">No completeness record for this paper yet.</p>
-  {% endif %}
-</div>
-
-{# --- RESEARCH BRIEF --- #}
-<div class="attrs-section">
-  <h3>Research Brief</h3>
-  {% if research_brief %}
-  <div>
-    <h4>Key Ideas</h4>
-    <ol>
-      {% for idea in research_brief.key_ideas %}
-      <li>{{ idea }}</li>
-      {% endfor %}
-    </ol>
-    {% if research_brief.relevance %}
-    <h4>Relevance</h4>
-    <p>{{ research_brief.relevance }}</p>
-    {% endif %}
-    {% if research_brief.methodology %}
-    <p><span class="badge badge-kind">{{ research_brief.methodology }}</span></p>
-    {% endif %}
-  </div>
-  {% else %}
-  <p style="color:#888;">No research brief extracted yet.</p>
   {% endif %}
 </div>
 

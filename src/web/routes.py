@@ -769,30 +769,9 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             (source_id,),
         ).fetchall()
         evidence_ids = [r[0] for r in ev_rows]
-
-        research_brief = None
-        if evidence_ids:
-            placeholders = ",".join("?" for _ in evidence_ids)
-            rb_row = conn.execute(
-                f"SELECT rb.attrs FROM nodes rb "
-                f"JOIN edges re ON re.kind = 'extracted-from' "
-                f"AND re.source_id = rb.id AND re.target_id IN ({placeholders}) "
-                f"WHERE rb.kind = 'ResearchBrief' LIMIT 1",
-                evidence_ids,
-            ).fetchone()
-            if rb_row:
-                rb_attrs = json.loads(rb_row[0]) if isinstance(rb_row[0], str) else (rb_row[0] or {})
-                key_ideas = rb_attrs.get("key_ideas", [])
-                if isinstance(key_ideas, str):
-                    try:
-                        key_ideas = json.loads(key_ideas)
-                    except (ValueError, TypeError):
-                        key_ideas = [key_ideas]
-                research_brief = {
-                    "key_ideas": key_ideas,
-                    "relevance": rb_attrs.get("relevance", ""),
-                    "methodology": rb_attrs.get("methodology", ""),
-                }
+        # Shared by the concept query below. It used to be computed inside the
+        # removed brief block, which is why deleting that block broke this.
+        placeholders = ",".join("?" for _ in evidence_ids)
 
         concepts = []
         all_motivations: dict[str, dict] = {}
@@ -886,7 +865,24 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         paper_summary = None
         if summary_row:
             sm = json.loads(summary_row[0]) if isinstance(summary_row[0], str) else (summary_row[0] or {})
-            if (sm.get("text") or "").strip() or sm.get("state") not in (None, "", "absent"):
+            # key_ideas may have been stored as a JSON string by an older writer.
+            key_ideas = sm.get("key_ideas") or []
+            if isinstance(key_ideas, str):
+                try:
+                    key_ideas = json.loads(key_ideas)
+                except (ValueError, TypeError):
+                    key_ideas = [key_ideas]
+            sm["key_ideas"] = key_ideas if isinstance(key_ideas, list) else []
+            # A row is worth rendering if it carries prose, a state that says
+            # something, OR any enrichment. The last clause is not an edge case: a
+            # migrated row has empty text and state "absent", which is the shape of
+            # every row the merge preserved, and a guard keyed on prose alone would
+            # render nothing for exactly the papers the merge existed to save.
+            has_enrichment = bool(
+                sm["key_ideas"] or (sm.get("relevance") or "").strip()
+                or (sm.get("methodology") or "").strip()
+            )
+            if (sm.get("text") or "").strip() or sm.get("state") not in (None, "", "absent") or has_enrichment:
                 paper_summary = sm
 
         verdict_row = conn.execute(
@@ -926,7 +922,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             {
                 "source": node,
                 "s_attrs": s_attrs,
-                "research_brief": research_brief,
                 "concepts": concepts,
                 "motivations": merged_motivations,
                 "subsystems": sorted(all_subsystems),
