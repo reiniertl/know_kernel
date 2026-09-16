@@ -11,10 +11,15 @@ describes by a `summarizes-paper` edge, and there is AT MOST ONE per Source.
 That cardinality is what makes `set_summary` idempotent: a repeat call updates
 the node already attached rather than creating a second one.
 
-DISTINCT FROM ResearchBrief, permanently. A ResearchBrief summarises a *Concept*
-through the `summarizes-for` edge; today 460 briefs carry 937 such edges across
-70 of the 97 Concepts. A paper and a concept are different things to summarise,
-so neither kind is repointed at the other and neither is retired.
+SUPERSEDES ResearchBrief (decision D-9). An earlier revision of this module held
+that the two kinds were distinct permanently, on the reasoning that a brief
+summarises a *Concept* while a summary summarises a paper. Measurement overturned
+that: every one of the 458 brief-bearing papers carried exactly one brief, so the
+brief was per-paper in practice, and 935 of its 937 summarizes-for edges were
+derivable from the Source <-Evidence <-Concept chain the graph already holds while
+the other 2 dangled. They were one concept modelled twice. The brief's key_ideas,
+relevance and methodology now live here as optional fields, and the brief kind is
+retired.
 
 `summary` is deliberately absent from REQUIRED_ATTRS["Source"], for the reason
 the abstract fields are: requiring it would invalidate every existing Source node
@@ -144,6 +149,9 @@ def set_summary(
     model: str = "",
     reviewed_by: str = "",
     recompute: bool = False,
+    key_ideas: list[str] | None = None,
+    relevance: str = "",
+    methodology: str = "",
 ) -> SummaryResult:
     """Create or replace the single PaperSummary attached to a Source.
 
@@ -156,6 +164,14 @@ def set_summary(
     state in REVIEWED_STATES names no reviewer.
 
     The Source is not revalidated after the write; see carve-out 1.
+
+    `key_ideas`, `relevance` and `methodology` are the three optional fields
+    absorbed from ResearchBrief under D-9. Each is written only when supplied, so
+    a row from the single-key extractor is not given empty placeholders for
+    fields it never had, and a caller that omits them on an update does not erase
+    what a previous call stored. None of the three carries prose, so none of them
+    satisfies the non-empty-text rule that PRESENT_STATES imposes - which is why a
+    migrated brief lands at state "absent" under D-10 option (b).
 
     `recompute` refreshes the paper's completeness verdict, defaulting to OFF
     for the reason set_abstract documents: bulk writers end with one batch
@@ -187,6 +203,14 @@ def set_summary(
         "reviewed_by": reviewed_by,
         "set_at": date.today().isoformat(),
     }
+    # Written only when supplied. update_node_attrs merges, so omitting a field
+    # here leaves whatever a previous call stored rather than blanking it.
+    if key_ideas:
+        attrs["key_ideas"] = list(key_ideas)
+    if relevance:
+        attrs["relevance"] = relevance
+    if methodology:
+        attrs["methodology"] = methodology
 
     existing = _find_summary_ids(conn, source_id)
     if existing:

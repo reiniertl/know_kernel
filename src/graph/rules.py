@@ -364,12 +364,10 @@ RULES_BY_KIND = {
     "Opportunity": [],
     "Reviewer": [],
     # INV-KK-SCHEMA-KIND-DECLARATION-HONOURED: every kind in NODE_KINDS must appear
-    # here. These two were added to NODE_KINDS without a rule entry, which left them
+    # here. HumanReview was added to NODE_KINDS without a rule entry, which left it
     # silently unvalidated. Empty is deliberate, matching the other kinds above that
-    # carry no structural requirement of their own: a ResearchBrief is derived from a
-    # Source that has already been validated, and a HumanReview is a leaf record whose
-    # reviewed-by edge is enforced by EDGE_VALID_PAIRS at insert time.
-    "ResearchBrief": [],
+    # carry no structural requirement of their own: a HumanReview is a leaf record
+    # whose reviewed-by edge is enforced by EDGE_VALID_PAIRS at insert time.
     "HumanReview": [],
     "Venue": [check_venue_name_unique],
     "PaperSummary": [check_summary_state_valid],

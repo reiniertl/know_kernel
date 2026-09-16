@@ -23,7 +23,7 @@ def test_node_kinds_complete():
         "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis",
         "Kernel", "Problem", "Observation", "Discussion", "Benchmark",
         "Rejection", "Vulnerability", "Fix", "Proposal", "Trend",
-        "Opportunity", "ResearchBrief", "HumanReview", "Reviewer",
+        "Opportunity", "HumanReview", "Reviewer",
         # D-1 Option A: venue is a first-class node, not an attrs string.
         "Venue",
         # D-F: a paper summary is its own node, not Source attrs, because the
@@ -32,7 +32,8 @@ def test_node_kinds_complete():
         # D-A: a persisted, purely informational per-paper verdict.
         "PaperCompleteness",
     }
-    assert len(NODE_KINDS) == 30
+    # D-9: ResearchBrief retired, its fields absorbed by PaperSummary.
+    assert len(NODE_KINDS) == 29
 
 
 def test_edge_kinds_complete():
@@ -46,17 +47,18 @@ def test_edge_kinds_complete():
         "rejected-for", "grounded-in", "exploits", "affects-subsystem",
         "fixes", "patches", "addresses", "contradicted-by",
         "resulted-in", "motivated-by", "trend-about",
-        "opportunity-for", "supported-by", "summarizes-for", "reviewed-by",
+        "opportunity-for", "supported-by", "reviewed-by",
         # INV-KK-VENUE-SOURCE-EDGE: links a Source to its Venue.
         "published-at",
-        # IFC-KK-PAPER-SUMMARY: links a PaperSummary to its paper. Not to be
-        # confused with summarizes-for, which points a ResearchBrief at a Concept.
+        # IFC-KK-PAPER-SUMMARY: links a PaperSummary to its paper. It absorbed
+        # summarizes-for under D-9, which pointed the retired brief kind at a
+        # Concept and whose only valid source kind no longer exists.
         "summarizes-paper",
         # IFC-KK-PAPER-COMPLETENESS: links a verdict to its paper.
         "completeness-of",
     }
     assert set(EDGE_KINDS) == expected
-    assert len(EDGE_KINDS) == 40
+    assert len(EDGE_KINDS) == 39
 
 
 def test_edge_valid_pairs_covers_all_edge_kinds():

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity", "ResearchBrief", "HumanReview", "Reviewer", "Venue", "PaperSummary", "PaperCompleteness")
+NODE_KINDS = ("Concept", "Source", "Evidence", "Advisory", "Subsystem", "KernelInvariant", "FailureMode", "InteractionProtocol", "PerformanceProfile", "CompatibilityAssessment", "OptimizationGoal", "UseCaseScenario", "ComparativeAnalysis", "Kernel", "Problem", "Observation", "Discussion", "Benchmark", "Rejection", "Vulnerability", "Fix", "Proposal", "Trend", "Opportunity", "HumanReview", "Reviewer", "Venue", "PaperSummary", "PaperCompleteness")
 
 EDGE_KINDS = (
     "belongs-to",
@@ -43,7 +43,6 @@ EDGE_KINDS = (
     "trend-about",
     "opportunity-for",
     "supported-by",
-    "summarizes-for",
     "reviewed-by",
     "published-at",
     # IFC-KK-PAPER-SUMMARY: links a PaperSummary to the paper it summarises.
@@ -54,15 +53,16 @@ EDGE_KINDS = (
 
 EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "belongs-to": [("Concept", "Subsystem"), ("KernelInvariant", "Subsystem")],
-    "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence"), ("InteractionProtocol", "Evidence"), ("PerformanceProfile", "Evidence"), ("CompatibilityAssessment", "Evidence"), ("ComparativeAnalysis", "Evidence"), ("Problem", "Evidence"), ("Observation", "Evidence"), ("Discussion", "Evidence"), ("Benchmark", "Evidence"), ("Rejection", "Evidence"), ("Proposal", "Evidence"), ("ResearchBrief", "Evidence")],
+    "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence"), ("InteractionProtocol", "Evidence"), ("PerformanceProfile", "Evidence"), ("CompatibilityAssessment", "Evidence"), ("ComparativeAnalysis", "Evidence"), ("Problem", "Evidence"), ("Observation", "Evidence"), ("Discussion", "Evidence"), ("Benchmark", "Evidence"), ("Rejection", "Evidence"), ("Proposal", "Evidence")],
     "sourced-from": ("Evidence", "Source"),
     # INV-KK-VENUE-SOURCE-EDGE: a Source is linked to its Venue by this edge, and
     # to at most one. The raw Source.attrs.venue string is retained as provenance
     # but is no longer what the viewer groups on.
     "published-at": ("Source", "Venue"),
-    # IFC-KK-PAPER-SUMMARY. Distinct from summarizes-for, which points a
-    # ResearchBrief at a Concept: a paper and a concept are different things to
-    # summarise, and the two kinds coexist.
+    # IFC-KK-PAPER-SUMMARY: the only edge from a summary to the paper it describes.
+    # It absorbed the summarizes-for edge under D-9, which pointed the retired brief
+    # kind at a Concept; 935 of those 937 edges were derivable from the
+    # Source <-Evidence <-Concept chain, so dropping them cost no connectivity.
     "summarizes-paper": ("PaperSummary", "Source"),
     "completeness-of": ("PaperCompleteness", "Source"),
     "alternative-to": ("Concept", "Concept"),
@@ -97,7 +97,6 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "trend-about": ("Trend", "Concept"),
     "opportunity-for": ("Opportunity", "Concept"),
     "supported-by": [("Opportunity", "Problem"), ("Opportunity", "Observation"), ("Opportunity", "Discussion"), ("Opportunity", "Benchmark")],
-    "summarizes-for": ("ResearchBrief", "Concept"),
     "reviewed-by": ("Source", "HumanReview"),
 }
 
@@ -126,13 +125,17 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     "Proposal": ("name", "description", "status", "source_date", "artifact_class"),
     "Trend": ("title", "description", "strength", "window_start", "window_end", "artifact_class"),
     "Opportunity": ("title", "description", "confidence", "frontier_score", "artifact_class"),
-    "ResearchBrief": ("title", "key_ideas", "relevance", "methodology", "source_date", "artifact_class"),
     "HumanReview": ("reviewer", "score", "verdict", "rationale", "review_date", "artifact_class"),
     "Reviewer": ("name",),
     "Venue": ("name", "venue_type"),
     # text may be empty (states absent and rejected carry no usable text), but the
     # key must be present so a reader never has to distinguish missing from empty.
     # model, set_at and reviewed_by are optional: see IFC-KK-PAPER-SUMMARY.
+    # So are key_ideas, relevance and methodology, absorbed from the retired brief
+    # kind under D-9. They are deliberately NOT required: they are present on the
+    # 458 migrated papers and on everything the merged extractor writes, but absent
+    # from every row the single-key extractor wrote, and requiring them would
+    # invalidate those rows retroactively.
     "PaperSummary": ("text", "state"),
     # Every dimension is required: a verdict missing one is not a partial
     # verdict, it is an unreadable one, and INV-KK-COMPLETENESS-ADVISORY makes
@@ -170,7 +173,6 @@ ID_PREFIXES = {
     "Proposal": "prop-",
     "Trend": "trend-",
     "Opportunity": "opp-",
-    "ResearchBrief": "rb-",
     "HumanReview": "hrev-",
     "Reviewer": "rvr-",
     "Venue": "venue-",
