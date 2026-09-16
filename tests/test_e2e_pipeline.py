@@ -1,7 +1,13 @@
 """E2E integration test -- INV-KK-E2E-PIPELINE-SOUND.
 
-Verifies the full pipeline: ingest -> review -> extract -> export -> MCP verify.
-Uses a mock LLM client to avoid real API calls.
+Verifies the pipeline: ingest -> review -> extract. Uses a mock LLM client to
+avoid real API calls.
+
+The export and MCP-verify stages were retired with src/export/ and
+src/mcp_server/ under D-14. Assertions that only proved the exporter copied a
+node have been dropped; assertions that proved EXTRACTION produced a node were
+retargeted from the snapshot to the master database, where the same nodes live,
+so extraction coverage is unchanged.
 """
 
 from __future__ import annotations
@@ -23,12 +29,10 @@ from graph.optimization import (
     link_concept_to_scenario,
 )
 from graph.schema import init_db
-from export.exporter import export_class_b_snapshot
 from ingest.extractor import extract_concepts
 from ingest.gate import SessionGate
 from ingest.pipeline import ingest_document
 from ingest.reviewer import review_source
-from mcp_server.server import init_snapshot
 
 
 class MockLLMClient:
@@ -117,11 +121,6 @@ def master_db(tmp_path):
     return tmp_path / "master.db"
 
 
-@pytest.fixture
-def snapshot_db(tmp_path):
-    return tmp_path / "snapshot.db"
-
-
 def _link_kinvs_to_subsystems(conn):
     """Link orphaned KernelInvariants to their governing Concept's Subsystem."""
     rows = conn.execute(
@@ -134,24 +133,9 @@ def _link_kinvs_to_subsystems(conn):
         add_edge(conn, "belongs-to", kinv_id, sub_id)
 
 
-def _run_full_pipeline(master_db, snapshot_db):
-    """Run the full pipeline and return (master_conn, snap_path, concept_ids)."""
-    conn = init_db(master_db)
-    doc = master_db.parent / "test_doc.txt"
-    doc.write_text("MIT License. This paper describes virtual memory management and demand paging in modern kernels.")
-    gate = SessionGate()
-    ingest_result = ingest_document(conn, str(doc), "https://example.com/vm.txt", "paper", gate=gate)
-    review_source(conn, ingest_result.source_id, "License confirmed as MIT.", "weak-copyleft")
-    extract_result = extract_concepts(conn, ingest_result.evidence_id, gate, model="test-model", client=MockLLMClient())
-    _link_kinvs_to_subsystems(conn)
-    conn.commit()
-    export_class_b_snapshot(master_db, snapshot_db)
-    return conn, extract_result
-
-
 class TestE2EPipeline:
-    def test_full_pipeline_produces_class_b_only(self, master_db, snapshot_db):
-        """INV-KK-E2E-PIPELINE-SOUND: full pipeline, zero Class A leakage."""
+    def test_full_pipeline_extracts_all_class_b_kinds(self, master_db):
+        """INV-KK-E2E-PIPELINE-SOUND: ingest -> review -> extract produces the full Class B set."""
         conn = init_db(master_db)
 
         # Step 1: Ingest
@@ -188,21 +172,13 @@ class TestE2EPipeline:
 
         conn.commit()
 
-        # Step 4: Export
-        report = export_class_b_snapshot(master_db, snapshot_db)
-
-        # Step 5: Verify snapshot contents -- Class B only
-        snap_conn = sqlite3.connect(str(snapshot_db))
-        kinds = [row[0] for row in snap_conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()]
-        assert "Evidence" not in kinds
-        assert "Source" not in kinds
-        assert "Advisory" not in kinds
-        assert "Concept" in kinds
-
-        concept_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'Concept'").fetchone()[0]
+        # The assertions below ran against the Class B snapshot before D-14.
+        # They prove what EXTRACTION produced, not what the exporter copied, so
+        # they are retargeted to master rather than deleted.
+        concept_count = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'Concept'").fetchone()[0]
         assert concept_count == 2
 
-        for row in snap_conn.execute("SELECT attrs FROM nodes WHERE kind = 'Concept'").fetchall():
+        for row in conn.execute("SELECT attrs FROM nodes WHERE kind = 'Concept'").fetchall():
             attrs = json.loads(row[0])
             assert attrs["artifact_class"] == "abstracted-mechanism"
             assert "key_properties" in attrs
@@ -210,96 +186,35 @@ class TestE2EPipeline:
             assert len(attrs["key_properties"]) >= 1
             assert "design_rationale" in attrs
 
-        kinv_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'KernelInvariant'").fetchone()[0]
-        assert kinv_count == 2
+        assert conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'KernelInvariant'").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'governed-by'").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'FailureMode'").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'triggered-by'").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'InteractionProtocol'").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'constrains-composition'").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'PerformanceProfile'").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'profiled-by'").fetchone()[0] == 1
 
-        governed_edges = snap_conn.execute(
-            "SELECT COUNT(*) FROM edges WHERE kind = 'governed-by'"
-        ).fetchone()[0]
-        assert governed_edges == 2
-
-        fm_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'FailureMode'").fetchone()[0]
-        assert fm_count == 2
-
-        triggered_edges = snap_conn.execute(
-            "SELECT COUNT(*) FROM edges WHERE kind = 'triggered-by'"
-        ).fetchone()[0]
-        assert triggered_edges == 2
-
-        proto_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'InteractionProtocol'").fetchone()[0]
-        assert proto_count == 1
-
-        cc_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'constrains-composition'").fetchone()[0]
-        assert cc_edges == 2
-
-        profile_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'PerformanceProfile'").fetchone()[0]
-        assert profile_count == 1
-
-        profiled_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'profiled-by'").fetchone()[0]
-        assert profiled_edges == 1
-
-        for row in snap_conn.execute("SELECT attrs FROM nodes WHERE kind = 'PerformanceProfile'").fetchall():
+        for row in conn.execute("SELECT attrs FROM nodes WHERE kind = 'PerformanceProfile'").fetchall():
             attrs = json.loads(row[0])
             assert attrs["artifact_class"] == "abstracted-mechanism"
             assert attrs["metric"] == "translation latency"
 
-        compat_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'CompatibilityAssessment'").fetchone()[0]
-        assert compat_count == 1
+        assert conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'CompatibilityAssessment'").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'assesses-compatibility'").fetchone()[0] == 2
 
-        ac_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'assesses-compatibility'").fetchone()[0]
-        assert ac_edges == 2
-
-        for row in snap_conn.execute("SELECT attrs FROM nodes WHERE kind = 'CompatibilityAssessment'").fetchall():
+        for row in conn.execute("SELECT attrs FROM nodes WHERE kind = 'CompatibilityAssessment'").fetchall():
             attrs = json.loads(row[0])
             assert attrs["artifact_class"] == "abstracted-mechanism"
             assert attrs["synergy"] == "synergistic"
 
-        # ComparativeAnalysis from LLM extraction
-        cmpan_count = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'ComparativeAnalysis'").fetchone()[0]
-        assert cmpan_count == 1
+        assert conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'ComparativeAnalysis'").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'compares'").fetchone()[0] == 2
 
-        compares_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'compares'").fetchone()[0]
-        assert compares_edges == 2
-
-        for row in snap_conn.execute("SELECT attrs FROM nodes WHERE kind = 'ComparativeAnalysis'").fetchall():
+        for row in conn.execute("SELECT attrs FROM nodes WHERE kind = 'ComparativeAnalysis'").fetchall():
             attrs = json.loads(row[0])
             assert attrs["artifact_class"] == "abstracted-mechanism"
             assert attrs["dimension"] == "memory overhead"
-
-        snap_conn.close()
-
-        # Step 6: MCP init validates Class B-only
-        init_snapshot(str(snapshot_db))
-
-    def test_export_excludes_all_class_a_kinds(self, master_db, snapshot_db):
-        """Snapshot contains zero Evidence, Source, or Advisory nodes."""
-        conn = init_db(master_db)
-        doc = master_db.parent / "test_doc4.txt"
-        doc.write_text("Apache License Version 2.0. Filesystem journaling techniques.")
-
-        gate = SessionGate()
-        ingest_result = ingest_document(conn, str(doc), "https://example.com/fs.txt", "paper", gate=gate)
-        review_source(conn, ingest_result.source_id, "Apache 2.0 confirmed.", "weak-copyleft")
-        extract_result = extract_concepts(
-            conn, ingest_result.evidence_id, gate,
-            client=MockLLMClient(),
-        )
-        _link_kinvs_to_subsystems(conn)
-        conn.commit()
-
-        export_class_b_snapshot(master_db, snapshot_db)
-
-        snap_conn = sqlite3.connect(str(snapshot_db))
-        forbidden = snap_conn.execute(
-            "SELECT COUNT(*) FROM nodes WHERE kind IN ('Evidence', 'Source', 'Advisory')"
-        ).fetchone()[0]
-        assert forbidden == 0
-
-        class_b = snap_conn.execute(
-            "SELECT COUNT(*) FROM nodes WHERE kind = 'Concept'"
-        ).fetchone()[0]
-        assert class_b == 2
-        snap_conn.close()
 
     def test_extraction_idempotent_in_pipeline(self, master_db):
         """Re-extraction from same Evidence skips -- no duplicates."""
@@ -353,29 +268,8 @@ class TestE2EPipeline:
             ).fetchone()
             assert edge is not None
 
-    def test_snapshot_concepts_are_class_b(self, master_db, snapshot_db):
-        """All Concepts in snapshot have artifact_class=abstracted-mechanism."""
-        conn = init_db(master_db)
-        doc = master_db.parent / "test_doc8.txt"
-        doc.write_text("MIT License. Real-time scheduling algorithms.")
-
-        gate = SessionGate()
-        result = ingest_document(conn, str(doc), "https://example.com/rt.txt", "paper", gate=gate)
-        review_source(conn, result.source_id, "MIT confirmed.", "weak-copyleft")
-        extract = extract_concepts(conn, result.evidence_id, gate, client=MockLLMClient())
-        _link_kinvs_to_subsystems(conn)
-        conn.commit()
-
-        export_class_b_snapshot(master_db, snapshot_db)
-
-        snap_conn = sqlite3.connect(str(snapshot_db))
-        for row in snap_conn.execute("SELECT attrs FROM nodes WHERE kind = 'Concept'").fetchall():
-            attrs = json.loads(row[0])
-            assert attrs["artifact_class"] == "abstracted-mechanism"
-        snap_conn.close()
-
-    def test_kernel_invariants_in_pipeline(self, master_db, snapshot_db):
-        """KernelInvariant nodes are created during extraction and survive export."""
+    def test_kernel_invariants_in_pipeline(self, master_db):
+        """KernelInvariant nodes are created during extraction."""
         conn = init_db(master_db)
         doc = master_db.parent / "test_doc_kinv.txt"
         doc.write_text("MIT License. Concurrency control mechanisms in operating systems.")
@@ -403,37 +297,8 @@ class TestE2EPipeline:
         fm_nodes = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'FailureMode'").fetchone()[0]
         assert fm_nodes == 2
 
-        export_class_b_snapshot(master_db, snapshot_db)
-        snap_conn = sqlite3.connect(str(snapshot_db))
-        snap_kinv = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'KernelInvariant'").fetchone()[0]
-        assert snap_kinv == 2
-        snap_governed = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'governed-by'").fetchone()[0]
-        assert snap_governed == 2
-        snap_fm = snap_conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'FailureMode'").fetchone()[0]
-        assert snap_fm == 2
-        snap_triggered = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'triggered-by'").fetchone()[0]
-        assert snap_triggered == 2
-        snap_conn.close()
 
-    def test_mcp_rejects_non_class_b_snapshot(self, tmp_path):
-        """MCP init_snapshot rejects a DB containing Evidence nodes."""
-        bad_db = tmp_path / "bad_snapshot.db"
-        conn = init_db(bad_db)
-        add_node(conn, "ev-bad", "Evidence", {
-            "artifact_class": "licensed-evidence",
-            "contamination_level": "weak-copyleft",
-        })
-        conn.commit()
-        conn.close()
-
-        with pytest.raises(ValueError, match="Not a Class B-only snapshot"):
-            init_snapshot(str(bad_db))
-
-
-class TestE2EAllKinds:
-    """Full pipeline with all 15 node kinds + query chain verification."""
-
-    def _setup_full_graph(self, master_db, snapshot_db):
+    def _setup_full_graph(self, master_db):
         """Run pipeline + seed optimization/kernel nodes. Returns (master_conn, concept_ids, goal_id, kernel_id)."""
         conn = init_db(master_db)
         doc = master_db.parent / "test_all_kinds.txt"
@@ -458,12 +323,11 @@ class TestE2EAllKinds:
         link_concept_to_kernel(conn, concept_ids[1], kernel_id, since_version="2.6", maturity="production")
 
         conn.commit()
-        export_class_b_snapshot(master_db, snapshot_db)
         return conn, concept_ids, goal_id, kernel_id
 
-    def test_e2e_full_pipeline_all_kinds(self, master_db, snapshot_db):
-        """All 15 node kinds present in master, all Class B in snapshot."""
-        conn, concept_ids, goal_id, kernel_id = self._setup_full_graph(master_db, snapshot_db)
+    def test_e2e_full_pipeline_all_kinds(self, master_db):
+        """All 15 node kinds present in master."""
+        conn, concept_ids, goal_id, kernel_id = self._setup_full_graph(master_db)
 
         master_kinds = {row[0] for row in conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
         assert master_kinds >= {
@@ -474,25 +338,15 @@ class TestE2EAllKinds:
             "OptimizationGoal", "UseCaseScenario", "Kernel",
         }
 
-        snap_conn = sqlite3.connect(str(snapshot_db))
-        snap_kinds = {row[0] for row in snap_conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
-        assert "Evidence" not in snap_kinds
-        assert "Source" not in snap_kinds
-        assert "Advisory" not in snap_kinds
-        assert snap_kinds >= {
-            "Concept", "Subsystem", "KernelInvariant", "FailureMode",
-            "InteractionProtocol", "PerformanceProfile",
-            "CompatibilityAssessment", "ComparativeAnalysis",
-            "OptimizationGoal", "UseCaseScenario", "Kernel",
-        }
-
-        impl_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'implemented-in'").fetchone()[0]
+        # The snapshot half of this test proved the exporter excluded Class A
+        # kinds; the exporter is gone. The implemented-in count is about
+        # link_concept_to_kernel, so it is kept against master.
+        impl_edges = conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'implemented-in'").fetchone()[0]
         assert impl_edges == 2
-        snap_conn.close()
 
-    def test_e2e_impact_surface(self, master_db, snapshot_db):
+    def test_e2e_impact_surface(self, master_db):
         """INV-KK-QUERY-IMPACT-COMPLETE: transitive_impact returns complete surface."""
-        conn, concept_ids, _, _ = self._setup_full_graph(master_db, snapshot_db)
+        conn, concept_ids, _, _ = self._setup_full_graph(master_db)
         impact = transitive_impact(conn, concept_ids[0])
         assert len(impact["invariants"]) >= 1
         assert len(impact["failure_modes"]) >= 1
@@ -503,9 +357,9 @@ class TestE2EAllKinds:
         assert "compatibilities" in impact
         assert "comparatives" in impact
 
-    def test_e2e_ranked_recommendations(self, master_db, snapshot_db):
+    def test_e2e_ranked_recommendations(self, master_db):
         """INV-KK-QUERY-RANK-SORTED: ranked_recommendations returns sorted results."""
-        conn, concept_ids, goal_id, _ = self._setup_full_graph(master_db, snapshot_db)
+        conn, concept_ids, goal_id, _ = self._setup_full_graph(master_db)
         recs = ranked_recommendations(conn, goal_id)
         assert len(recs) == 2
         assert recs[0]["score"] >= recs[1]["score"]
@@ -513,9 +367,9 @@ class TestE2EAllKinds:
         assert "impact" in recs[0]
         assert len(recs[0]["impact"]["invariants"]) >= 1
 
-    def test_e2e_comparative_query(self, master_db, snapshot_db):
+    def test_e2e_comparative_query(self, master_db):
         """compare_neighborhoods returns diff + ComparativeAnalysis nodes exist."""
-        conn, concept_ids, _, _ = self._setup_full_graph(master_db, snapshot_db)
+        conn, concept_ids, _, _ = self._setup_full_graph(master_db)
         diff = compare_neighborhoods(conn, concept_ids[0], concept_ids[1], depth=1)
         assert "shared" in diff
         assert "only_a" in diff
@@ -527,19 +381,20 @@ class TestE2EAllKinds:
         cmpan = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'ComparativeAnalysis'").fetchone()[0]
         assert cmpan >= 1
 
-    def test_e2e_kernel_implementation(self, master_db, snapshot_db):
-        """Kernel nodes survive export, implemented-in edges have correct attrs, and query functions include Kernel neighbors."""
-        conn, concept_ids, _, kernel_id = self._setup_full_graph(master_db, snapshot_db)
+    def test_e2e_kernel_implementation(self, master_db):
+        """Kernel nodes carry correct attrs on implemented-in edges, and query functions include Kernel neighbors."""
+        conn, concept_ids, _, kernel_id = self._setup_full_graph(master_db)
 
-        snap_conn = sqlite3.connect(str(snapshot_db))
+        # Retargeted from the retired snapshot to master: these assertions are
+        # about create_kernel and link_concept_to_kernel, not about the exporter.
 
-        kernel_row = snap_conn.execute("SELECT attrs FROM nodes WHERE id = ?", (kernel_id,)).fetchone()
+        kernel_row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (kernel_id,)).fetchone()
         assert kernel_row is not None
         kernel_attrs = json.loads(kernel_row[0])
         assert kernel_attrs["name"] == "Linux"
         assert kernel_attrs["kernel_type"] == "monolithic"
 
-        impl_edges = snap_conn.execute(
+        impl_edges = conn.execute(
             "SELECT source_id, attrs FROM edges WHERE kind = 'implemented-in' AND target_id = ?",
             (kernel_id,),
         ).fetchall()
@@ -551,13 +406,12 @@ class TestE2EAllKinds:
             versions.add(attrs["since_version"])
         assert versions == {"2.5", "2.6"}
 
-        prov_edges = snap_conn.execute(
+        prov_edges = conn.execute(
             "SELECT COUNT(*) FROM edges WHERE kind = 'extracted-from' AND source_id = ?",
             (kernel_id,),
         ).fetchone()[0]
         assert prov_edges == 0
 
-        snap_conn.close()
 
         sub = subgraph_around(conn, concept_ids[0], depth=1)
         neighbor_ids = {n["id"] for n in sub["nodes"]}

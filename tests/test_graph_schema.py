@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
+import pathlib
 import sqlite3
+
+import pytest
 
 from graph.schema import (
     DATE_ATTRS,
@@ -238,3 +242,47 @@ def test_date_attrs_is_frozenset():
 
 def test_id_prefixes_covers_all_node_kinds():
     assert set(ID_PREFIXES.keys()) == set(NODE_KINDS)
+
+
+# ---------------------------------------------------------------------------
+# INV-KK-NO-OUTWARD-LLM-PATH — the Class A boundary (D-14).
+#
+# know_kernel is Class A: no code and no Class B abstraction leaves the system
+# through an LLM-facing path. The MCP server and the Class B snapshot exporter
+# that used to provide that path are retired.
+#
+# This is the invariant's check. Without it the node would carry a checked-at
+# edge to tier-implemented that nothing honours, which is the failure mode
+# CLAUDE.md rule #2 exists to prevent.
+#
+# The directory assertion is not redundant with the import assertion: `git rm`
+# leaves an untracked __pycache__ behind, and a leftover directory makes the
+# package importable again as an implicit namespace package. That happened
+# during this very change and the import check alone passed while it did.
+# ---------------------------------------------------------------------------
+
+
+def test_no_outward_llm_path_packages_are_absent():
+    """Neither retired package exists as a directory under src/."""
+    src = pathlib.Path(__file__).resolve().parents[1] / "src"
+    for name in ("mcp_server", "export"):
+        assert not (src / name).exists(), f"src/{name}/ is back"
+
+
+def test_no_outward_llm_path_packages_are_unimportable():
+    for name in ("mcp_server", "export"):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(name)
+
+
+def test_no_module_imports_the_mcp_sdk():
+    """No source file imports the mcp SDK or the retired exporter."""
+    src = pathlib.Path(__file__).resolve().parents[1] / "src"
+    offenders = []
+    for path in src.rglob("*.py"):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(("import mcp", "from mcp")) or "export.exporter" in stripped:
+                offenders.append(f"{path}: {stripped}")
+    assert offenders == [], offenders

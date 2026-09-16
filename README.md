@@ -15,8 +15,7 @@ and LLM-assisted design.
   assessments, and comparative analyses -- never raw code
 - **Answers optimization questions** -- "how do I reduce latency?", "which
   concepts work well together?", "what's the full impact of adopting X?"
-- **Serves** a structured knowledge base to humans (web UI) and LLMs
-  (MCP server with 9 query tools)
+- **Serves** a structured knowledge base to humans through the web UI
 
 The system does not say "here is how Linux implements X." It says "this
 source discusses a design pattern where X is handled by separating policy
@@ -31,8 +30,6 @@ Four apps + one shared library, all Python:
 | `know_kernel.graph` | Shared library | SQLite-backed graph engine, admissibility rules, query layer |
 | `know_kernel.ingest` | Batch service | Document parsing, license scanning, LLM extraction |
 | `know_kernel.web` | Server | FastAPI + Jinja2/HTMX human-facing views |
-| `know_kernel.export` | CLI utility | Snapshot exporter -- contamination gate for LLM path |
-| `know_kernel.mcp_server` | Container service | MCP server for LLM clients (Class B-only, 9 tools) |
 
 See [docs/architecture.md](docs/architecture.md) for the full design.
 
@@ -116,52 +113,53 @@ Six analytical query functions in the graph engine:
 | `transitive_impact(concept_id)` | Full impact surface: invariants, failures, protocols, profiles, goals, compatibilities, comparatives, scenarios |
 | `ranked_recommendations(goal_id)` | Concepts ranked by contribution + impact |
 
-## MCP tools
+## Class A: papers in, no code out
 
-The MCP server exposes 9 read-only tools to LLM clients:
+know_kernel is a **Class A** system. Papers are selected for future kernel
+work, and nothing travels outward through an LLM-facing path.
 
-| Tool | Purpose |
-|------|---------|
-| `search_concepts(query)` | Search all Class B kinds by keyword |
-| `get_concept(id)` | Single node with edges |
-| `list_subsystems()` | All subsystem nodes |
-| `get_subsystem_concepts(subsystem_id)` | Concepts in a subsystem |
-| `get_impact_surface(concept_id)` | Full impact surface for a concept |
-| `find_concepts_for_goal(goal_name)` | Ranked concepts for an optimization goal |
-| `compare_concepts(id_a, id_b)` | Neighborhood diff + comparative analyses |
-| `match_workload(workload_type)` | Scenarios + suited concepts |
-| `explore_subgraph(node_id, depth)` | Neighborhood traversal (depth capped at 3) |
+There used to be an outward path: a snapshot exporter filtered Class A content
+out of the master database to produce a Class B-only snapshot, and an MCP
+server shipped that snapshot to LLM clients. Both were retired under decision
+D-14, together with the contamination firewall they enforced. **The system no
+longer makes that guarantee, because it no longer has the path that needed
+it.** Do not read the Class A / Class B split as a live export control; it is
+now a provenance distinction only, recorded on the `artifact_class` attribute
+so a node's origin stays legible.
 
-## The contamination firewall
+What replaces it is registration rather than filtering: every artifact derived
+from a paper, by model or by human, stays registered to that paper, so the
+graph can be clustered and audited against its sources. The boundary itself is
+specified by `INV-KK-NO-OUTWARD-LLM-PATH` in the spec graph rather than by this
+paragraph.
 
-The boundary is between **humans and LLMs**, not between networks.
-
-- Humans see everything (Class A + B) -- legally established that reading
-  GPL code doesn't contaminate kernel contributions
-- LLMs get only Class B (clean abstractions) -- an LLM that saw licensed
-  implementation details creates an unprovable contamination question
-
-The **snapshot exporter** is the single enforcement point. It filters
-Class A content out of the master DB, producing a Class B-only snapshot
-that the MCP server ships with.
+Humans continue to see everything. That was never the contested half: it is
+legally established that reading GPL code does not contaminate kernel
+contributions.
 
 ## Deployment
 
 ```
-Internet side                 Air-gapped network
-+--------------+               +---------------+
-|  Ingestion   |--snapshot-->  |  Web API      | (humans)
-|  service     |               |               |
-|  (master DB) |               |  Dev containers|
-+--------------+               |  +- MCP server| (LLM via opencode)
-                               |  +- B-only DB |
-                               |  +- tooling   |
-                               +---------------+
++--------------+
+|  Ingestion   |
+|  service     |
+|  (master DB) |
++------+-------+
+       |
++------v-------+
+|  Web API     | (humans, behind the auth gate)
++--------------+
+
+No outward LLM path: the snapshot export and the MCP server it fed were
+retired under D-14.
 ```
 
-## LLM reasoning chain
+## Reasoning chain
 
-The complete reasoning chain when an LLM uses the knowledge graph:
+The query chain the graph supports, end to end. The functions named here are
+live and reachable from the web layer; the chain is written out because it is
+the order the graph is designed to be asked in, not because anything outside
+the system consumes it:
 
 ```
 Question ("design a subsystem using RCU + slab allocation")
@@ -238,8 +236,6 @@ Sessions are stored server-side, so restarting the server — including
 ```
 kk-ingest    # Run the ingestion pipeline
 kk-web       # Start the web API server behind the auth gate
-kk-export    # Export a Class B-only snapshot
-kk-mcp       # Start the MCP server
 kk-useradd   # Create a login user (and its reviewer roster entry)
 kk-userlist  # List login users
 kk-passwd    # Change a user's password

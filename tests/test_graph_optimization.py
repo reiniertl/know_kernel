@@ -19,7 +19,6 @@ from graph.optimization import (
     link_concept_to_kernel,
     link_concept_to_scenario,
 )
-from export.exporter import export_class_b_snapshot
 
 
 class TestCreateOptimizationGoal:
@@ -106,8 +105,8 @@ class TestLinkConceptToScenario:
             link_concept_to_scenario(conn, "c1", scenario_id, "amazing")
 
 
-class TestGoalScenarioInSnapshot:
-    def test_goal_scenario_in_snapshot(self, tmp_path: Path) -> None:
+class TestGoalScenarioPersisted:
+    def test_goal_scenario_persisted(self, tmp_path: Path) -> None:
         master = tmp_path / "master.db"
         conn = init_db(master)
 
@@ -135,12 +134,10 @@ class TestGoalScenarioInSnapshot:
         conn.commit()
         conn.close()
 
-        output = tmp_path / "snapshot.db"
-        report = export_class_b_snapshot(master, output)
-        assert report["issues"] == []
-        assert report["class_a_count"] == 0
-
-        snap_conn = sqlite3.connect(str(output))
+        # Retargeted from the retired Class B snapshot to master: what these
+        # assertions prove is that the create_/link_ helpers wrote the right
+        # nodes and edge attrs, not that the exporter copied them.
+        snap_conn = sqlite3.connect(str(master))
         kinds = {row[0] for row in snap_conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
         assert "OptimizationGoal" in kinds
         assert "UseCaseScenario" in kinds
@@ -180,7 +177,7 @@ class TestCreateComparativeAnalysis:
         prov_edges = conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'extracted-from' AND source_id = ?", (analysis_id,)).fetchone()[0]
         assert prov_edges == 0
 
-    def test_comparative_in_snapshot(self, tmp_path: Path) -> None:
+    def test_comparative_persisted(self, tmp_path: Path) -> None:
         master = tmp_path / "master.db"
         conn = init_db(master)
         add_node(conn, "sub1", "Subsystem", {"name": "scheduler"})
@@ -209,11 +206,8 @@ class TestCreateComparativeAnalysis:
         conn.commit()
         conn.close()
 
-        output = tmp_path / "snapshot.db"
-        report = export_class_b_snapshot(master, output)
-        assert report["issues"] == []
-
-        snap_conn = sqlite3.connect(str(output))
+        # Retargeted from the retired Class B snapshot to master.
+        snap_conn = sqlite3.connect(str(master))
         kinds = {row[0] for row in snap_conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
         assert "ComparativeAnalysis" in kinds
         compares_edges = snap_conn.execute("SELECT COUNT(*) FROM edges WHERE kind = 'compares'").fetchone()[0]
@@ -279,8 +273,8 @@ class TestLinkConceptToKernel:
         assert edge_attrs["maturity"] == "production"
 
 
-class TestKernelInSnapshot:
-    def test_kernel_in_snapshot(self, tmp_path: Path) -> None:
+class TestKernelPersisted:
+    def test_kernel_persisted(self, tmp_path: Path) -> None:
         master = tmp_path / "master.db"
         conn = init_db(master)
 
@@ -305,12 +299,10 @@ class TestKernelInSnapshot:
         conn.commit()
         conn.close()
 
-        output = tmp_path / "snapshot.db"
-        report = export_class_b_snapshot(master, output)
-        assert report["issues"] == []
-        assert report["class_a_count"] == 0
-
-        snap_conn = sqlite3.connect(str(output))
+        # Retargeted from the retired Class B snapshot to master: what these
+        # assertions prove is that the create_/link_ helpers wrote the right
+        # nodes and edge attrs, not that the exporter copied them.
+        snap_conn = sqlite3.connect(str(master))
         kinds = {row[0] for row in snap_conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
         assert "Kernel" in kinds
 
