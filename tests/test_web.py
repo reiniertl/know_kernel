@@ -1354,3 +1354,271 @@ def test_every_spec_id_cited_in_src_web_exists_in_the_dag():
     assert not dangling, "spec ids cited in src/web/ that name no node: " + json.dumps(
         dangling, indent=2, sort_keys=True
     )
+
+
+# --- Paper summary + completeness on the paper page ---
+#
+# IFC-KK-PAPER-SUMMARY, IFC-KK-PAPER-COMPLETENESS, ALG-KK-WEB-SUMMARY-EDIT.
+
+
+def _summary_paper(conn, sid="src-p1", abstract="An abstract about kernel paging."):
+    add_node(conn, sid, "Source", {
+        "url": f"https://example.com/{sid}.pdf",
+        "source_type": "preprint",
+        "license": "MIT",
+        "title": f"Paper {sid}",
+        "published_date": "2026-06-01",
+        "abstract": abstract,
+    })
+    return sid
+
+
+@pytest.fixture
+def summary_client(tmp_path):
+    """A paper with no summary and no verdict — the empty case."""
+    db_path = tmp_path / "summary_web.db"
+    conn = init_db(db_path)
+    _summary_paper(conn)
+    conn.commit()
+    conn.close()
+    app = create_app(str(db_path))
+
+    @app.middleware("http")
+    async def _as_user(request, call_next):
+        request.state.user = {"username": "kate", "role": "user", "reviewer": "kate"}
+        return await call_next(request)
+
+    with TestClient(app) as c:
+        yield c
+
+
+def _build_paper_db(tmp_path, name, state=None, text="A model wrote this summary of the paper.",
+                    with_verdict=True, concepts=0):
+    from ingest.paper_completeness import recompute_paper
+    from ingest.paper_summary import set_summary
+
+    db_path = tmp_path / name
+    conn = init_db(db_path)
+    sid = _summary_paper(conn)
+    if state is not None:
+        reviewer = "kate" if state in ("human-reviewed", "human-authored") else ""
+        set_summary(conn, sid, "" if state == "absent" else text, state, model="claude-sonnet-5",
+                    reviewed_by=reviewer)
+    for i in range(concepts):
+        add_node(conn, f"ev-{i}", "Evidence", {"artifact_class": "A", "contamination_level": "L0"})
+        add_node(conn, f"c-{i}", "Concept", {
+            "name": f"Concept {i}", "description": "d", "artifact_class": "B",
+            "key_properties": [], "tradeoffs": [], "design_rationale": "r",
+        })
+        add_edge(conn, "sourced-from", f"ev-{i}", sid)
+        add_edge(conn, "extracted-from", f"c-{i}", f"ev-{i}")
+    if with_verdict:
+        recompute_paper(conn, sid)
+    conn.commit()
+    conn.close()
+    return db_path, sid
+
+
+def _client_for(db_path):
+    app = create_app(str(db_path))
+
+    @app.middleware("http")
+    async def _as_user(request, call_next):
+        request.state.user = {"username": "kate", "role": "user", "reviewer": "kate"}
+        return await call_next(request)
+
+    return TestClient(app)
+
+
+def test_paper_page_omits_the_summary_text_when_there_is_none(summary_client):
+    body = summary_client.get("/paper/src-p1").text
+    assert body.count("No summary yet.") == 1
+    assert "A model wrote this" not in body
+
+
+def test_summary_renders_below_the_abstract(tmp_path):
+    db_path, sid = _build_paper_db(tmp_path, "below.db", state="llm-extracted")
+    with _client_for(db_path) as c:
+        body = c.get(f"/paper/{sid}").text
+    assert "A model wrote this summary of the paper." in body
+    assert body.index("id=\"abstract-section\"") < body.index("id=\"summary-section\"")
+
+
+@pytest.mark.parametrize("state,marker", [
+    ("absent", "No summary yet."),
+    ("llm-extracted", "unreviewed &mdash; model output"),
+    ("human-reviewed", "checked by a human"),
+    ("human-authored", "written by a human"),
+    ("rejected", "rejected"),
+])
+def test_each_declared_state_renders_distinguishably(tmp_path, state, marker):
+    """INV-KK-SUMMARY-STATE-VOCABULARY: all five states, each visibly different."""
+    db_path, sid = _build_paper_db(tmp_path, f"state_{state}.db", state=state)
+    with _client_for(db_path) as c:
+        body = c.get(f"/paper/{sid}").text
+    assert marker in body
+
+
+def test_a_human_summary_reads_as_more_trustworthy_than_a_model_one(tmp_path):
+    human_db, sid = _build_paper_db(tmp_path, "human.db", state="human-reviewed")
+    llm_db, _ = _build_paper_db(tmp_path, "llm.db", state="llm-extracted")
+    with _client_for(human_db) as c:
+        human = c.get(f"/paper/{sid}").text
+    with _client_for(llm_db) as c:
+        llm = c.get(f"/paper/{sid}").text
+
+    assert "checked by a person against the paper" in human
+    assert "No person has checked it." in llm
+    assert "No person has checked it." not in human
+
+
+# --- completeness rendering (INV-KK-COMPLETENESS-ADVISORY) ---
+
+
+def test_every_dimension_renders_including_the_non_gating_one(tmp_path):
+    from ingest.paper_completeness import BINARY_DIMENSIONS
+
+    db_path, sid = _build_paper_db(tmp_path, "verdict.db", state="llm-extracted", concepts=1)
+    with _client_for(db_path) as c:
+        body = c.get(f"/paper/{sid}").text
+
+    for dim in BINARY_DIMENSIONS:
+        assert f'data-dimension="{dim}"' in body, dim
+    # D-B: recorded, never gating — and it must be visible even though it is false
+    # for every paper in the corpus today.
+    assert "Kernel invariant" in body
+    assert "it never gates anything" in body
+
+
+def test_absent_dimensions_are_shown_not_hidden(tmp_path):
+    """The verdict must not hide anything — a false dimension still renders."""
+    db_path, sid = _build_paper_db(tmp_path, "sparse.db", concepts=0)
+    with _client_for(db_path) as c:
+        body = c.get(f"/paper/{sid}").text
+    assert body.count('data-dimension=') == 6
+    assert "not present" in body
+
+
+def test_a_failing_verdict_disables_nothing(tmp_path):
+    """INV-KK-COMPLETENESS-ADVISORY: an all-false paper renders the same controls."""
+    bare_db, sid = _build_paper_db(tmp_path, "bare.db", concepts=0)
+    full_db, _ = _build_paper_db(tmp_path, "full.db", state="human-authored", concepts=0)
+    with _client_for(bare_db) as c:
+        bare = c.get(f"/paper/{sid}").text
+    with _client_for(full_db) as c:
+        full = c.get(f"/paper/{sid}").text
+
+    for control in ("toggleSummaryForm()", "saveSummary(event)", "summary-edit"):
+        assert control in bare, control
+        assert control in full, control
+    assert bare.count("attrs-section") == full.count("attrs-section")
+
+
+def test_page_renders_without_a_verdict(tmp_path):
+    db_path, sid = _build_paper_db(tmp_path, "noverdict.db", with_verdict=False)
+    with _client_for(db_path) as c:
+        response = c.get(f"/paper/{sid}")
+    assert response.status_code == 200
+    assert "No completeness record for this paper yet." in response.text
+
+
+# --- query discipline ---
+
+
+def _selects_for(client, path, needle=None):
+    conn = client.app.state.conn
+    seen = []
+    conn.set_trace_callback(seen.append)
+    try:
+        assert client.get(path).status_code == 200
+    finally:
+        conn.set_trace_callback(None)
+    selects = [q for q in seen if q.strip().upper().startswith("SELECT")]
+    if needle:
+        return [q for q in selects if needle in q]
+    return selects
+
+
+def test_summary_and_verdict_cost_one_query_each_regardless_of_concepts(tmp_path):
+    """The summary and verdict lookups sit outside every loop.
+
+    The page as a whole is NOT query-bounded — paper_detail runs per-concept
+    enrichment that predates this work — so this asserts the property this
+    change is responsible for: the two new lookups are constant, not per-item.
+    """
+    small_db, sid = _build_paper_db(tmp_path, "q_small.db", state="llm-extracted", concepts=1)
+    large_db, _ = _build_paper_db(tmp_path, "q_large.db", state="llm-extracted", concepts=6)
+
+    for db_path in (small_db, large_db):
+        with _client_for(db_path) as c:
+            assert len(_selects_for(c, f"/paper/{sid}", "summarizes-paper")) == 1
+            assert len(_selects_for(c, f"/paper/{sid}", "completeness-of")) == 1
+
+
+# --- ALG-KK-WEB-SUMMARY-EDIT ---
+
+
+def test_summary_edit_is_on_the_allowlist():
+    """INV-KK-WEB-MUTATION-ALLOWLISTED."""
+    from web.routes import WEB_MUTATION_ALLOWLIST
+
+    assert "/api/summary/" in WEB_MUTATION_ALLOWLIST
+
+
+def test_summary_edit_sets_a_human_authored_summary(summary_client):
+    response = summary_client.put(
+        "/api/summary/src-p1", json={"text": "I read this paper and here is the gist.",
+                                     "state": "human-authored"})
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "human-authored"
+    body = summary_client.get("/paper/src-p1").text
+    assert "I read this paper and here is the gist." in body
+    assert "written by a human" in body
+
+
+def test_summary_edit_attributes_to_the_session_not_the_body(summary_client):
+    """INV-KK-WEB-SUMMARY-STATE-AUTHORITY: a reviewed_by in the body is ignored."""
+    response = summary_client.put(
+        "/api/summary/src-p1",
+        json={"text": "Attribution test summary text goes here.",
+              "state": "human-reviewed", "reviewed_by": "someone-else"})
+    assert response.status_code == 200, response.text
+    body = summary_client.get("/paper/src-p1").text
+    assert "kate" in body
+    assert "someone-else" not in body
+
+
+@pytest.mark.parametrize("state", ["llm-extracted", "not-a-state", "absent"])
+def test_summary_edit_refuses_states_a_human_may_not_set(summary_client, state):
+    """A person may not launder their own text as a model's."""
+    response = summary_client.put(
+        "/api/summary/src-p1", json={"text": "Some text that is long enough.", "state": state})
+    assert response.status_code == 422, response.text
+
+
+def test_summary_edit_404_for_unknown_source(summary_client):
+    response = summary_client.put(
+        "/api/summary/src-nope", json={"text": "x" * 40, "state": "human-authored"})
+    assert response.status_code == 404
+
+
+def test_summary_edit_422_for_empty_text(summary_client):
+    response = summary_client.put(
+        "/api/summary/src-p1", json={"text": "   ", "state": "human-authored"})
+    assert response.status_code == 422
+
+
+def test_summary_edit_refreshes_the_completeness_verdict(summary_client):
+    """A human is watching, so the page must reflect the edit."""
+    import json
+
+    conn = summary_client.app.state.conn
+    summary_client.put("/api/summary/src-p1",
+                       json={"text": "A summary long enough to be stored.",
+                             "state": "human-authored"})
+    row = conn.execute(
+        "SELECT n.attrs FROM edges e JOIN nodes n ON n.id = e.source_id "
+        "WHERE e.kind = 'completeness-of' AND e.target_id = 'src-p1'"
+    ).fetchone()
+    assert row is not None
+    assert json.loads(row[0])["has_summary"] is True

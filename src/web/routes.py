@@ -38,11 +38,30 @@ from graph.scoring import research_score
 # Every POST/PUT/DELETE route registered in setup_routes must have a path
 # starting with one of these prefixes. Admitting a new mutating endpoint means
 # adding its prefix here — the invariant itself does not move.
+# IFC-KK-PAPER-COMPLETENESS, in the order the interface declares them. Label and
+# one line of plain English per dimension, so the page explains what it shows
+# rather than printing six raw attribute names.
+COMPLETENESS_DIMENSION_LABELS = (
+    ("has_abstract", "Abstract", "The paper's abstract is stored."),
+    ("has_summary", "Summary", "A usable summary exists, model-written or human."),
+    ("links_concept", "Concepts", "At least one Concept was extracted from this paper."),
+    ("links_subsystem", "Subsystem", "An extracted Concept belongs to a kernel subsystem."),
+    ("links_kernel", "Kernel", "An extracted Concept is implemented in a named kernel."),
+    ("links_invariant", "Kernel invariant",
+     ("A kernel invariant was extracted from this paper. Recorded only \u2014 it never "
+      "gates anything, and today no paper in the corpus has one.")),
+)
+
+# INV-KK-WEB-SUMMARY-STATE-AUTHORITY: the states a human may set through the web.
+# "llm-extracted" is deliberately absent — only the extractor writes it.
+WEB_WRITABLE_SUMMARY_STATES = ("human-authored", "human-reviewed", "rejected")
+
 WEB_MUTATION_ALLOWLIST = (
     "/api/review/",
     "/api/reviewers",
     "/api/abstract/",
     "/api/venue/",  # covers both the single-Source edit and the merge
+    "/api/summary/",
     "/api/feed/send/",  # side-effecting shell-out, not a graph write
 )
 
@@ -856,6 +875,34 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 })
             paper_evidence.sort(key=lambda x: x.get("source_date") or "", reverse=True)
 
+        # IFC-KK-PAPER-SUMMARY and IFC-KK-PAPER-COMPLETENESS: one query each,
+        # outside every loop, so the cost does not move with concept count.
+        summary_row = conn.execute(
+            "SELECT n.attrs FROM edges e JOIN nodes n ON n.id = e.source_id "
+            "WHERE e.kind = 'summarizes-paper' AND e.target_id = ? "
+            "ORDER BY e.id LIMIT 1",
+            (source_id,),
+        ).fetchone()
+        paper_summary = None
+        if summary_row:
+            sm = json.loads(summary_row[0]) if isinstance(summary_row[0], str) else (summary_row[0] or {})
+            if (sm.get("text") or "").strip() or sm.get("state") not in (None, "", "absent"):
+                paper_summary = sm
+
+        verdict_row = conn.execute(
+            "SELECT n.attrs FROM edges e JOIN nodes n ON n.id = e.source_id "
+            "WHERE e.kind = 'completeness-of' AND e.target_id = ? "
+            "ORDER BY e.id LIMIT 1",
+            (source_id,),
+        ).fetchone()
+        completeness = None
+        if verdict_row:
+            completeness = (
+                json.loads(verdict_row[0])
+                if isinstance(verdict_row[0], str)
+                else (verdict_row[0] or {})
+            )
+
         review_rows = conn.execute(
             "SELECT n.id, n.attrs FROM edges e JOIN nodes n ON e.target_id = n.id "
             "WHERE e.kind = 'reviewed-by' AND e.source_id = ? AND n.kind = 'HumanReview'",
@@ -885,6 +932,9 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "subsystems": sorted(all_subsystems),
                 "paper_evidence": paper_evidence,
                 "existing_reviews": existing_reviews,
+                "paper_summary": paper_summary,
+                "completeness": completeness,
+                "completeness_dimensions": COMPLETENESS_DIMENSION_LABELS,
             },
         )
 
@@ -1128,6 +1178,51 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             return JSONResponse({"error": msg}, status_code=422)
         except KeyError as exc:
             return JSONResponse({"error": f"Missing field: {exc}"}, status_code=422)
+
+    @app.put("/api/summary/{source_id:path}")
+    async def edit_summary(request: Request, source_id: str):
+        """Set one paper's summary text and state by hand (ALG-KK-WEB-SUMMARY-EDIT).
+
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/summary/ is on
+        WEB_MUTATION_ALLOWLIST.
+        INV-KK-WEB-SUMMARY-STATE-AUTHORITY: the endpoint writes only human
+        states, and attribution comes from the session. A reviewed_by field in
+        the body is ignored, so no request can attribute a summary to someone
+        else, and llm-extracted is refused outright — a person may not launder
+        their own text as a model's.
+        INV-KK-VENUE-MUTATION-AUTHORISED's blast-radius rule: this touches one
+        Source, so an authenticated user is enough and no role check is added.
+        """
+        from ingest.paper_summary import set_summary
+        import dataclasses
+
+        identity = getattr(request.state, "user", None)
+        if identity is None:
+            # Defensive: the gate never lets an anonymous request this far.
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+        conn = request.app.state.conn
+        body = await request.json()
+        state = body.get("state", "human-authored")
+        if state not in WEB_WRITABLE_SUMMARY_STATES:
+            return JSONResponse(
+                {"error": f"State '{state}' is not settable by hand. Choose one of: "
+                          + ", ".join(WEB_WRITABLE_SUMMARY_STATES)},
+                status_code=422,
+            )
+        try:
+            result = set_summary(
+                conn, source_id, body.get("text", ""), state,
+                reviewed_by=identity["reviewer"],
+                recompute=True,
+            )
+            conn.commit()
+            return JSONResponse(dataclasses.asdict(result))
+        except ValueError as exc:
+            msg = str(exc)
+            if "does not exist" in msg:
+                return JSONResponse({"error": msg}, status_code=404)
+            return JSONResponse({"error": msg}, status_code=422)
 
     @app.post("/api/review/{source_id:path}")
     async def submit_review(request: Request, source_id: str):
