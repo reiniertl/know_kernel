@@ -44,9 +44,20 @@ MIN_INPUT_CHARS long. A paper offering neither is SKIPPED.
   thing. The 163 papers with neither usable input keep no summary, and the
   completeness verdict reports that truthfully.
 
-anthropic is imported lazily inside AnthropicClientAdapter.__init__ (precedent:
-src/ingest/extractor.py), so this module imports with the ingest extra absent and
-every test runs against an injected client with no network call.
+TWO PROVIDERS, ONE PORT. LLMClient is the whole contract: create_message returns
+exactly {"text", "prompt_tokens", "response_tokens"}, and each adapter normalises
+its own SDK onto those three keys because the SDKs agree on none of the names.
+The caller picks with --provider, which is authoritative — no model name is ever
+parsed to infer a provider, so an unrecognised identifier fails loudly at the API
+instead of being routed silently to the wrong SDK. See ANN-KK-SUMMARY-PROVIDER-SPLIT
+for why the project runs two providers and which paths were deliberately left on
+Anthropic.
+
+EACH SDK IS IMPORTED INSIDE ITS ADAPTER'S __init__, NEVER AT MODULE LEVEL
+(precedent: src/ingest/extractor.py). That is what lets this module import with
+the ingest extra absent and with NEITHER SDK installed, which is in turn what lets
+every test inject a fake client and make no network call. Moving either import to
+the top of the file would break the suite's offline property.
 """
 
 from __future__ import annotations
@@ -128,6 +139,73 @@ class AnthropicClientAdapter:
             "prompt_tokens": response.usage.input_tokens,
             "response_tokens": response.usage.output_tokens,
         }
+
+
+class OpenAIClientAdapter:
+    """The same port, spoken to OpenAI.
+
+    Three normalisations, none of them optional. OpenAI has no system parameter,
+    so the system prompt becomes a leading message with role "system". The reply
+    text is choices[0].message.content rather than content[0].text. And the usage
+    fields are prompt_tokens / completion_tokens rather than input / output. The
+    dict this returns must carry exactly the three keys the Protocol names,
+    because validate_summary parses response["text"] as the raw model string.
+    """
+
+    def __init__(self) -> None:
+        import openai
+
+        self._client = openai.OpenAI()
+
+    def create_message(
+        self, model: str, system: str, user: str, max_tokens: int,
+    ) -> dict[str, Any]:
+        response = self._client.chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        usage = response.usage
+        return {
+            # content is None rather than "" when the model returns nothing;
+            # validate_summary would reject None as not-a-str, but "" is the
+            # honest reading and the path it already handles.
+            "text": response.choices[0].message.content or "",
+            "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
+            "response_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
+        }
+
+
+# Provider is authoritative: it selects the adapter AND the default model.
+# Deliberately NOT inferred from the model name — a prefix rule silently
+# misroutes any identifier it does not recognise, and this codebase already
+# refuses one silent-inference shortcut in INV-KK-SUMMARY-EXTRACT-INPUT-BASIS.
+PROVIDERS = {
+    "anthropic": (AnthropicClientAdapter, "claude-sonnet-5"),
+    "openai": (OpenAIClientAdapter, "gpt-4o-mini"),
+}
+DEFAULT_PROVIDER = "anthropic"
+
+
+def default_model_for(provider: str) -> str:
+    """The model used when --model is not given. Raises on an unknown provider."""
+    if provider not in PROVIDERS:
+        raise ValueError(
+            f"Unknown provider '{provider}'. Must be one of: " + ", ".join(sorted(PROVIDERS))
+        )
+    return PROVIDERS[provider][1]
+
+
+def client_for(provider: str) -> LLMClient:
+    """Construct the adapter for a provider. The SDK import happens here."""
+    if provider not in PROVIDERS:
+        raise ValueError(
+            f"Unknown provider '{provider}'. Must be one of: " + ", ".join(sorted(PROVIDERS))
+        )
+    return PROVIDERS[provider][0]()
 
 
 @dataclass
@@ -221,9 +299,10 @@ def validate_summary(parsed: dict) -> dict | None:
 def extract_summary(
     conn: sqlite3.Connection,
     source_id: str,
-    model: str = "claude-sonnet-5",
+    model: str = "",
     dry_run: bool = False,
     client: LLMClient | None = None,
+    provider: str = DEFAULT_PROVIDER,
 ) -> SummaryExtraction:
     """Extract and store one paper summary (ALG-KK-SUMMARY-EXTRACT).
 
@@ -232,6 +311,10 @@ def extract_summary(
     paper with no usable input, and a model reply that does not validate, both
     return stored=False having written nothing.
     """
+    # Provider decides the default model; --model overrides it. Resolved here so
+    # that the identifier recorded on PaperSummary.model is the one actually used.
+    model = model or default_model_for(provider)
+
     text, basis = select_input(conn, source_id)
     if not basis:
         return SummaryExtraction(source_id=source_id, skipped=SKIP_NO_USABLE_INPUT)
@@ -245,7 +328,7 @@ def extract_summary(
         )
 
     if client is None:
-        client = AnthropicClientAdapter()
+        client = client_for(provider)
 
     response = client.create_message(
         model=model, system=SUMMARY_PROMPT, user=text, max_tokens=1024,

@@ -388,3 +388,172 @@ def test_a_legacy_four_field_reply_stores_prose_and_nothing_else(conn):
     assert attrs["text"] == GOOD
     for retired in ("key_ideas", "relevance", "methodology"):
         assert retired not in attrs
+
+
+# --- the provider port -----------------------------------------------------
+#
+# LLMClient is the whole contract between this module and any SDK:
+# create_message returns exactly {"text", "prompt_tokens", "response_tokens"}.
+# Two adapters implement it and each normalises its own SDK, which agree on none
+# of those three names. These tests drive stubs — no SDK is installed for them
+# and no network call is made.
+
+
+class _StubOpenAIResponse:
+    """The shape openai's chat.completions.create actually returns."""
+
+    class _Msg:
+        def __init__(self, content): self.content = content
+
+    class _Choice:
+        def __init__(self, content): self.message = _StubOpenAIResponse._Msg(content)
+
+    class _Usage:
+        def __init__(self, p, c): self.prompt_tokens, self.completion_tokens = p, c
+
+    def __init__(self, content, prompt=31, completion=57):
+        self.choices = [self._Choice(content)]
+        self.usage = self._Usage(prompt, completion)
+
+
+class _StubOpenAISDK:
+    """Stands in for openai.OpenAI(), recording the call it was given."""
+
+    def __init__(self, response):
+        self._response = response
+        self.seen: dict = {}
+        self.chat = self
+
+    @property
+    def completions(self):
+        return self
+
+    def create(self, **kwargs):
+        self.seen = kwargs
+        return self._response
+
+
+def _openai_adapter(response):
+    from ingest.summary_extractor import OpenAIClientAdapter
+
+    adapter = OpenAIClientAdapter.__new__(OpenAIClientAdapter)  # skip the SDK import
+    adapter._client = _StubOpenAISDK(response)
+    return adapter
+
+
+def test_openai_adapter_normalises_onto_the_three_protocol_keys():
+    adapter = _openai_adapter(_StubOpenAIResponse(GOOD, prompt=31, completion=57))
+
+    out = adapter.create_message(model="gpt-4o-mini", system="SYS", user="USR", max_tokens=1024)
+
+    assert set(out) == {"text", "prompt_tokens", "response_tokens"}
+    assert out["text"] == GOOD
+    assert out["prompt_tokens"] == 31
+    assert out["response_tokens"] == 57
+
+
+def test_openai_adapter_sends_the_system_prompt_as_a_system_message():
+    """OpenAI has no system parameter; it must become a leading message."""
+    adapter = _openai_adapter(_StubOpenAIResponse(GOOD))
+
+    adapter.create_message(model="gpt-4o-mini", system="SYS", user="USR", max_tokens=1024)
+
+    sent = adapter._client.seen
+    assert sent["model"] == "gpt-4o-mini"
+    assert sent["max_tokens"] == 1024
+    assert sent["messages"] == [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "USR"},
+    ]
+
+
+def test_openai_adapter_turns_a_null_content_into_empty_text():
+    """content is None, not '', when the model returns nothing. validate_summary
+    rejects a non-str outright; '' is the path it already handles honestly."""
+    adapter = _openai_adapter(_StubOpenAIResponse(None))
+
+    out = adapter.create_message(model="gpt-4o-mini", system="s", user="u", max_tokens=8)
+
+    assert out["text"] == ""
+    assert validate_summary(parse_llm_response(out["text"])) is None
+
+
+def test_provider_selects_the_adapter_and_its_default_model():
+    from ingest.summary_extractor import (
+        AnthropicClientAdapter,
+        OpenAIClientAdapter,
+        PROVIDERS,
+        default_model_for,
+    )
+
+    assert PROVIDERS["anthropic"][0] is AnthropicClientAdapter
+    assert PROVIDERS["openai"][0] is OpenAIClientAdapter
+    assert default_model_for("anthropic") == "claude-sonnet-5"
+    assert default_model_for("openai") == "gpt-4o-mini"
+
+
+@pytest.mark.parametrize("bad", ["gpt-4o-mini", "Anthropic", "", "azure"])
+def test_an_unknown_provider_is_rejected_rather_than_guessed(bad):
+    """Provider is authoritative and never inferred from a model name — passing
+    a MODEL where a provider belongs must fail, not silently route."""
+    from ingest.summary_extractor import client_for, default_model_for
+
+    with pytest.raises(ValueError, match="Unknown provider"):
+        default_model_for(bad)
+    with pytest.raises(ValueError, match="Unknown provider"):
+        client_for(bad)
+
+
+def test_the_recorded_model_is_the_provider_default_when_none_is_given(conn):
+    """PaperSummary.model must record what actually ran, not a stale literal."""
+    source_id = _paper(conn, abstract="x" * 200)
+
+    extract_summary(conn, source_id, client=_prose_client(), provider="openai")
+
+    assert get_summary(conn, source_id)["attrs"]["model"] == "gpt-4o-mini"
+
+
+def test_an_explicit_model_overrides_the_provider_default(conn):
+    source_id = _paper(conn, abstract="x" * 200)
+
+    extract_summary(conn, source_id, client=_prose_client(),
+                    provider="openai", model="gpt-4o")
+
+    assert get_summary(conn, source_id)["attrs"]["model"] == "gpt-4o"
+
+
+def test_the_module_imports_with_neither_sdk_installed(monkeypatch):
+    """The lazy import inside each adapter's __init__ is load-bearing: it is what
+    lets every test in this file inject a fake client and make no network call.
+
+    Proven by making both SDKs genuinely unimportable and reloading the module —
+    not by reading the source for import statements, which would pass against a
+    module that imported them under a different name.
+    """
+    import builtins
+    import importlib
+    import sys
+
+    real_import = builtins.__import__
+
+    def refuse_sdks(name, *args, **kwargs):
+        if name in ("anthropic", "openai"):
+            raise ImportError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refuse_sdks)
+    for sdk in ("anthropic", "openai"):
+        monkeypatch.delitem(sys.modules, sdk, raising=False)
+
+    module = importlib.reload(sys.modules["ingest.summary_extractor"])
+
+    # It imports, and the whole non-network surface still works.
+    assert module.default_model_for("openai") == "gpt-4o-mini"
+    assert module.validate_summary({"summary": GOOD})["summary"] == GOOD
+
+    # Constructing an adapter is the ONLY thing that needs an SDK, and it fails
+    # here precisely because the import was refused.
+    with pytest.raises(ImportError):
+        module.client_for("openai")
+    with pytest.raises(ImportError):
+        module.client_for("anthropic")

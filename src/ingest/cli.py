@@ -35,6 +35,15 @@ def main(argv: list[str] | None = None, client=None) -> None:
     parser.add_argument("--input", required=True, help="File or directory to ingest")
     parser.add_argument("--url", required=True, help="Source URL for the document(s)")
     parser.add_argument(
+        "--provider", default=None,
+        help="Model provider for the summary stage (see kk-summaries --provider). "
+             "Defaults to the extractor's own default.",
+    )
+    parser.add_argument(
+        "--model", default="",
+        help="Override the provider's default model for the summary stage.",
+    )
+    parser.add_argument(
         "--skip-summaries", action="store_true",
         help="Ingest without running the summary extraction stage. For offline "
              "runs and tests: the Anthropic client is imported lazily so this "
@@ -94,9 +103,13 @@ def main(argv: list[str] | None = None, client=None) -> None:
     ingested_ids = [r["source_id"] for r in results]
     if not args.skip_summaries and ingested_ids:
         from ingest.cli_summaries import run_batch
+        from ingest.summary_extractor import DEFAULT_PROVIDER
 
         try:
-            report = run_batch(conn, client=client, source_ids=ingested_ids)
+            report = run_batch(
+                conn, client=client, source_ids=ingested_ids,
+                provider=args.provider or DEFAULT_PROVIDER, model=args.model,
+            )
             conn.commit()
             summaries = report.as_dict()
         except Exception as exc:

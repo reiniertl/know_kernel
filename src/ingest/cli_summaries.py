@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ingest.paper_summary import PRESENT_STATES
-from ingest.summary_extractor import extract_summary
+from ingest.summary_extractor import DEFAULT_PROVIDER, PROVIDERS, extract_summary
 
 # Which Sources are papers, matching ingest.paper_completeness.
 PAPER_SOURCE_TYPES = ("preprint", "conference-paper", "conference-proceedings")
@@ -113,6 +113,8 @@ def run_batch(
     client=None,
     pause: float = CALL_INTERVAL_SECONDS,
     source_ids: list[str] | None = None,
+    provider: str = DEFAULT_PROVIDER,
+    model: str = "",
 ) -> BatchReport:
     """Run ALG-KK-SUMMARY-EXTRACT over the candidate papers.
 
@@ -128,7 +130,8 @@ def run_batch(
     for source_id in candidate_source_ids(conn, limit, source_ids):
         report.considered += 1
         result = extract_summary(
-            conn, source_id, dry_run=dry_run, client=client
+            conn, source_id, model=model, dry_run=dry_run,
+            client=client, provider=provider,
         )
         if result.skipped:
             skipped[result.skipped] += 1
@@ -156,12 +159,27 @@ def main(argv: list[str] | None = None) -> int:
         "--pause", type=float, default=CALL_INTERVAL_SECONDS,
         help="seconds between model calls",
     )
+    parser.add_argument(
+        "--provider", default=DEFAULT_PROVIDER, choices=sorted(PROVIDERS),
+        help="Which model provider to call. Selects the adapter AND its default "
+             "model; --model overrides the model only. The provider is never "
+             "inferred from a model name.",
+    )
+    parser.add_argument(
+        "--model", default="",
+        help="Override the provider's default model. Sent as given, so an "
+             "unrecognised identifier fails at the API rather than being routed "
+             "elsewhere.",
+    )
     args = parser.parse_args(argv)
 
     conn = sqlite3.connect(str(args.db))
     conn.execute("PRAGMA foreign_keys=ON")
     try:
-        report = run_batch(conn, dry_run=args.dry_run, limit=args.limit, pause=args.pause)
+        report = run_batch(
+            conn, dry_run=args.dry_run, limit=args.limit, pause=args.pause,
+            provider=args.provider, model=args.model,
+        )
         if not args.dry_run:
             conn.commit()
     finally:
