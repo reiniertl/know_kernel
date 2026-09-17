@@ -4123,4 +4123,28 @@
   <associate source="data/migrate_briefs_to_summaries.py" kind="function" name="migrate" scope="">
     <link to="ALG-KK-BRIEF-MIGRATE" relation="implements"/>
   </associate>
+
+  <associate source="src/ingest/pipeline.py" kind="function" name="ingest_document" scope="">
+    <link to="ALG-KK-INGEST-PIPELINE" relation="implements"/>
+    <link to="INV-KK-INGEST-CREATES-EVIDENCE" relation="enforces"/>
+    <link to="INV-KK-INGEST-REJECTS-STUB" relation="enforces"/>
+    <link to="INV-KK-INGEST-REJECTS-DIRECTORY" relation="enforces"/>
+  </associate>
+
+  <associate source="src/ingest/cli.py" kind="function" name="main" scope="">
+    <link to="ALG-KK-INGEST-CLI" relation="implements"/>
+  </associate>
+
+  <associate source="src/ingest/feed.py" kind="function" name="poll" scope="FeedPoller">
+    <link to="ALG-KK-FEED-POLL" relation="implements"/>
+  </associate>
+
+  <associate source="src/ingest/feed.py" kind="function" name="ingest_item" scope="">
+    <link to="INV-KK-FEED-SOURCE-NODE" relation="enforces"/>
+  </associate>
+
+  <associate source="src/graph/rules.py" kind="function" name="check_source_has_advisory" scope="">
+    <link to="INV-KK-INGEST-SOURCE-HAS-ADVISORY" relation="enforces"/>
+  </associate>
+
 </artifact-associations>
