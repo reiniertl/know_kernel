@@ -1,6 +1,9 @@
 # Combobul — the vendored engine is not tracked, but the spec store IS.
 # The spec graph's source of truth is combobul/spec/{mutations,snapshots}; spec.db
-# is only a rebuildable cache. Ignoring the whole tree left the know_kernel spec
+# is only a rebuildable cache. associations/ joins them: artifact associations are
+# stored ONLY in that XML (ril.mjs loadAssociations reads it at query time, they are
+# not in the mutation log), so leaving it ignored meant every implements/enforces
+# link in the project existed on one machine and vanished on clone. Ignoring the whole tree left the know_kernel spec
 # materialised nowhere but that cache: `ril journal coalesce` writes a .cbm here and
 # then runs `git add` on it, which failed silently against the old `combobul/` rule,
 # so the journal was never cleared and a single `ril rebuild` dropped all 103 KK
@@ -10,6 +13,7 @@ combobul/*
 combobul/spec/*
 !combobul/spec/mutations/
 !combobul/spec/snapshots/
+!combobul/spec/associations/
 .combobul/
 
 # Claude Code — runtime state (gitignored)
