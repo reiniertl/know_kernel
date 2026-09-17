@@ -1,21 +1,19 @@
 """LLM paper summary extraction (ALG-KK-SUMMARY-EXTRACT).
 
 Produces the whole merged artifact for one paper in ONE model call - prose
-summary, key ideas, relevance and methodology - and persists it at state
-llm-extracted. The three enrichment fields are the ones IFC-KK-PAPER-SUMMARY
-absorbed from the retired brief kind under D-9; asking for them in the same call
-is the point, because the corpus previously paid for two separate extractions to
-obtain them.
+prose - and persists it at state llm-extracted.
+
+D-15a removed the three enrichment fields key_ideas, relevance and methodology
+from PaperSummary, reversing the D-9 absorption, so the prompt no longer asks for
+them and the response contract no longer carries them. The call count is
+unchanged: it was always one.
 
 Prompt construction, response parsing, validation and persistence are four
 separate functions, and nothing is written until the parsed response has passed
 validation. A truncated or malformed reply therefore leaves the graph exactly as
 it found it rather than storing a fragment.
 
-THE PROSE IS THE REQUIRED HALF. A reply carrying a valid summary but malformed
-or missing enrichment still stores the summary, with the enrichment left unset:
-a paper with prose and no key ideas beats no paper at all. A reply whose summary
-itself fails validation stores nothing, enrichment included.
+A reply whose summary fails validation stores nothing.
 
 Persistence goes through ingest.paper_summary.set_summary — the sole writer for
 PaperSummary (ALG-KK-SUMMARY-SET) — rather than writing nodes here. That is what
@@ -56,7 +54,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ingest.paper_summary import set_summary
@@ -75,13 +73,6 @@ MIN_INPUT_CHARS = 100
 MIN_SUMMARY_CHARS = 40
 MAX_SUMMARY_CHARS = 4000
 
-# INV-KK-SUMMARY-KEY-IDEAS-BOUNDED. The upper bound is what the retired brief
-# rule enforced: a list of fifteen "key" ideas is a table of contents, not a
-# distillation. The lower bound rejects an empty list asserted as an answer,
-# which cannot be told apart from a model that found nothing to say.
-MIN_KEY_IDEAS = 1
-MAX_KEY_IDEAS = 5
-
 # Why a paper was not summarised. Reported by the batch, never stored on a node:
 # a skipped paper keeps NO summary rather than one stamped "absent".
 SKIP_NO_USABLE_INPUT = "no-usable-input"
@@ -94,34 +85,18 @@ SUMMARY_PROMPT = """\
 You are a research librarian for a Linux kernel development team.
 
 Given a research paper's abstract or body text, write a short summary for a
-kernel engineer deciding whether to read the paper, and extract what the paper
-contributes to kernel research.
+kernel engineer deciding whether to read the paper.
 
-Return a JSON object with these keys:
+Return a JSON object with one key:
 
 "summary": "2 to 4 sentences. What the paper does, how, and what it found."
 
-"key_ideas": [
-    "One sentence per research idea or contribution (1-5 items)"
-]
-
-"relevance": "1-2 sentences explaining why this matters for Linux kernel
-development. Be specific about which kernel subsystems or mechanisms benefit."
-
-"methodology": "The research approach used (e.g., 'eBPF-based tracing',
-'formal verification', 'hardware simulation', 'workload characterization',
-'static analysis'). One phrase or short sentence."
-
 RULES:
-- Summarise and extract ONLY what the given text actually says. Do not
-  embellish, and do not infer results the text does not state.
+- Summarise ONLY what the given text actually says. Do not embellish, and do
+  not infer results the text does not state.
 - Lead with the contribution, not with background.
-- key_ideas should capture the NOVEL contributions, not background.
-- relevance must connect to concrete kernel areas, not vague statements.
 - Name concrete kernel subsystems or mechanisms where the text names them.
 - The summary is plain prose. No bullet points, no markdown, no heading.
-- If the paper is not about kernel/OS topics, set relevance to
-  "Not directly kernel-related" and still extract key ideas.
 - If the text is too thin to summarise, return {"summary": ""} rather than
   guessing.\
 """
@@ -169,11 +144,6 @@ class SummaryExtraction:
     prompt_tokens: int = 0
     response_tokens: int = 0
     skipped: str = ""
-    # The three enrichment fields, empty when the reply did not carry them. An
-    # extraction that stored prose alone is still stored=True: see validate_summary.
-    key_ideas: list[str] = field(default_factory=list)
-    relevance: str = ""
-    methodology: str = ""
 
 
 def select_input(conn: sqlite3.Connection, source_id: str) -> tuple[str, str]:
@@ -221,44 +191,21 @@ def parse_llm_response(text: str) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _validate_key_ideas(raw: object) -> list[str] | None:
-    """Return the cleaned key_ideas list, or None if it is unusable.
-
-    INV-KK-SUMMARY-KEY-IDEAS-BOUNDED: 1 to 5 non-empty items. Blank strings are
-    dropped before counting, so a reply padding a short list with "" is judged on
-    what it actually said rather than on its length.
-    """
-    if not isinstance(raw, list):
-        return None
-    cleaned = [s.strip() for s in raw if isinstance(s, str) and s.strip()]
-    if not (MIN_KEY_IDEAS <= len(cleaned) <= MAX_KEY_IDEAS):
-        return None
-    return cleaned
-
-
-def _validate_text_field(raw: object) -> str:
-    """A non-empty stripped string, or "" — the signal for "not supplied"."""
-    return raw.strip() if isinstance(raw, str) and raw.strip() else ""
-
 
 def validate_summary(parsed: dict) -> dict | None:
-    """Return the validated fields, or None if the response is unusable.
+    """Return the validated summary, or None if the response is unusable.
 
-    None means NOTHING is written, enrichment included. An empty "summary" is a
-    valid response the prompt explicitly asks for when the text is too thin, and
-    it is treated the same way as a malformed one: no summary is stored, because
-    a summary that says nothing is worse than an honest absence.
+    None means nothing is written. An empty "summary" is a valid response the
+    prompt explicitly asks for when the text is too thin, and it is treated the
+    same way as a malformed one: no summary is stored, because a summary that
+    says nothing is worse than an honest absence.
 
-    THE PROSE IS THE REQUIRED HALF. The three enrichment fields are graded
-    separately and never sink the summary: a reply with valid prose but a
-    malformed key_ideas, or with no enrichment keys at all, is a PARTIAL SUCCESS.
-    The returned dict then simply omits what did not validate, and set_summary
-    writes only what is present rather than storing empty placeholders — an empty
-    list stored as though it were an answer would be indistinguishable from a
-    model that genuinely found nothing.
+    Under D-15a there is only one field to grade. An earlier revision graded three
+    enrichment fields separately so that a malformed one could not sink the prose;
+    those fields no longer exist on PaperSummary, so the partial-success path went
+    with them.
 
-    Returns keys: "summary" always; "key_ideas", "relevance" and "methodology"
-    only when they validated.
+    Returns {"summary": str}.
     """
     if not isinstance(parsed, dict):
         return None
@@ -268,19 +215,7 @@ def validate_summary(parsed: dict) -> dict | None:
     summary = summary.strip()
     if not (MIN_SUMMARY_CHARS <= len(summary) <= MAX_SUMMARY_CHARS):
         return None
-
-    validated: dict = {"summary": summary}
-
-    key_ideas = _validate_key_ideas(parsed.get("key_ideas"))
-    if key_ideas is not None:
-        validated["key_ideas"] = key_ideas
-    relevance = _validate_text_field(parsed.get("relevance"))
-    if relevance:
-        validated["relevance"] = relevance
-    methodology = _validate_text_field(parsed.get("methodology"))
-    if methodology:
-        validated["methodology"] = methodology
-    return validated
+    return {"summary": summary}
 
 
 def extract_summary(
@@ -338,16 +273,10 @@ def extract_summary(
         validated["summary"],
         EXTRACTOR_STATE,
         model=model,
-        key_ideas=validated.get("key_ideas"),
-        relevance=validated.get("relevance", ""),
-        methodology=validated.get("methodology", ""),
     )
 
     result.stored = True
     result.summary_id = stored.summary_id
     result.state = stored.state
     result.text = validated["summary"]
-    result.key_ideas = validated.get("key_ideas", [])
-    result.relevance = validated.get("relevance", "")
-    result.methodology = validated.get("methodology", "")
     return result

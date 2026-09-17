@@ -4120,9 +4120,6 @@
     <link to="ALG-KK-WEB-PAPER-DETAIL" relation="implements"/>
   </associate>
 
-  <associate source="data/migrate_briefs_to_summaries.py" kind="function" name="migrate" scope="">
-    <link to="ALG-KK-BRIEF-MIGRATE" relation="implements"/>
-  </associate>
 
   <associate source="src/ingest/pipeline.py" kind="function" name="ingest_document" scope="">
     <link to="ALG-KK-INGEST-PIPELINE" relation="implements"/>

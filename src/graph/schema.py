@@ -131,11 +131,9 @@ REQUIRED_ATTRS: dict[str, tuple[str, ...]] = {
     # text may be empty (states absent and rejected carry no usable text), but the
     # key must be present so a reader never has to distinguish missing from empty.
     # model, set_at and reviewed_by are optional: see IFC-KK-PAPER-SUMMARY.
-    # So are key_ideas, relevance and methodology, absorbed from the retired brief
-    # kind under D-9. They are deliberately NOT required: they are present on the
-    # 458 migrated papers and on everything the merged extractor writes, but absent
-    # from every row the single-key extractor wrote, and requiring them would
-    # invalidate those rows retroactively.
+    # key_ideas, relevance and methodology were absorbed here from the retired
+    # brief kind under D-9 and removed again under D-15a. A PaperSummary is prose
+    # plus its provenance; nothing else is stored on it.
     "PaperSummary": ("text", "state"),
     # Every dimension is required: a verdict missing one is not a partial
     # verdict, it is an unreadable one, and INV-KK-COMPLETENESS-ADVISORY makes

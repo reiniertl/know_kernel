@@ -22,7 +22,6 @@ from ingest.summary_extractor import (
     BASIS_ABSTRACT,
     BASIS_EVIDENCE,
     EXTRACTOR_STATE,
-    MAX_KEY_IDEAS,
     MIN_INPUT_CHARS,
     MIN_SUMMARY_CHARS,
     SKIP_INVALID_RESPONSE,
@@ -307,114 +306,30 @@ def test_batch_is_resumable(conn):
     assert run_batch(conn, client=MockLLMClient(raise_on_call=True), pause=0).considered == 0
 
 
-# --- the merged extraction: four fields from one call ---------------------
+# --- D-15a: the reply is prose alone --------------------------------------
 #
-# Appended rather than woven into the tests above, so that everything preceding
-# this point is the pre-merge suite passing unmodified — which is what makes the
-# regression claim checkable rather than asserted.
+# This block replaces the D-9 "four fields from one call" suite. Seven tests that
+# existed solely to exercise key_ideas, relevance and methodology were REMOVED
+# with the fields: the four-field persistence test, the one-call test, the
+# prose-only partial-success test, the key_ideas bound test, the
+# bad-ideas-does-not-sink-the-prose test, the blank-item test and the
+# exactly-MAX_KEY_IDEAS test. The four below assert properties that survive the
+# change and are rewired to a prose-only reply rather than deleted.
 
-FOUR_FIELD_REPLY = {
-    "summary": GOOD,
-    "key_ideas": ["Delegates paging policy to user space.", "Uses eBPF hooks."],
-    "relevance": "Matters for the memory-management subsystem and eBPF verifier.",
-    "methodology": "eBPF-based tracing",
-}
+PROSE_REPLY = {"summary": GOOD}
 
 
-def _four_field_client(**overrides):
-    payload = dict(FOUR_FIELD_REPLY)
+def _prose_client(**overrides):
+    payload = dict(PROSE_REPLY)
     payload.update(overrides)
     return MockLLMClient(json.dumps(payload))
 
 
-def test_four_key_response_parses_validates_and_persists_all_four(conn):
+def test_a_failing_summary_writes_nothing(conn):
+    """The prose gates the whole write."""
     source_id = _paper(conn, abstract="x" * 200)
 
-    result = extract_summary(conn, source_id, client=_four_field_client())
-
-    assert result.stored is True
-    attrs = get_summary(conn, source_id)["attrs"]
-    assert attrs["text"] == GOOD
-    assert attrs["key_ideas"] == FOUR_FIELD_REPLY["key_ideas"]
-    assert attrs["relevance"] == FOUR_FIELD_REPLY["relevance"]
-    assert attrs["methodology"] == FOUR_FIELD_REPLY["methodology"]
-
-
-def test_one_call_produces_all_four(conn):
-    """The whole point of the merge: never pay for two extractions again."""
-    source_id = _paper(conn, abstract="x" * 200)
-    client = _four_field_client()
-
-    extract_summary(conn, source_id, client=client)
-
-    assert len(client.calls) == 1
-
-
-def test_prose_only_response_still_stores_the_summary(conn):
-    """Partial success. The prose is the required half; enrichment is a bonus."""
-    source_id = _paper(conn, abstract="x" * 200)
-
-    result = extract_summary(conn, source_id, client=MockLLMClient(json.dumps({"summary": GOOD})))
-
-    assert result.stored is True
-    attrs = get_summary(conn, source_id)["attrs"]
-    assert attrs["text"] == GOOD
-    # Left unset, not written empty: an empty list stored as though it were an
-    # answer cannot be told apart from a model that genuinely found nothing.
-    assert "key_ideas" not in attrs
-    assert "relevance" not in attrs
-    assert "methodology" not in attrs
-
-
-@pytest.mark.parametrize("bad_ideas", [
-    [],
-    ["a"] * (MAX_KEY_IDEAS + 1),
-    ["", "   "],
-    "not a list",
-    42,
-])
-def test_key_ideas_outside_the_bound_is_rejected(bad_ideas):
-    """INV-KK-SUMMARY-KEY-IDEAS-BOUNDED, at the only point key_ideas enters."""
-    parsed = dict(FOUR_FIELD_REPLY, key_ideas=bad_ideas)
-
-    validated = validate_summary(parsed)
-
-    assert "key_ideas" not in validated
-
-
-def test_bad_key_ideas_does_not_sink_the_summary(conn):
-    """A malformed enrichment field must not cost the paper its prose."""
-    source_id = _paper(conn, abstract="x" * 200)
-
-    result = extract_summary(conn, source_id, client=_four_field_client(key_ideas=[]))
-
-    assert result.stored is True
-    attrs = get_summary(conn, source_id)["attrs"]
-    assert attrs["text"] == GOOD
-    assert "key_ideas" not in attrs
-    # The other two enrichment fields are graded independently and survive.
-    assert attrs["relevance"] == FOUR_FIELD_REPLY["relevance"]
-
-
-def test_blank_items_are_dropped_before_counting():
-    """A reply padding a short list with "" is judged on what it actually said."""
-    parsed = dict(FOUR_FIELD_REPLY, key_ideas=["real idea", "", "   ", "another"])
-
-    assert validate_summary(parsed)["key_ideas"] == ["real idea", "another"]
-
-
-def test_exactly_max_key_ideas_is_accepted():
-    parsed = dict(FOUR_FIELD_REPLY, key_ideas=[f"idea {i}" for i in range(MAX_KEY_IDEAS)])
-
-    assert len(validate_summary(parsed)["key_ideas"]) == MAX_KEY_IDEAS
-
-
-def test_a_failing_summary_writes_nothing_including_enrichment(conn):
-    """The prose gates the whole write. Valid enrichment cannot rescue bad prose."""
-    source_id = _paper(conn, abstract="x" * 200)
-    client = _four_field_client(summary="N/A")
-
-    result = extract_summary(conn, source_id, client=client)
+    result = extract_summary(conn, source_id, client=_prose_client(summary="N/A"))
 
     assert result.stored is False
     assert result.skipped == SKIP_INVALID_RESPONSE
@@ -424,7 +339,7 @@ def test_a_failing_summary_writes_nothing_including_enrichment(conn):
 def test_state_is_llm_extracted_even_when_the_reply_claims_otherwise(conn):
     """INV-KK-SUMMARY-LLM-NEVER-HUMAN-STATE: the state is never read from the model."""
     source_id = _paper(conn, abstract="x" * 200)
-    client = _four_field_client(state="human-authored", reviewed_by="rvr-1")
+    client = _prose_client(state="human-authored", reviewed_by="rvr-1")
 
     result = extract_summary(conn, source_id, client=client)
 
@@ -433,22 +348,43 @@ def test_state_is_llm_extracted_even_when_the_reply_claims_otherwise(conn):
     assert get_summary(conn, source_id)["attrs"]["state"] == EXTRACTOR_STATE
 
 
-def test_the_prompt_asks_for_all_four_keys():
+def test_the_prompt_asks_for_prose_alone(conn):
+    """D-15a: the prompt names summary and nothing else."""
     from ingest.summary_extractor import SUMMARY_PROMPT
 
-    for key in ("summary", "key_ideas", "relevance", "methodology"):
-        assert f'"{key}"' in SUMMARY_PROMPT
+    assert '"summary"' in SUMMARY_PROMPT
+    for retired in ("key_ideas", "relevance", "methodology"):
+        assert retired not in SUMMARY_PROMPT
 
 
 def test_reextraction_replaces_rather_than_duplicating(conn):
-    """Idempotent at the store level, with the enrichment fields in play."""
+    """Idempotent at the store level."""
     source_id = _paper(conn, abstract="x" * 200)
 
-    extract_summary(conn, source_id, client=_four_field_client())
-    extract_summary(conn, source_id, client=_four_field_client(methodology="formal verification"))
+    extract_summary(conn, source_id, client=_prose_client())
+    extract_summary(conn, source_id, client=_prose_client(summary="A second summary of the paper, long enough to validate."))
 
     count = conn.execute(
         "SELECT count(*) FROM nodes WHERE kind = 'PaperSummary'"
     ).fetchone()[0]
     assert count == 1
-    assert get_summary(conn, source_id)["attrs"]["methodology"] == "formal verification"
+    assert get_summary(conn, source_id)["attrs"]["text"].startswith("A second summary")
+
+
+def test_a_legacy_four_field_reply_stores_prose_and_nothing_else(conn):
+    """A model still answering in the old shape must not resurrect the fields."""
+    source_id = _paper(conn, abstract="x" * 200)
+    legacy = MockLLMClient(json.dumps({
+        "summary": GOOD,
+        "key_ideas": ["Delegates paging policy to user space."],
+        "relevance": "Matters for the memory-management subsystem.",
+        "methodology": "eBPF-based tracing",
+    }))
+
+    result = extract_summary(conn, source_id, client=legacy)
+
+    assert result.stored is True
+    attrs = get_summary(conn, source_id)["attrs"]
+    assert attrs["text"] == GOOD
+    for retired in ("key_ideas", "relevance", "methodology"):
+        assert retired not in attrs

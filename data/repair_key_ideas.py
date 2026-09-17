@@ -1,5 +1,12 @@
 """Repair PaperSummary.key_ideas rows corrupted into character lists.
 
+RETAINED AS A BUG RECORD, NOT AS A RUNNABLE TOOL. Decision D-15a removed
+key_ideas from PaperSummary entirely, so there is no longer a field for this
+script to repair and running it will find nothing. It is kept because the
+account below is the only written record of a failure that reached production,
+and the shape of that failure - a lossy-looking operation that was silently
+lossless, caught only by looking at the rendered page - is worth keeping.
+
 WHAT WENT WRONG
 The retired ResearchBrief kind stored key_ideas as a JSON *string*, not a list.
 data/migrate_briefs_to_summaries.py passed that value straight to set_summary,

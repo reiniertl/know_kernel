@@ -844,24 +844,15 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         paper_summary = None
         if summary_row:
             sm = json.loads(summary_row[0]) if isinstance(summary_row[0], str) else (summary_row[0] or {})
-            # key_ideas may have been stored as a JSON string by an older writer.
-            key_ideas = sm.get("key_ideas") or []
-            if isinstance(key_ideas, str):
-                try:
-                    key_ideas = json.loads(key_ideas)
-                except (ValueError, TypeError):
-                    key_ideas = [key_ideas]
-            sm["key_ideas"] = key_ideas if isinstance(key_ideas, list) else []
-            # A row is worth rendering if it carries prose, a state that says
-            # something, OR any enrichment. The last clause is not an edge case: a
-            # migrated row has empty text and state "absent", which is the shape of
-            # every row the merge preserved, and a guard keyed on prose alone would
-            # render nothing for exactly the papers the merge existed to save.
-            has_enrichment = bool(
-                sm["key_ideas"] or (sm.get("relevance") or "").strip()
-                or (sm.get("methodology") or "").strip()
-            )
-            if (sm.get("text") or "").strip() or sm.get("state") not in (None, "", "absent") or has_enrichment:
+            # A row is worth rendering if it carries prose or a state that says
+            # something. Under D-15a there is nothing else it could carry: the
+            # enrichment clause that used to sit here existed because a migrated
+            # row had empty text and state "absent" yet still held key_ideas,
+            # relevance and methodology. Those fields are gone, so such a row now
+            # holds nothing and correctly renders nothing — which is also what
+            # removes the contradiction that started this work, where the page
+            # printed "No summary yet." underneath rendered content.
+            if (sm.get("text") or "").strip() or sm.get("state") not in (None, "", "absent"):
                 paper_summary = sm
 
         verdict_row = conn.execute(

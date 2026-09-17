@@ -238,3 +238,35 @@ def test_clearing_a_summary_does_not_trip_source_validation(conn):
     set_summary(conn, src, "A summary.", "llm-extracted")
     assert clear_summary(conn, src).ok
     assert get_node(conn, src) is not None
+
+
+# ---------------------------------------------------------------------------
+# D-15a: the three fields D-9 absorbed from the retired brief kind are gone, and
+# so are the parameters that carried them. These pin the new call shape so the
+# old one cannot creep back in — a caller passing key_ideas would otherwise be
+# silently accepted by **kwargs-style tolerance and write nothing.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("retired", ["key_ideas", "relevance", "methodology"])
+def test_set_summary_rejects_the_retired_parameters(conn, retired):
+    src = _source(conn)
+    with pytest.raises(TypeError):
+        set_summary(conn, src, "A usable summary of the paper.", "human-authored",
+                    reviewed_by="rvr-1", **{retired: "anything"})
+
+
+def test_set_summary_writes_prose_and_provenance_only(conn):
+    src = _source(conn)
+    set_summary(conn, src, "A usable summary of the paper.", "human-authored",
+                reviewed_by="rvr-1")
+    attrs = get_summary(conn, src)["attrs"]
+    assert set(attrs) == {"text", "state", "model", "reviewed_by", "set_at"}
+
+
+def test_normalise_key_ideas_is_gone():
+    """It existed only to parse the retired field. Its bug record lives on in
+    data/repair_key_ideas.py, which is kept for that purpose."""
+    import ingest.paper_summary as mod
+
+    assert not hasattr(mod, "normalise_key_ideas")

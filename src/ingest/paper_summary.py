@@ -17,9 +17,24 @@ summarises a *Concept* while a summary summarises a paper. Measurement overturne
 that: every one of the 458 brief-bearing papers carried exactly one brief, so the
 brief was per-paper in practice, and 935 of its 937 summarizes-for edges were
 derivable from the Source <-Evidence <-Concept chain the graph already holds while
-the other 2 dangled. They were one concept modelled twice. The brief's key_ideas,
-relevance and methodology now live here as optional fields, and the brief kind is
+the other 2 dangled. They were one concept modelled twice. The brief kind is
 retired.
+
+D-15a THEN REVERSED THE ABSORPTION. D-9 moved the brief's key_ideas, relevance and
+methodology here as optional fields; D-15a removed them again. A summary is now
+prose plus its provenance, which is exactly what SUMMARY_STATES measures and what
+the completeness verdict reads. The three fields held real data on all 458 nodes
+and are carried by no other node kind, so the deletion is lossless only once
+ALG-KK-SUMMARY-EXTRACT-BATCH has written prose over the corpus; that cost was
+accepted knowingly. See IFC-KK-PAPER-SUMMARY, which preserves the superseded
+argument in full.
+
+normalise_key_ideas WAS DELETED WITH THE FIELDS, and it recorded a real shipped
+bug worth remembering: the brief stored key_ideas as a JSON *string*, and calling
+list() on a string yields one element per CHARACTER, so the migration wrote
+['[', '"', 'C', 'o', ...] into all 458 rows and the paper page rendered one list
+item per letter. data/repair_key_ideas.py is kept as the written account of that
+failure even though the field it repairs no longer exists.
 
 `summary` is deliberately absent from REQUIRED_ATTRS["Source"], for the reason
 the abstract fields are: requiring it would invalidate every existing Source node
@@ -43,7 +58,6 @@ Two carve-outs, both mandatory and both already proven necessary elsewhere:
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import date
@@ -85,35 +99,6 @@ def summary_is_present(state: str | None) -> bool:
     web layer cannot disagree about what "has a summary" means.
     """
     return state in PRESENT_STATES
-
-
-def normalise_key_ideas(raw: object) -> list[str]:
-    """Coerce whatever a caller supplies into a list of non-empty strings.
-
-    NEVER call list() on this value directly. The retired brief kind stored
-    key_ideas as a JSON *string*, and list() on a string yields one element per
-    CHARACTER: passing a brief's field straight through turned
-    '["Compiler operator fusion..."]' into ['[', '"', 'C', 'o', ...]. That
-    shipped, corrupted all 458 migrated rows, and rendered one list item per
-    character on the paper page. A string is parsed here, never iterated.
-
-    Returns [] for anything unusable, which callers treat as "not supplied" and
-    omit from the stored attrs rather than writing an empty list.
-    """
-    if raw is None:
-        return []
-    if isinstance(raw, str):
-        text = raw.strip()
-        if not text:
-            return []
-        try:
-            raw = json.loads(text)
-        except (ValueError, TypeError):
-            # A bare string is one idea, not a sequence of letters.
-            return [text]
-    if not isinstance(raw, (list, tuple)):
-        return []
-    return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
 
 
 @dataclass
@@ -179,9 +164,6 @@ def set_summary(
     model: str = "",
     reviewed_by: str = "",
     recompute: bool = False,
-    key_ideas: list[str] | None = None,
-    relevance: str = "",
-    methodology: str = "",
 ) -> SummaryResult:
     """Create or replace the single PaperSummary attached to a Source.
 
@@ -195,13 +177,10 @@ def set_summary(
 
     The Source is not revalidated after the write; see carve-out 1.
 
-    `key_ideas`, `relevance` and `methodology` are the three optional fields
-    absorbed from ResearchBrief under D-9. Each is written only when supplied, so
-    a row from the single-key extractor is not given empty placeholders for
-    fields it never had, and a caller that omits them on an update does not erase
-    what a previous call stored. None of the three carries prose, so none of them
-    satisfies the non-empty-text rule that PRESENT_STATES imposes - which is why a
-    migrated brief lands at state "absent" under D-10 option (b).
+    Under D-15a this function takes no key_ideas, relevance or methodology: the
+    three fields D-9 absorbed from the retired brief kind are gone from
+    PaperSummary, and so are the parameters that carried them. Passing them is a
+    TypeError, which is deliberate - the old call shape must not creep back.
 
     `recompute` refreshes the paper's completeness verdict, defaulting to OFF
     for the reason set_abstract documents: bulk writers end with one batch
@@ -233,16 +212,10 @@ def set_summary(
         "reviewed_by": reviewed_by,
         "set_at": date.today().isoformat(),
     }
-    # Written only when supplied. update_node_attrs merges, so omitting a field
-    # here leaves whatever a previous call stored rather than blanking it.
-    normalised_ideas = normalise_key_ideas(key_ideas)
-    if normalised_ideas:
-        attrs["key_ideas"] = normalised_ideas
-    if relevance:
-        attrs["relevance"] = relevance
-    if methodology:
-        attrs["methodology"] = methodology
-
+    # NOTE: update_node_attrs MERGES ({**existing, **new}), so this function can
+    # add or change a key but never remove one. Retiring the three D-9 fields
+    # therefore needed a deliberate data migration; no amount of re-extraction
+    # would have cleared them.
     existing = _find_summary_ids(conn, source_id)
     if existing:
         summary_id = existing[0]
