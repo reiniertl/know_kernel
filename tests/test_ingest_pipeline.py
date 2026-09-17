@@ -76,3 +76,77 @@ class TestIngestDocument:
         ingest_document(conn, doc_file, "https://example.com/doc.txt", "paper")
         count = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'Advisory'").fetchone()[0]
         assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Composition with the summary extractor.
+#
+# ingest_document used to store only description = parsed.text[:120] and no text
+# attribute at all. select_input reads Source.attrs.abstract first and then the
+# longest Evidence.attrs.text of at least MIN_INPUT_CHARS; ingestion writes no
+# abstract either, so every document ingested through this path was skipped by
+# ALG-KK-SUMMARY-EXTRACT with SKIP_NO_USABLE_INPUT. These tests pin the two
+# modules together — test_select_input_finds_a_basis_for_an_ingested_source is
+# the one that actually proves they compose, and it fails against the old code.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def substantive_file(tmp_path):
+    """A document long enough to be classified substantive AND to clear
+    MIN_INPUT_CHARS, which the six-word doc_file fixture does not."""
+    f = tmp_path / "paper.txt"
+    f.write_text(
+        "Scheduler latency under sustained load is dominated by run queue "
+        "contention rather than by context switch cost. " * 12
+    )
+    return str(f)
+
+
+class TestIngestEvidenceText:
+    def test_evidence_carries_the_document_text(self, conn, substantive_file):
+        from pathlib import Path
+
+        result = ingest_document(conn, substantive_file, "https://example.com/p", "preprint")
+        text = conn.execute(
+            "SELECT json_extract(attrs, '$.text') FROM nodes WHERE id = ?",
+            (result.evidence_id,),
+        ).fetchone()[0]
+        assert text == Path(substantive_file).read_text()
+
+    def test_evidence_description_is_still_the_short_label(self, conn, substantive_file):
+        result = ingest_document(conn, substantive_file, "https://example.com/p", "preprint")
+        desc = conn.execute(
+            "SELECT json_extract(attrs, '$.description') FROM nodes WHERE id = ?",
+            (result.evidence_id,),
+        ).fetchone()[0]
+        assert len(desc) <= 120
+        # description and text are both written; neither substitutes for the other.
+        assert desc != conn.execute(
+            "SELECT json_extract(attrs, '$.text') FROM nodes WHERE id = ?",
+            (result.evidence_id,),
+        ).fetchone()[0]
+
+    def test_evidence_text_is_bounded(self, conn, tmp_path):
+        """MAX_EVIDENCE_TEXT_CHARS bounds storage and the size of the extraction
+        request, since select_input passes what it finds to the model untruncated."""
+        from ingest.pipeline import MAX_EVIDENCE_TEXT_CHARS
+
+        big = tmp_path / "big.txt"
+        big.write_text("kernel scheduling latency measurement. " * 4000)
+        assert big.stat().st_size > MAX_EVIDENCE_TEXT_CHARS
+        result = ingest_document(conn, str(big), "https://example.com/big", "preprint")
+        text = conn.execute(
+            "SELECT json_extract(attrs, '$.text') FROM nodes WHERE id = ?",
+            (result.evidence_id,),
+        ).fetchone()[0]
+        assert len(text) == MAX_EVIDENCE_TEXT_CHARS
+
+    def test_select_input_finds_a_basis_for_an_ingested_source(self, conn, substantive_file):
+        """The composition proof. Fails against pre-change ingest_document."""
+        from ingest.summary_extractor import BASIS_EVIDENCE, select_input
+
+        result = ingest_document(conn, substantive_file, "https://example.com/p", "preprint")
+        text, basis = select_input(conn, result.source_id)
+        assert basis == BASIS_EVIDENCE, "ingested Source offers the extractor no usable input"
+        assert len(text) >= 100

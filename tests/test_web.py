@@ -38,7 +38,7 @@ def client(tmp_path):
     add_node(conn, "sub-1", "Subsystem", {"name": "Scheduler"})
     add_node(conn, "src-1", "Source", {
         "url": "https://example.com/paper.pdf",
-        "source_type": "paper",
+        "source_type": "preprint",
         "license": "MIT",
     })
     add_edge(conn, "extracted-from", "concept-1", "ev-1")
@@ -155,7 +155,7 @@ def rich_client(tmp_path):
         "artifact_class": "A", "contamination_level": "weak-copyleft",
     })
     add_node(conn, "src-1", "Source", {
-        "url": "https://example.com", "source_type": "paper", "license": "MIT",
+        "url": "https://example.com", "source_type": "preprint", "license": "MIT",
     })
     add_node(conn, "adv-1", "Advisory", {"assessment": "approved", "contamination_confirmed": "none"})
     add_edge(conn, "governed-by", "kinv-1", "c-1")
@@ -267,7 +267,7 @@ def test_source_detail_renders_clickable_url(rich_client):
     assert '<a href="https://example.com" target="_blank" rel="noopener">' in text
     assert "Documentation URL" in text
     assert "Source Type" in text
-    assert "paper" in text
+    assert "preprint" in text
     assert "License" in text
     assert "MIT" in text
 
@@ -1072,7 +1072,7 @@ def research_radar_client(tmp_path):
     for source_id, evidence_id, concept_id, title, published in papers:
         add_node(conn, source_id, "Source", {
             "url": f"https://example.com/{source_id}.pdf",
-            "source_type": "paper",
+            "source_type": "preprint",
             "license": "MIT",
             "title": title,
             "published_date": published,
@@ -1159,7 +1159,7 @@ def venue_client(tmp_path):
     db_path = tmp_path / "venue_web.db"
     conn = init_db(db_path)
 
-    def _src(sid, venue, source_type="paper", date="2026-06-01"):
+    def _src(sid, venue, source_type="preprint", date="2026-06-01"):
         add_node(conn, sid, "Source", {
             "url": f"https://example.com/{sid}.pdf",
             "source_type": source_type,
@@ -1270,7 +1270,7 @@ def test_venue_merge_succeeds_for_an_admin(tmp_path):
     conn = init_db(db_path)
     for sid, venue in (("src-1", "OSDI"), ("src-2", "SOSP")):
         add_node(conn, sid, "Source", {
-            "url": f"https://example.com/{sid}", "source_type": "paper",
+            "url": f"https://example.com/{sid}", "source_type": "preprint",
             "license": "MIT", "title": sid,
         })
         set_venue(conn, sid, venue, "conference")
@@ -1907,7 +1907,7 @@ def motivating_client(tmp_path):
     })
     add_node(conn, "src-1", "Source", {
         "url": "https://example.com/paper.pdf",
-        "source_type": "paper",
+        "source_type": "preprint",
         "license": "MIT",
         "title": "A Paper",
     })

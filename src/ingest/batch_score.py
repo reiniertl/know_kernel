@@ -135,7 +135,7 @@ def export_review_list(conn: sqlite3.Connection, output_path: str | Path) -> int
     rows = conn.execute(
         "SELECT id, attrs FROM nodes WHERE kind = 'Source' "
         "AND json_extract(attrs, '$.source_type') IN "
-        "('paper','preprint','conference-paper','conference-proceedings') "
+        "('preprint','conference-paper','conference-proceedings') "
         "ORDER BY json_extract(attrs, '$.published_date') DESC, id",
     ).fetchall()
 

@@ -21,8 +21,11 @@ def main() -> None:
     parser.add_argument("--input", required=True, help="File or directory to ingest")
     parser.add_argument("--url", required=True, help="Source URL for the document(s)")
     parser.add_argument(
-        "--type", dest="source_type", default="paper",
-        help="Source type (paper, code, discussion, etc.)",
+        "--type", dest="source_type", default="preprint",
+        help="Source type. The canonical paper vocabulary is preprint, "
+             "conference-paper, conference-proceedings "
+             "(INV-KK-PAPER-SOURCE-TYPE-VOCABULARY); other values are legal but "
+             "are not treated as papers.",
     )
     args = parser.parse_args()
 

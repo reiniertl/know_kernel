@@ -486,7 +486,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         """
         conn = request.app.state.conn
 
-        _RESEARCH_TYPES = "('paper','preprint','conference-paper','conference-proceedings')"
+        _RESEARCH_TYPES = "('preprint','conference-paper','conference-proceedings')"
         _SOURCE_WHERE = (
             "FROM nodes WHERE kind = 'Source' "
             f"AND json_extract(attrs, '$.source_type') IN {_RESEARCH_TYPES}"
@@ -963,7 +963,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "JOIN nodes c ON c.id = ce.source_id AND c.kind = 'Concept' "
             "WHERE s.kind = 'Source' "
             "AND json_extract(s.attrs, '$.source_type') IN "
-            "('paper','preprint','conference-paper','conference-proceedings') "
+            "('preprint','conference-paper','conference-proceedings') "
             "ORDER BY c.id, json_extract(s.attrs, '$.published_date') DESC"
         ).fetchall()
 
