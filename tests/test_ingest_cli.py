@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -135,3 +136,131 @@ class TestPaperSourceTypeVocabulary:
             assert values == set(CANONICAL_PAPER_TYPES), (
                 f"{path} names {sorted(values)}, canonical is {sorted(CANONICAL_PAPER_TYPES)}"
             )
+
+
+# ---------------------------------------------------------------------------
+# D-15b: summary extraction as a final stage of kk-ingest.
+#
+# It is a STAGE, not a call inside ingest_document. ingest_document is
+# per-document, synchronous and offline; extraction is a rate-limited network
+# call. Inline, one API failure would leave a document written but unsummarised
+# with nothing recording which half failed. As a stage the documents are already
+# committed before the first model call — which is what
+# test_a_failed_summary_stage_keeps_the_documents actually proves.
+#
+# Every test here drives an INJECTED client and makes no network call, following
+# the pattern src/ingest/summary_extractor.py documents for exactly this reason.
+# ---------------------------------------------------------------------------
+
+_SUMMARY = ("This paper delegates Linux paging policy to user space via eBPF hooks. "
+            "It reports a measurable reduction in page-fault latency on NUMA hardware.")
+
+
+class _StageClient:
+    """Returns a valid summary, or raises to simulate an API failure."""
+
+    def __init__(self, raise_on_call: bool = False):
+        self.calls: list[str] = []
+        self.raise_on_call = raise_on_call
+
+    def create_message(self, model: str, system: str, user: str, max_tokens: int) -> dict:
+        if self.raise_on_call:
+            raise RuntimeError("simulated API failure")
+        self.calls.append(user)
+        return {"text": json.dumps({"summary": _SUMMARY}),
+                "prompt_tokens": 11, "response_tokens": 22}
+
+
+def _substantive(tmp_path: Path, name: str = "paper.txt") -> Path:
+    doc = tmp_path / name
+    doc.write_text(
+        "Scheduler latency under sustained load is dominated by run queue "
+        "contention rather than by context switch cost. " * 12
+    )
+    return doc
+
+
+def _run_main(argv: list[str], client=None) -> None:
+    """kk-ingest in-process, so a client can be injected. main() exits."""
+    from ingest.cli import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(argv, client=client)
+    assert exc.value.code == 0, "ingestion itself must have succeeded"
+
+
+def _summaries(db: Path) -> list[tuple[str, str]]:
+    conn = sqlite3.connect(str(db))
+    try:
+        return [
+            (r[0], json.loads(r[1])["state"])
+            for r in conn.execute("SELECT id, attrs FROM nodes WHERE kind = 'PaperSummary'")
+        ]
+    finally:
+        conn.close()
+
+
+class TestSummaryStage:
+    def test_the_stage_runs_after_the_documents_land(self, tmp_path: Path) -> None:
+        db = tmp_path / "master.db"
+        client = _StageClient()
+
+        _run_main(["--db", str(db), "--input", str(_substantive(tmp_path)),
+                   "--url", "https://example.com/p", "--type", "preprint"], client=client)
+
+        assert len(client.calls) == 1, "one document, one model call"
+        rows = _summaries(db)
+        assert len(rows) == 1
+        assert rows[0][1] == "llm-extracted"
+
+    def test_skip_summaries_suppresses_the_stage(self, tmp_path: Path) -> None:
+        db = tmp_path / "master.db"
+        client = _StageClient(raise_on_call=True)
+
+        _run_main(["--db", str(db), "--input", str(_substantive(tmp_path)),
+                   "--url", "https://example.com/p", "--type", "preprint",
+                   "--skip-summaries"], client=client)
+
+        assert _summaries(db) == []
+        conn = sqlite3.connect(str(db))
+        try:
+            assert conn.execute("SELECT count(*) FROM nodes WHERE kind='Source'").fetchone()[0] == 1
+        finally:
+            conn.close()
+
+    def test_a_failed_summary_stage_keeps_the_documents(self, tmp_path: Path) -> None:
+        """The whole argument for a stage over an inline call, proven."""
+        db = tmp_path / "master.db"
+        client = _StageClient(raise_on_call=True)
+
+        _run_main(["--db", str(db), "--input", str(_substantive(tmp_path)),
+                   "--url", "https://example.com/p", "--type", "preprint"], client=client)
+
+        conn = sqlite3.connect(str(db))
+        try:
+            assert conn.execute("SELECT count(*) FROM nodes WHERE kind='Source'").fetchone()[0] == 1
+            assert conn.execute("SELECT count(*) FROM nodes WHERE kind='Evidence'").fetchone()[0] == 1
+            assert conn.execute(
+                "SELECT count(*) FROM edges WHERE kind='sourced-from'"
+            ).fetchone()[0] == 1
+        finally:
+            conn.close()
+        assert _summaries(db) == [], "the summary is what was lost, not the document"
+
+    def test_the_stage_is_scoped_to_what_this_run_ingested(self, tmp_path: Path) -> None:
+        """Unscoped, one ingest would summarise every unsummarised paper in the
+        database. The second run must cost exactly one call, not two."""
+        db = tmp_path / "master.db"
+        first, second = _substantive(tmp_path, "a.txt"), _substantive(tmp_path, "b.txt")
+
+        skip = _StageClient(raise_on_call=True)
+        _run_main(["--db", str(db), "--input", str(first), "--url", "https://example.com/a",
+                   "--type", "preprint", "--skip-summaries"], client=skip)
+        assert _summaries(db) == []
+
+        client = _StageClient()
+        _run_main(["--db", str(db), "--input", str(second), "--url", "https://example.com/b",
+                   "--type", "preprint"], client=client)
+
+        assert len(client.calls) == 1, "the unsummarised first paper must be left alone"
+        assert len(_summaries(db)) == 1

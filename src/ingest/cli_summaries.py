@@ -59,7 +59,9 @@ class BatchReport:
 
 
 def candidate_source_ids(
-    conn: sqlite3.Connection, limit: int | None = None
+    conn: sqlite3.Connection,
+    limit: int | None = None,
+    source_ids: list[str] | None = None,
 ) -> list[str]:
     """Papers with no summary in a present state, in stable id order.
 
@@ -67,7 +69,20 @@ def candidate_source_ids(
     usable summary. A human-authored one is not, and neither is a human-reviewed
     one — re-extracting over human work is the thing this query exists to
     prevent.
+
+    `source_ids` NARROWS the sweep to an explicit set; it does not relax what
+    qualifies. Every clause below still applies, so an id that names a
+    human-summarised paper, or a Source that is not a paper type, is excluded
+    even when passed in explicitly. This is what the kk-ingest stage uses to keep
+    its cost proportional to its input (D-15b): unscoped, ingesting one document
+    would consider every unsummarised paper in the corpus.
+
+    An EMPTY list means exactly that — nothing to do — and is distinct from None,
+    which means sweep everything. Getting those two confused would turn a
+    no-op ingest into a corpus migration.
     """
+    if source_ids is not None and not source_ids:
+        return []
     placeholders = ", ".join("?" for _ in PAPER_SOURCE_TYPES)
     present = ", ".join("?" for _ in PRESENT_STATES)
     sql = (
@@ -81,6 +96,10 @@ def candidate_source_ids(
         f"ORDER BY n.id"
     )
     params: list = [*PAPER_SOURCE_TYPES, *PRESENT_STATES]
+    if source_ids is not None:
+        scoped = ", ".join("?" for _ in source_ids)
+        sql = sql.replace("ORDER BY n.id", f"AND n.id IN ({scoped}) ORDER BY n.id")
+        params.extend(source_ids)
     if limit is not None:
         sql += " LIMIT ?"
         params.append(limit)
@@ -93,12 +112,20 @@ def run_batch(
     limit: int | None = None,
     client=None,
     pause: float = CALL_INTERVAL_SECONDS,
+    source_ids: list[str] | None = None,
 ) -> BatchReport:
+    """Run ALG-KK-SUMMARY-EXTRACT over the candidate papers.
+
+    Two callers. kk-summaries passes no source_ids and sweeps the corpus.
+    ALG-KK-INGEST-CLI passes the Sources its own invocation created, so an
+    ingest costs one call per document rather than one per unsummarised paper
+    in the database (D-15b).
+    """
     report = BatchReport()
     basis: collections.Counter = collections.Counter()
     skipped: collections.Counter = collections.Counter()
 
-    for source_id in candidate_source_ids(conn, limit):
+    for source_id in candidate_source_ids(conn, limit, source_ids):
         report.considered += 1
         result = extract_summary(
             conn, source_id, dry_run=dry_run, client=client
