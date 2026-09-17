@@ -286,3 +286,51 @@ def test_no_module_imports_the_mcp_sdk():
             if stripped.startswith(("import mcp", "from mcp")) or "export.exporter" in stripped:
                 offenders.append(f"{path}: {stripped}")
     assert offenders == [], offenders
+
+
+# ---------------------------------------------------------------------------
+# Referential integrity of the shipped graph.
+#
+# data/master.db carried 5 extracted-from edges whose target Evidence node did
+# not exist: three to ev-conf-aabd4cc6 and two to ev-conf-8a97279c. Nothing in
+# the engine forbids that — add_edge validates the edge kind and the endpoint
+# kinds, but a later delete_node that misses a dependent leaves the edge behind
+# pointing at nothing. The web layer joins through extracted-from constantly, so
+# a dangling edge is a row that silently drops out of every query rather than an
+# error anyone sees. These assert the condition directly instead of trusting the
+# deletion that removed them.
+# ---------------------------------------------------------------------------
+
+
+def _master_db() -> pathlib.Path:
+    return pathlib.Path(__file__).resolve().parents[1] / "data" / "master.db"
+
+
+def test_master_db_has_no_edge_with_a_missing_target():
+    db = _master_db()
+    if not db.exists():
+        pytest.skip("data/master.db not present")
+    conn = sqlite3.connect(str(db))
+    try:
+        rows = conn.execute(
+            "SELECT e.kind, e.source_id, e.target_id FROM edges e "
+            "WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.id = e.target_id)"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [], f"{len(rows)} edge(s) point at a missing target: {rows[:10]}"
+
+
+def test_master_db_has_no_edge_with_a_missing_source():
+    db = _master_db()
+    if not db.exists():
+        pytest.skip("data/master.db not present")
+    conn = sqlite3.connect(str(db))
+    try:
+        rows = conn.execute(
+            "SELECT e.kind, e.source_id, e.target_id FROM edges e "
+            "WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.id = e.source_id)"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [], f"{len(rows)} edge(s) have a missing source: {rows[:10]}"
