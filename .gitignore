@@ -56,6 +56,13 @@ data/auth.db-shm
 *.db-wal
 *.db-shm
 
+# Pre-run database backups (INV-KK-DB-BACKUPS-NOT-TRACKED). Kept on disk on
+# purpose — two of them are the only copy of the graph from before a run that
+# cannot be undone — but never committed: 358 MB as of 2026-09-18, larger than
+# the whole repository. The trailing * matches the -shm and -wal siblings that
+# SQLite leaves behind when a backup is opened read-only for diffing.
+data/*.bak-*
+
 # Environment
 .env
 .env.local
