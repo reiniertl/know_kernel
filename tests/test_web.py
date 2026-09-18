@@ -2026,3 +2026,15 @@ def test_intake_is_paginated(tmp_path):
         first = _ids_on(c, "/intake?per_page=10&page=1")
         assert len(first) == 4
         assert _ids_on(c, "/intake?per_page=10&page=2") == set()
+
+
+def test_health_page_reports_intake_counts(tmp_path):
+    """ALG-KK-DIAG-GRAPH-HEALTH's intake counts must reach the page, not just
+    /api/diagnostics. The concept-graph sections looked healthy throughout the
+    period when 333 papers had no abstract and no summary had been read."""
+    db_path = _intake_db(tmp_path, "health.db")
+    with _client_for(db_path) as c:
+        text = c.get("/health").text
+    assert "Intake" in text
+    assert "Without an abstract" in text
+    assert "Summaries no person has read" in text

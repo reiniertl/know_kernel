@@ -1,6 +1,23 @@
 """Graph health diagnostics — ALG-KK-DIAG-GRAPH-HEALTH.
 
-INV-KK-DIAG-REPORT-COMPLETE: all 7 diagnostic categories present.
+INV-KK-DIAG-REPORT-COMPLETE: every declared field is present on every report.
+Seven of them are orphan CATEGORIES (lists of node ids), five are aggregates,
+and six are intake COUNTS. A category that found nothing is an empty list and a
+count that found nothing is 0; neither is ever an absent field, because "the
+check found nothing" and "the check did not run" must not look alike.
+
+THE INTAKE COUNTS WERE ADDED 2026-09-18, and until then this module did not
+contain the string "Source" at all. It described the concept graph in detail and
+said nothing about the 3,482 papers that graph is derived from — so the fact
+that 333 papers had no abstract, that 321 of those had no identifier to fetch one
+with, and that not one of 3,295 summaries had been read by a person were all
+established by hand, after a corpus-wide extraction run had already shipped on
+that data.
+
+They are COUNTS, not per-paper rows. ALG-KK-WEB-INTAKE-LIST owns the per-paper
+view; duplicating it here would create two places that can disagree about the
+same question. The dimension vocabulary is IFC-KK-PAPER-COMPLETENESS's, reused
+rather than reinvented.
 """
 
 from __future__ import annotations
@@ -24,6 +41,73 @@ class DiagnosticReport:
     unlinked_vulnerabilities: list[str] = field(default_factory=list)
     total_nodes: int = 0
     total_edges: int = 0
+    # --- intake (ALG-KK-DIAG-GRAPH-HEALTH, 2026-09-18) ---
+    papers_total: int = 0
+    papers_without_abstract: int = 0
+    # No abstract AND no arXiv id or DOI resolvable from the url, so there is no
+    # automated route to one: these need a title search or a human.
+    papers_without_identifier: int = 0
+    # No usable text on any Evidence node either, so they cannot be summarised
+    # from their own content and are invisible to ALG-KK-SUMMARY-EXTRACT.
+    papers_without_evidence_text: int = 0
+    # Satisfying not one of the six dimensions IFC-KK-PAPER-COMPLETENESS defines.
+    papers_no_dimension: int = 0
+    # State llm-extracted with no person having read them. A green tick against
+    # has_summary says a summary exists, never that anyone endorsed it.
+    summaries_unreviewed: int = 0
+
+
+# The canonical paper vocabulary (INV-KK-PAPER-SOURCE-TYPE-VOCABULARY).
+_PAPER_SOURCE_TYPES = ("preprint", "conference-paper", "conference-proceedings")
+
+# The six dimensions IFC-KK-PAPER-COMPLETENESS defines. Reused, not reinvented.
+_COMPLETENESS_DIMENSIONS = (
+    "has_abstract", "has_summary", "links_concept",
+    "links_subsystem", "links_kernel", "links_invariant",
+)
+
+
+def _count_intake(conn: sqlite3.Connection, report: DiagnosticReport) -> None:
+    """Corpus-level intake counts. Counts only — the per-paper view is
+    ALG-KK-WEB-INTAKE-LIST, and two implementations of the same question would
+    eventually disagree."""
+    from ingest.abstract_fetcher import resolve_identifier
+
+    placeholders = ", ".join("?" for _ in _PAPER_SOURCE_TYPES)
+    papers = conn.execute(
+        f"SELECT id, attrs FROM nodes WHERE kind = 'Source' "
+        f"AND json_extract(attrs, '$.source_type') IN ({placeholders})",
+        _PAPER_SOURCE_TYPES,
+    ).fetchall()
+    report.papers_total = len(papers)
+
+    for source_id, raw in papers:
+        attrs = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        if (attrs.get("abstract") or "").strip():
+            continue
+        report.papers_without_abstract += 1
+        if resolve_identifier(attrs.get("url")) is None:
+            report.papers_without_identifier += 1
+
+    report.papers_without_evidence_text = conn.execute(
+        f"SELECT COUNT(*) FROM nodes s WHERE s.kind = 'Source' "
+        f"AND json_extract(s.attrs, '$.source_type') IN ({placeholders}) "
+        f"AND NOT EXISTS ("
+        f"  SELECT 1 FROM edges e JOIN nodes ev ON ev.id = e.source_id AND ev.kind = 'Evidence' "
+        f"  WHERE e.kind = 'sourced-from' AND e.target_id = s.id "
+        f"    AND COALESCE(json_extract(ev.attrs, '$.text'), '') <> '')",
+        _PAPER_SOURCE_TYPES,
+    ).fetchone()[0]
+
+    for (raw,) in conn.execute("SELECT attrs FROM nodes WHERE kind = 'PaperCompleteness'"):
+        verdict = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        if not any(verdict.get(d) for d in _COMPLETENESS_DIMENSIONS):
+            report.papers_no_dimension += 1
+
+    report.summaries_unreviewed = conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind = 'PaperSummary' "
+        "AND json_extract(attrs, '$.state') = 'llm-extracted'"
+    ).fetchone()[0]
 
 
 def diagnose_graph(conn: sqlite3.Connection) -> DiagnosticReport:
@@ -138,5 +222,7 @@ def diagnose_graph(conn: sqlite3.Connection) -> DiagnosticReport:
 
     report.total_nodes = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
     report.total_edges = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+
+    _count_intake(conn, report)
 
     return report

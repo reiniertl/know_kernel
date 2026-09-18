@@ -3,6 +3,31 @@
 <h1>Graph Health Diagnostics</h1>
 <p>{{ report.total_nodes }} nodes &nbsp;|&nbsp; {{ report.total_edges }} edges &nbsp;|&nbsp; Invariant density: {{ "%.2f"|format(report.invariant_density) }}</p>
 
+{# Intake (ALG-KK-DIAG-GRAPH-HEALTH, 2026-09-18). Counts, not rows — the
+   per-paper view is /intake. Shown above the concept-graph sections because a
+   graph derived from papers nobody can read is not healthy however tidy its
+   edges are. #}
+<h2>Intake</h2>
+<table style="width:auto; margin-bottom:1.5rem;">
+  <tr><td style="padding-right:1.5rem;">Papers</td>
+      <td style="text-align:right;">{{ report.papers_total }}</td><td></td></tr>
+  <tr><td>Without an abstract</td>
+      <td style="text-align:right;">{{ report.papers_without_abstract }}</td>
+      <td style="padding-left:1rem;"><a href="/intake?missing=has_abstract">view</a></td></tr>
+  <tr><td>&nbsp;&nbsp;...and no identifier to fetch one</td>
+      <td style="text-align:right;">{{ report.papers_without_identifier }}</td>
+      <td style="padding-left:1rem;color:#888;font-size:0.8em;">no automated route</td></tr>
+  <tr><td>Without any Evidence text</td>
+      <td style="text-align:right;">{{ report.papers_without_evidence_text }}</td>
+      <td style="padding-left:1rem;color:#888;font-size:0.8em;">cannot be summarised</td></tr>
+  <tr><td>Satisfying no completeness dimension</td>
+      <td style="text-align:right;">{{ report.papers_no_dimension }}</td>
+      <td style="padding-left:1rem;"><a href="/intake?missing=any">view</a></td></tr>
+  <tr><td>Summaries no person has read</td>
+      <td style="text-align:right;">{{ report.summaries_unreviewed }}</td>
+      <td style="padding-left:1rem;"><a href="/intake?summary_state=llm-extracted">view</a></td></tr>
+</table>
+
 <h2>Orphan Concepts <span class="count">{{ report.orphan_concepts|length }}</span></h2>
 <p>Concepts without a <code>belongs-to</code> edge to any Subsystem.</p>
 {% if report.orphan_concepts %}
