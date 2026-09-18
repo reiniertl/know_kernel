@@ -2045,6 +2045,84 @@ def test_health_page_reports_intake_counts(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# INV-KK-FEED-CARD-LINK-ABSOLUTE, corrected 2026-09-18.
+#
+# The predicate named http://127.0.0.1:8000/research/{concept_id}; the code
+# built http://10.123.102.166:8000/concepts/{concept_id}. Both halves
+# disagreed and neither side was tested, which is how it drifted. The path was
+# settled by measurement — the application registers no /research route, so a
+# card built to the old predicate linked every reader to a 404. The host was an
+# operator decision: not loopback, because /api/feed/send hands the card to
+# someone on another machine, and not a literal in the spec either, because
+# which host serves the app is a deployment fact.
+# ---------------------------------------------------------------------------
+
+
+def test_feed_card_concept_url_names_a_route_the_app_registers(client):
+    """The half of the old predicate that was provably wrong: /research/ does
+    not exist. This test fails if the path ever drifts off a real route again."""
+    item = client.get("/api/feed/card/src-1").json()["item"]
+    path = item["concept_url"].split(":8000", 1)[1]
+    assert path == "/concepts/concept-1"
+
+    registered = {getattr(r, "path", "") for r in client.app.routes}
+    assert "/concepts/{node_id}" in registered
+    assert not any(p.startswith("/research") for p in registered)
+
+    # And the card is genuinely reachable, not merely well-formed.
+    assert client.get(path).status_code == 200
+
+
+def test_feed_card_links_are_absolute_and_not_loopback(client):
+    """The card is read on another machine; 127.0.0.1 would be the reader's."""
+    item = client.get("/api/feed/card/src-1").json()["item"]
+    for key in ("concept_url", "research_card_url"):
+        assert item[key].startswith("http://"), key
+        assert "127.0.0.1" not in item[key], key
+        assert "localhost" not in item[key], key
+
+
+def test_feed_card_base_url_is_configured_not_hardcoded(tmp_path, monkeypatch):
+    """KK_BASE_URL moves the deployment without violating the invariant.
+
+    _BASE_URL is bound when setup_routes runs, so the variable must be set
+    before create_app — a monkeypatch after the fixture builds the app would
+    pass against a hardcoded literal and prove nothing.
+    """
+    monkeypatch.setenv("KK_BASE_URL", "https://kk.example.org/")
+    db_path = tmp_path / "base_url.db"
+    conn = init_db(db_path)
+    add_node(conn, "concept-1", "Concept", {
+        "name": "Lock-free Queue", "description": "A queue without locks.",
+        "artifact_class": "B", "key_properties": ["atomic"],
+        "tradeoffs": ["ABA"], "design_rationale": "No contention.",
+    })
+    add_node(conn, "ev-1", "Evidence", {
+        "artifact_class": "A", "contamination_level": "weak-copyleft"})
+    add_node(conn, "src-1", "Source", {
+        "url": "https://example.com/p.pdf", "source_type": "preprint",
+        "license": "MIT"})
+    add_edge(conn, "extracted-from", "concept-1", "ev-1")
+    add_edge(conn, "sourced-from", "ev-1", "src-1")
+    conn.commit()
+    conn.close()
+
+    with TestClient(create_app(str(db_path))) as c:
+        item = c.get("/api/feed/card/src-1").json()["item"]
+
+    # The trailing slash on the configured base must not survive into the URL.
+    assert item["concept_url"] == "https://kk.example.org/concepts/concept-1"
+    assert "10.123.102.166" not in item["concept_url"]
+
+
+def test_feed_card_base_url_default_is_unchanged(client):
+    """No running deployment changes behaviour: with KK_BASE_URL unset the
+    address that was hardcoded before 2026-09-18 is still what ships."""
+    item = client.get("/api/feed/card/src-1").json()["item"]
+    assert item["concept_url"].startswith("http://10.123.102.166:8000/")
+
+
+# ---------------------------------------------------------------------------
 # INV-KK-PAPER-SOURCE-TYPE-VOCABULARY — the fourth literal copy.
 # ---------------------------------------------------------------------------
 

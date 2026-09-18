@@ -17,6 +17,7 @@ treats any spec id written in this directory as a live citation.
 from __future__ import annotations
 
 import json
+import os
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -619,7 +620,15 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         "MAINTAINABILITY": "\U0001f504",
     }
 
-    _BASE_URL = "http://10.123.102.166:8000"
+    # INV-KK-FEED-CARD-LINK-ABSOLUTE. The card is read on another machine —
+    # POST /api/feed/send hands it to an external consumer — so a loopback
+    # address would resolve to the reader's own host. Which host serves this
+    # application is a deployment fact, not a property of the link, so the
+    # base is configured rather than written into the specification. The
+    # default is the address that was hardcoded here before 2026-09-18, so no
+    # running deployment changes behaviour.
+    _BASE_URL = os.environ.get(
+        "KK_BASE_URL", "http://10.123.102.166:8000").rstrip("/")
 
     def _build_single_card_text(item: dict) -> str:
         """Build emoji card text for a single paper (ALG-KK-WEB-FEED-CARD)."""
