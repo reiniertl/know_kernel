@@ -4154,4 +4154,13 @@
     <link to="ALG-KK-WEB-INTAKE-LIST" relation="part-of"/>
   </associate>
 
+  <associate source="src/ingest/title_reconcile.py" kind="function" name="reconcile_title" scope="">
+    <link to="ALG-KK-SOURCE-TITLE-RECONCILE" relation="implements"/>
+    <link to="INV-KK-SOURCE-TITLE-MATCHES-IDENTITY" relation="enforces"/>
+  </associate>
+
+  <associate source="src/ingest/title_reconcile.py" kind="function" name="run_batch" scope="">
+    <link to="ALG-KK-SOURCE-TITLE-RECONCILE" relation="implements"/>
+  </associate>
+
 </artifact-associations>
