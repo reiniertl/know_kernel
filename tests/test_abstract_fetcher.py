@@ -544,7 +544,10 @@ def test_batch_dry_run_makes_no_network_call_and_writes_nothing(conn):
     assert fetch.calls == []
     assert report.considered == 3
     assert report.stored == 0
-    assert report.failures == {"arxiv": 1, "doi": 1, "no-identifier": 1}
+    # src-blog has no identifier but does have a title, so a real run would
+    # attempt a title search on it (2026-09-18). The dry run says so without
+    # asking, which is what makes it useful.
+    assert report.failures == {"arxiv": 1, "doi": 1, "would-title-search": 1}
     assert "abstract" not in get_node(conn, "src-arxiv")["attrs"]
 
 
@@ -750,3 +753,21 @@ def test_the_title_search_label_is_its_own_provenance_class():
     was asked which document best matches a string. Different confidence."""
     assert "openalex-title-search" in MIN_PLAUSIBLE_CHARS_BY_ROUTE
     assert "openalex-title-search" != "openalex"
+
+
+def test_the_dry_run_reports_the_title_search_it_would_attempt(conn):
+    """A dry run exists to say what a real run would do. After the title-search
+    route landed it reported "no-identifier" for 412 papers it would in fact
+    attempt, which told the operator the route was inert."""
+    report = run_batch(conn, fetch=FakeFetch({}), dry_run=True, sleep=lambda _: None)
+    assert report.failures.get("would-title-search") == 1
+    assert "no-identifier" not in report.failures
+
+
+def test_the_dry_run_still_reports_nothing_to_search_with(conn):
+    add_node(conn, "src-bare", "Source", {
+        "url": "https://someone.example/notes", "source_type": "conference-paper",
+        "license": "MIT", "title": "",
+    })
+    report = run_batch(conn, fetch=FakeFetch({}), dry_run=True, sleep=lambda _: None)
+    assert report.failures.get("no-identifier") == 1

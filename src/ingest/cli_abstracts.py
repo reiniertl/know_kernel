@@ -103,7 +103,21 @@ def run_batch(
                 (source_id,),
             ).fetchone()
             identifier = resolve_identifier(row[0] if row else None)
-            key = identifier.kind if identifier else "no-identifier"
+            if identifier:
+                key = identifier.kind
+            else:
+                # No identifier is no longer the end of the road: the title
+                # search is the query of last resort. Reporting "no-identifier"
+                # here would tell the operator the route does nothing for 412
+                # papers it would in fact attempt, which defeats the point of a
+                # dry run. It reports the ATTEMPT — whether OpenAlex answers, and
+                # whether the match clears the guards, is only knowable by asking.
+                title_row = conn.execute(
+                    "SELECT json_extract(attrs, '$.title') FROM nodes WHERE id = ?",
+                    (source_id,),
+                ).fetchone()
+                has_title = bool((title_row[0] if title_row else "") or "")
+                key = "would-title-search" if has_title else "no-identifier"
             report.failures[key] = report.failures.get(key, 0) + 1
             if progress:
                 progress(f"[dry-run] {source_id} -> {key}")
