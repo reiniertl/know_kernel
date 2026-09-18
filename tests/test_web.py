@@ -2042,3 +2042,22 @@ def test_health_page_reports_intake_counts(tmp_path):
     assert "Intake" in text
     assert "Without an abstract" in text
     assert "Summaries no person has read" in text
+
+
+# ---------------------------------------------------------------------------
+# INV-KK-PAPER-SOURCE-TYPE-VOCABULARY — the fourth literal copy.
+# ---------------------------------------------------------------------------
+
+
+def test_no_type_emoji_entry_outside_the_paper_vocabulary():
+    """_TYPE_EMOJI is an enumeration of source types in web.routes, so the
+    vocabulary invariant covers it. 'paper' sat here unreachable after the
+    other three copies were narrowed on 2026-09-17."""
+    import inspect
+
+    from web import routes
+
+    src = inspect.getsource(routes.setup_routes)
+    block = src.split("_TYPE_EMOJI = {", 1)[1].split("}", 1)[0]
+    keys = {line.split('"')[1] for line in block.splitlines() if '"' in line}
+    assert keys == {"preprint", "conference-paper", "conference-proceedings"}

@@ -607,7 +607,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         "preprint": "\U0001f4dd",
         "conference-paper": "\U0001f3db️",
         "conference-proceedings": "\U0001f3a4",
-        "paper": "\U0001f4d6",
     }
 
     _MOTIV_EMOJI = {
