@@ -68,3 +68,8 @@ Thumbs.db
 htmlcov/
 .coverage
 .pytest_cache/
+
+# Working plan for the in-flight implementation sequence. Tracked until
+# 2026-09-18, then untracked on request: it is a scratch document rewritten
+# between prompts, not a deliverable.
+docs/plans/implementation_list.txt
