@@ -132,7 +132,8 @@ def reconcile_title(
 ) -> tuple[str, dict | None]:
     """Reconcile one Source. Returns (outcome, change or None).
 
-    Outcomes: reconciled, agrees, no-identifier, no-authority, transport-error.
+    Outcomes: reconciled, agrees, authority-less-specific, no-identifier,
+    no-authority, transport-error.
     The title is the only field written; title_before_reconcile preserves what
     was there.
     """
@@ -154,6 +155,16 @@ def reconcile_title(
     stored = attrs.get("title") or ""
     if titles_agree(stored, real):
         return "agrees", None
+
+    # The authority is sometimes LESS specific than what we hold. Several ACM
+    # records store only the short name before the colon — "PathFS" for "PathFS:
+    # A File System for the Hierarchical Edge" — and the blunt comparison judges
+    # those different. Replacing the fuller title with the stub would lose real
+    # information to fix nothing, so a new title whose words are wholly contained
+    # in the old one is refused. Found on 2026-09-18 by reading what the first
+    # corpus run had actually written: 4 of 520 records were damaged this way.
+    if title_tokens(real) and title_tokens(real) <= title_tokens(stored):
+        return "authority-less-specific", None
 
     change = {
         "source_id": source_id,

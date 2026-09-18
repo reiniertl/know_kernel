@@ -212,3 +212,26 @@ def test_the_confirmed_examples_reconcile(conn, sid, wrong, real):
     outcome, change = reconcile_title(conn, sid, fetch=FakeFetch({"openalex": _oa(real)}))
     assert outcome == "reconciled"
     assert change["now"] == real
+
+
+def test_a_less_specific_authority_title_is_refused(conn):
+    """Several ACM records hold only the short name before the colon. Replacing
+    the fuller stored title with that stub loses information and fixes nothing.
+    Four records were damaged this way by the first corpus run."""
+    sid = _source(conn, title="PathFS: A File System for the Hierarchical Edge")
+    outcome, change = reconcile_title(conn, sid, fetch=FakeFetch({"openalex": _oa("PathFS")}))
+    assert outcome == "authority-less-specific"
+    assert change is None
+    assert get_node(conn, sid)["attrs"]["title"] == "PathFS: A File System for the Hierarchical Edge"
+    assert "title_before_reconcile" not in get_node(conn, sid)["attrs"]
+
+
+def test_a_more_specific_authority_title_is_still_applied(conn):
+    """The guard must not block genuine expansions, which are the common case:
+    an abbreviated stored title replaced by the full published one."""
+    sid = _source(conn, title="TinyContainer: Multi-Tenant Microcontroller Containers")
+    full = ("TinyContainer: Container Runtime Middleware Enabling Multi-tenant "
+            "Microcontroller Applications and Services on Constrained Devices")
+    outcome, _ = reconcile_title(conn, sid, fetch=FakeFetch({"openalex": _oa(full)}))
+    assert outcome == "reconciled"
+    assert get_node(conn, sid)["attrs"]["title"] == full
