@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from graph.engine import add_edge, add_node
+from graph.engine import add_edge, add_node, update_node_attrs
 from graph.schema import init_db
 from ingest.paper_completeness import (
     BINARY_DIMENSIONS,
@@ -352,3 +352,69 @@ def test_batch_skips_non_papers(conn):
     batch = _load_batch_module()
     _paper(conn, "src-news", source_type="media-outlet")
     assert batch.recompute_all(conn)["papers"] == 0
+
+
+# ---------------------------------------------------------------------------
+# title_verified — the seventh dimension (2026-09-18).
+#
+# It records that the title WAS CHECKED against the document its identifier
+# resolves to. It does not record that the paper is coherent, and these tests
+# exist partly to keep that distinction from eroding: the temptation to read a
+# green tick as "this record is correct" is exactly what let 516 displaced
+# titles sit in a corpus that reported itself complete.
+# ---------------------------------------------------------------------------
+
+
+def test_title_verified_is_false_when_nothing_has_checked(conn):
+    """The default. False means no check happened, never that the title is wrong."""
+    sid = _paper(conn)
+    assert compute_completeness(conn, sid).title_verified is False
+
+
+def test_title_verified_is_true_once_a_reconciliation_has_stamped_it(conn):
+    sid = _paper(conn)
+    update_node_attrs(conn, sid, {"title_reconciled_at": "2026-09-18"})
+    assert compute_completeness(conn, sid).title_verified is True
+
+
+def test_title_verified_is_binary(conn):
+    """Decision D-A: dimensions are present-or-not. A confidence score would
+    report certainty the measurement does not support."""
+    sid = _paper(conn)
+    update_node_attrs(conn, sid, {"title_reconciled_at": "2026-09-18"})
+    value = compute_completeness(conn, sid).title_verified
+    assert value is True or value is False
+    assert isinstance(value, bool)
+
+
+def test_title_verified_says_nothing_about_the_other_dimensions(conn):
+    """A record can be checked and still empty, or complete and unchecked. The
+    dimension is independent of the six that measure presence."""
+    checked_but_empty = _paper(conn, "src-checked")
+    update_node_attrs(conn, checked_but_empty, {"title_reconciled_at": "2026-09-18"})
+    v = compute_completeness(conn, checked_but_empty)
+    assert v.title_verified is True
+    assert v.has_abstract is False and v.has_summary is False
+
+    full_but_unchecked = _paper(conn, "src-full", abstract="A real abstract here.")
+    v2 = compute_completeness(conn, full_but_unchecked)
+    assert v2.has_abstract is True
+    assert v2.title_verified is False
+
+
+def test_title_verified_gates_nothing(conn):
+    """INV-KK-COMPLETENESS-ADVISORY. The verdict is informational; an unchecked
+    or incoherent paper is described, never withheld."""
+    sid = _paper(conn, abstract="A real abstract here.")
+    verdict = compute_completeness(conn, sid)
+    assert verdict.title_verified is False
+    # Computing it neither raises nor suppresses anything else.
+    assert verdict.has_abstract is True
+    assert verdict.source_id == sid
+
+
+def test_title_verified_is_in_the_declared_dimension_tuple():
+    """The tuple is what IFC-KK-PAPER-COMPLETENESS declares and what the web
+    labels iterate; a dimension missing from it would compute and never show."""
+    assert "title_verified" in BINARY_DIMENSIONS
+    assert len(BINARY_DIMENSIONS) == 7

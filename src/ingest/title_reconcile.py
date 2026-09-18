@@ -38,6 +38,7 @@ import sqlite3
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 from ingest.abstract_fetcher import (
@@ -152,8 +153,20 @@ def reconcile_title(
     if not real:
         return "no-authority", None
 
+    # The authority answered, so this record HAS been checked whatever the
+    # comparison concludes. Stamping only the records we change would leave the
+    # ones that were already correct indistinguishable from the ones nobody ever
+    # looked at — which is exactly the hole the first corpus run left, and what
+    # the title_verified dimension of IFC-KK-PAPER-COMPLETENESS needs closed.
+    def _stamp(a: dict) -> None:
+        a["title_reconciled_at"] = date.today().isoformat()
+
     stored = attrs.get("title") or ""
     if titles_agree(stored, real):
+        if not dry_run:
+            _stamp(attrs)
+            conn.execute("UPDATE nodes SET attrs = ? WHERE id = ?",
+                         (json.dumps(attrs), source_id))
         return "agrees", None
 
     # The authority is sometimes LESS specific than what we hold. Several ACM
@@ -164,6 +177,11 @@ def reconcile_title(
     # in the old one is refused. Found on 2026-09-18 by reading what the first
     # corpus run had actually written: 4 of 520 records were damaged this way.
     if title_tokens(real) and title_tokens(real) <= title_tokens(stored):
+        # Still checked: the authority answered and we kept our fuller title.
+        if not dry_run:
+            _stamp(attrs)
+            conn.execute("UPDATE nodes SET attrs = ? WHERE id = ?",
+                         (json.dumps(attrs), source_id))
         return "authority-less-specific", None
 
     change = {
@@ -175,6 +193,7 @@ def reconcile_title(
     if not dry_run:
         attrs["title_before_reconcile"] = stored
         attrs["title"] = real
+        _stamp(attrs)
         conn.execute("UPDATE nodes SET attrs = ? WHERE id = ?", (json.dumps(attrs), source_id))
     return "reconciled", change
 
@@ -204,11 +223,11 @@ def run_batch(
         if outcome == "reconciled":
             report.reconciled += 1
             report.changes.append(change)
-            if not dry_run:
-                # Commit per row: an interrupted run keeps what it has fixed.
-                conn.commit()
         elif outcome != "agrees":
             report.skip(outcome)
+        if not dry_run and outcome in ("reconciled", "agrees", "authority-less-specific"):
+            # Commit per row: an interrupted run keeps every check it has made.
+            conn.commit()
         if progress:
             progress(f"{source_id} {outcome}")
         if pause:

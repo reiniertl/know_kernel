@@ -54,6 +54,10 @@ COMPLETENESS_DIMENSION_LABELS = (
     ("links_concept", "Concepts", "At least one Concept was extracted from this paper."),
     ("links_subsystem", "Subsystem", "An extracted Concept belongs to a kernel subsystem."),
     ("links_kernel", "Kernel", "An extracted Concept is implemented in a named kernel."),
+    ("title_verified", "Title checked",
+     ("The title was checked against the document its identifier resolves to, and "
+      "the authority answered. It does NOT mean the record is about what it says: "
+      "nothing here attests that, and only a person reading the record could.")),
     ("links_invariant", "Kernel invariant",
      ("A kernel invariant was extracted from this paper. Recorded only \u2014 it never "
       "gates anything, and today no paper in the corpus has one.")),

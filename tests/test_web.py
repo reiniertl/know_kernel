@@ -1495,7 +1495,11 @@ def test_absent_dimensions_are_shown_not_hidden(tmp_path):
     db_path, sid = _build_paper_db(tmp_path, "sparse.db", concepts=0)
     with _client_for(db_path) as c:
         body = c.get(f"/paper/{sid}").text
-    assert body.count('data-dimension=') == 6
+    # Tracks the declared tuple rather than a literal: this assertion read 6
+    # until title_verified was added on 2026-09-18, and a hardcoded count only
+    # ever fails late.
+    from web.routes import COMPLETENESS_DIMENSION_LABELS
+    assert body.count('data-dimension=') == len(COMPLETENESS_DIMENSION_LABELS)
     assert "not present" in body
 
 

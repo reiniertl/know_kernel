@@ -54,7 +54,7 @@ from graph.schema import ID_PREFIXES
 # verdict rather than a verdict full of falses.
 PAPER_SOURCE_TYPES = ("preprint", "conference-paper", "conference-proceedings")
 
-# The six binary dimensions, in the order IFC-KK-PAPER-COMPLETENESS declares them.
+# The seven binary dimensions, in the order IFC-KK-PAPER-COMPLETENESS declares them.
 # summary_state is carried alongside but is NOT in here: it is the raw state
 # value, not a boolean, so that a reader can tell a model-written summary from a
 # human-written one without a second query.
@@ -65,6 +65,22 @@ BINARY_DIMENSIONS = (
     "links_subsystem",
     "links_kernel",
     "links_invariant",
+    # Added 2026-09-18. TRUE means a reconciliation run checked this Source's
+    # title against the document its identifier resolves to and the authority
+    # answered — whether the title already agreed or was corrected. It says the
+    # record was CHECKED, never that it is coherent.
+    #
+    # It cannot be computed from the graph: title agreement is decidable only
+    # against a third-party authority, which is why
+    # INV-KK-SOURCE-TITLE-MATCHES-IDENTITY is assumed rather than enforced. This
+    # reads the stamp ALG-KK-SOURCE-TITLE-RECONCILE leaves, exactly as
+    # has_abstract reads an abstract ALG-KK-ABSTRACT-FETCH put there.
+    #
+    # FALSE means one of three things and never "the title is wrong": no
+    # identifier exists to ask about, the authority could not be reached, or it
+    # had no record. Aboutness — whether the abstract, Evidence and summary
+    # describe the work the title names — stays unattested by anything here.
+    "title_verified",
 )
 
 
@@ -81,6 +97,7 @@ class CompletenessVerdict:
     links_subsystem: bool = False
     links_kernel: bool = False
     links_invariant: bool = False
+    title_verified: bool = False
     verdict_id: str = ""
     created: bool = False
 
@@ -203,6 +220,7 @@ def compute_completeness(conn: sqlite3.Connection, source_id: str) -> Completene
         has_abstract=bool((node["attrs"].get("abstract") or "").strip()),
         has_summary=summary_is_present(state),
         summary_state=state,
+        title_verified=bool((node["attrs"].get("title_reconciled_at") or "").strip()),
         links_concept=_exists(conn, _EXTRACTED_KIND_SQL, ("Concept", source_id)),
         links_subsystem=_exists(
             conn, _CONCEPT_HOP_SQL, ("belongs-to", "Subsystem", source_id)

@@ -235,3 +235,52 @@ def test_a_more_specific_authority_title_is_still_applied(conn):
     outcome, _ = reconcile_title(conn, sid, fetch=FakeFetch({"openalex": _oa(full)}))
     assert outcome == "reconciled"
     assert get_node(conn, sid)["attrs"]["title"] == full
+
+
+# --- stamping what was checked ------------------------------------------------
+#
+# The first corpus run stamped only the records it CHANGED, leaving the ~2,400 it
+# checked and found correct indistinguishable from the ones nobody looked at.
+# That hole is what the title_verified dimension needs closed.
+
+
+def test_a_record_that_already_agreed_is_still_stamped(conn):
+    sid = _source(conn, title=REAL_TITLE)
+    outcome, _ = reconcile_title(conn, sid, fetch=FakeFetch({"openalex": _oa(REAL_TITLE)}))
+    assert outcome == "agrees"
+    assert get_node(conn, sid)["attrs"].get("title_reconciled_at")
+
+
+def test_a_reconciled_record_is_stamped(conn):
+    sid = _source(conn)
+    reconcile_title(conn, sid, fetch=FakeFetch({"openalex": _oa(REAL_TITLE)}))
+    assert get_node(conn, sid)["attrs"].get("title_reconciled_at")
+
+
+def test_a_record_we_declined_to_overwrite_is_still_stamped(conn):
+    """The authority answered and we kept our fuller title. That is a check."""
+    sid = _source(conn, title="PathFS: A File System for the Hierarchical Edge")
+    outcome, _ = reconcile_title(conn, sid, fetch=FakeFetch({"openalex": _oa("PathFS")}))
+    assert outcome == "authority-less-specific"
+    assert get_node(conn, sid)["attrs"].get("title_reconciled_at")
+
+
+@pytest.mark.parametrize("responses,expected", [
+    ({}, "no-identifier"),
+    ({"openalex": OSError("406")}, "transport-error"),
+    ({"openalex": b'{"title": null, "type": "preprint"}'}, "no-authority"),
+])
+def test_an_unchecked_record_is_never_stamped(conn, responses, expected):
+    """A stamp would claim a check that did not happen. False on title_verified
+    must stay distinguishable from 'checked and fine'."""
+    url = ARXIV_URL if expected != "no-identifier" else "https://usenix.org/x"
+    sid = _source(conn, url=url)
+    outcome, _ = reconcile_title(conn, sid, fetch=FakeFetch(responses))
+    assert outcome == expected
+    assert "title_reconciled_at" not in get_node(conn, sid)["attrs"]
+
+
+def test_a_dry_run_stamps_nothing(conn):
+    sid = _source(conn, title=REAL_TITLE)
+    reconcile_title(conn, sid, fetch=FakeFetch({"openalex": _oa(REAL_TITLE)}), dry_run=True)
+    assert "title_reconciled_at" not in get_node(conn, sid)["attrs"]
