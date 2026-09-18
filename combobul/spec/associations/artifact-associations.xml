@@ -4163,4 +4163,86 @@
     <link to="ALG-KK-SOURCE-TITLE-RECONCILE" relation="implements"/>
   </associate>
 
+
+  <!-- ── Evidence-grounded concept extraction (src/ingest/extractor.py) ──────
+       These eight nodes were cited in extractor.py's docstrings long before
+       they were reachable from a clone. Without these associations the spec
+       named the module and the module named the spec, and neither pointed at
+       a function anyone could check.                                       -->
+
+  <associate source="src/ingest/extractor.py" kind="function" name="extract_concepts" scope="">
+    <link to="ALG-KK-LLM-EXTRACT"              relation="implements"/>
+    <link to="INV-KK-EXTRACT-SESSION-ENFORCED" relation="enforces"/>
+    <link to="INV-KK-EXTRACT-IDEMPOTENT"       relation="enforces"/>
+    <link to="INV-KK-EXTRACT-GROUNDING-CHECK"  relation="enforces"/>
+  </associate>
+
+  <associate source="src/ingest/extractor.py" kind="function" name="validate_excerpt_grounding" scope="">
+    <link to="ALG-KK-VALIDATE-EXCERPT-GROUNDING" relation="implements"/>
+    <link to="INV-KK-EXTRACT-GROUNDING-CHECK"    relation="enforces"/>
+  </associate>
+
+  <associate source="src/ingest/extractor.py" kind="function" name="get_system_prompt" scope="">
+    <link to="INV-KK-EXTRACT-DISCOURSE-RULES" relation="enforces"/>
+    <link to="ALG-KK-LLM-EXTRACT"             relation="part-of"/>
+  </associate>
+
+  <associate source="src/ingest/extractor.py" kind="function" name="build_extraction_prompt" scope="">
+    <link to="ALG-KK-LLM-EXTRACT"             relation="part-of"/>
+    <link to="INV-KK-EXTRACT-DISCOURSE-RULES" relation="enforces"/>
+  </associate>
+
+  <!-- extracted-from edge at extractor.py:388 -->
+  <associate source="src/ingest/extractor.py" kind="function" name="store_kernel_invariant" scope="">
+    <link to="INV-KK-EXTRACT-PROVENANCE"    relation="enforces"/>
+    <link to="INV-KK-EXTRACT-OUTPUT-CLASS-B" relation="enforces"/>
+    <link to="ALG-KK-LLM-EXTRACT"           relation="part-of"/>
+  </associate>
+
+  <!-- extracted-from edge at extractor.py:432 -->
+  <associate source="src/ingest/extractor.py" kind="function" name="store_failure_mode" scope="">
+    <link to="INV-KK-EXTRACT-PROVENANCE"    relation="enforces"/>
+    <link to="INV-KK-EXTRACT-OUTPUT-CLASS-B" relation="enforces"/>
+    <link to="ALG-KK-LLM-EXTRACT"           relation="part-of"/>
+  </associate>
+
+  <!-- extracted-from edge at extractor.py:492 -->
+  <associate source="src/ingest/extractor.py" kind="function" name="store_interaction_protocol" scope="">
+    <link to="INV-KK-EXTRACT-PROVENANCE"    relation="enforces"/>
+    <link to="INV-KK-EXTRACT-OUTPUT-CLASS-B" relation="enforces"/>
+    <link to="ALG-KK-LLM-EXTRACT"           relation="part-of"/>
+  </associate>
+
+  <!-- extracted-from edge at extractor.py:545 -->
+  <associate source="src/ingest/extractor.py" kind="function" name="store_performance_profile" scope="">
+    <link to="INV-KK-EXTRACT-PROVENANCE"    relation="enforces"/>
+    <link to="INV-KK-EXTRACT-OUTPUT-CLASS-B" relation="enforces"/>
+    <link to="ALG-KK-LLM-EXTRACT"           relation="part-of"/>
+  </associate>
+
+  <!-- extracted-from edge at extractor.py:607 -->
+  <associate source="src/ingest/extractor.py" kind="function" name="store_compatibility_assessment" scope="">
+    <link to="INV-KK-EXTRACT-PROVENANCE"    relation="enforces"/>
+    <link to="INV-KK-EXTRACT-OUTPUT-CLASS-B" relation="enforces"/>
+    <link to="ALG-KK-LLM-EXTRACT"           relation="part-of"/>
+  </associate>
+
+  <!-- extracted-from edge at extractor.py:666 -->
+  <associate source="src/ingest/extractor.py" kind="function" name="store_comparative_analysis" scope="">
+    <link to="INV-KK-EXTRACT-PROVENANCE"    relation="enforces"/>
+    <link to="INV-KK-EXTRACT-OUTPUT-CLASS-B" relation="enforces"/>
+    <link to="ALG-KK-LLM-EXTRACT"           relation="part-of"/>
+  </associate>
+
+  <!-- extracted-from edge at extractor.py:682 -->
+  <associate source="src/ingest/extractor.py" kind="function" name="store_rich_concept" scope="">
+    <link to="INV-KK-EXTRACT-PROVENANCE"    relation="enforces"/>
+    <link to="INV-KK-EXTRACT-OUTPUT-CLASS-B" relation="enforces"/>
+    <link to="ALG-KK-LLM-EXTRACT"           relation="part-of"/>
+  </associate>
+
+  <associate source="src/ingest/cli_extract.py" kind="function" name="main" scope="">
+    <link to="ALG-KK-LLM-EXTRACT" relation="part-of"/>
+  </associate>
+
 </artifact-associations>
