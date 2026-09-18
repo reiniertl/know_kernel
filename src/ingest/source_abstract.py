@@ -22,7 +22,11 @@ from graph.engine import get_node, update_node_attrs
 # Where an abstract came from. "arxiv" and "pdf" are verbatim text; "openalex"
 # is reconstructed from an inverted index and so is not word-for-word the
 # published abstract; "manual" was typed or corrected by a human.
-VALID_ABSTRACT_SOURCES = ("arxiv", "openalex", "pdf", "manual")
+# INV-KK-ABSTRACT-SOURCE-ENUM. openalex-title-search added 2026-09-18: the
+# authority was asked which document best matches a STRING, not asked about a
+# specific identifier. Weaker than openalex and must never be recorded as it,
+# even when both return the same text.
+VALID_ABSTRACT_SOURCES = ("arxiv", "openalex", "openalex-title-search", "pdf", "manual")
 
 
 @dataclass

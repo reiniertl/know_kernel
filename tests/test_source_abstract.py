@@ -106,8 +106,13 @@ def test_set_abstract_leaves_other_attrs_intact(conn):
     assert attrs["license"] == "MIT"
 
 
-def test_provenance_enum_is_the_documented_four():
-    assert set(VALID_ABSTRACT_SOURCES) == {"arxiv", "openalex", "pdf", "manual"}
+def test_provenance_enum_is_the_documented_five():
+    """INV-KK-ABSTRACT-SOURCE-ENUM. openalex-title-search joined on 2026-09-18:
+    the authority was asked which document best matches a STRING rather than
+    asked about a specific identifier, and that is a weaker claim which must
+    stay distinguishable from openalex even when both return the same text."""
+    assert set(VALID_ABSTRACT_SOURCES) == {
+        "arxiv", "openalex", "openalex-title-search", "pdf", "manual"}
 
 
 # --- manual edit round trip (ALG-KK-WEB-ABSTRACT-EDIT) -----------------------
@@ -221,3 +226,30 @@ def test_every_mutating_route_is_on_the_allowlist(client):
 
 def test_abstract_path_is_on_the_allowlist():
     assert "/api/abstract/" in WEB_MUTATION_ALLOWLIST
+
+
+def test_title_searched_provenance_is_rendered_and_not_confused_with_a_lookup(client, conn):
+    """INV-KK-ABSTRACT-PROVENANCE-RECORDED. Without a branch of its own the
+    if/elif chain would have fallen through to "Provenance unrecorded." and the
+    weakest route in the system would have looked like an absent one."""
+    set_abstract(conn, "src-plain", ABSTRACT, "openalex-title-search")
+    conn.commit()
+    page = client.get("/paper/src-plain").text
+    # The client has its own database; assert against the helper directly too.
+    assert get_node(conn, "src-plain")["attrs"]["abstract_source"] == "openalex-title-search"
+
+
+def test_the_title_search_note_names_what_makes_it_weaker(tmp_path):
+    """A reader must be able to tell a title match from an identifier lookup."""
+    from web.app import create_app
+    db_path = tmp_path / "title_search.db"
+    c = _seed(db_path)
+    set_abstract(c, "src-plain", ABSTRACT, "openalex-title-search")
+    c.commit()
+    c.close()
+    app = create_app(str(db_path))
+    with TestClient(app) as client:
+        page = client.get("/paper/src-plain").text
+    assert "searching OpenAlex for this paper" in page
+    assert "no arXiv id or DOI" in page
+    assert "Provenance unrecorded." not in page

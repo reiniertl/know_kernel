@@ -26,7 +26,9 @@ from ingest.abstract_fetcher import (
     ContainerRecordFound,
     MIN_PLAUSIBLE_CHARS_BY_ROUTE,
     RouteTransportError,
+    TITLE_SEARCH_MATCH_FLOOR,
     is_plausible,
+    titles_match_closely,
     reconstruct_inverted_index,
     resolve_identifier,
 )
@@ -334,13 +336,31 @@ def test_doi_source_uses_openalex_only(conn):
     assert all("crossref" not in c for c in fetch.calls)
 
 
-def test_unresolvable_source_makes_no_network_call(conn):
-    fetch = FakeFetch({})
+def test_an_unresolvable_source_now_falls_through_to_a_title_search(conn):
+    """CONTRACT CHANGE, 2026-09-18. This asserted that a Source with no
+    identifier made NO network call at all. That guarantee was traded
+    deliberately: 323 papers carry a venue landing page with no arXiv id and no
+    DOI, and the title is the only query left. The protection is no longer
+    "never ask" but the 0.80 title match and the venue check in search_by_title.
+    """
+    fetch = FakeFetch({"api.openalex.org": b'{"results": []}'})
     result = fetch_abstract(conn, "src-blog", fetch=fetch)
     assert not result.stored
-    assert result.reason == "no-identifier"
-    assert fetch.calls == []
+    assert result.reason == "no-title-match"
+    assert fetch.calls, "the title search should have been attempted"
 
+
+def test_a_source_with_neither_identifier_nor_title_asks_nothing(conn):
+    """no-identifier now means 'nothing to search with', which is distinct from
+    'the search ran and found nothing'."""
+    add_node(conn, "src-bare", "Source", {
+        "url": "https://someone.example/notes", "source_type": "conference-paper",
+        "license": "MIT", "title": "",
+    })
+    fetch = FakeFetch({})
+    result = fetch_abstract(conn, "src-bare", fetch=fetch)
+    assert result.reason == "no-identifier"
+    assert not fetch.calls, "nothing to ask with, so nothing should be asked"
 
 def test_fetch_abstract_rejects_non_source_node(conn):
     with pytest.raises(ValueError, match="does not exist"):
@@ -450,7 +470,9 @@ def test_batch_reports_per_route_counts_and_failures(conn):
     assert report.considered == 3
     assert report.stored == 2
     assert report.by_route == {"arxiv": 1, "openalex": 1}
-    assert report.failures == {"no-identifier": 1}
+    # src-blog has no identifier, so it now falls through to a title search
+    # rather than stopping at no-identifier (contract change, 2026-09-18).
+    assert report.failures == {"no-title-match": 1}
 
 
 def test_batch_records_which_identifier_each_abstract_came_from(conn):
@@ -616,3 +638,115 @@ def test_is_plausible_without_a_label_keeps_the_strict_floor():
     """Every caller predating the split passed one argument."""
     assert is_plausible("x" * MIN_PLAUSIBLE_ABSTRACT_CHARS)
     assert not is_plausible("x" * (MIN_PLAUSIBLE_ABSTRACT_CHARS - 1))
+
+
+# --- the title-search route --------------------------------------------------
+#
+# 323 papers carry a venue landing page with no arXiv id and no DOI anywhere in
+# the url, so the only query available is the title we already hold. That makes
+# the answer only as good as the question, which is a weaker claim than either
+# identifier route makes and is labelled as one.
+
+
+def _search_body(title, venue=None, abstract=True, work_type="conference-paper"):
+    import json as _json
+    work = {"title": title, "type": work_type}
+    if abstract:
+        work["abstract_inverted_index"] = {w: [i] for i, w in enumerate(REAL_ABSTRACT.split())}
+    if venue is not None:
+        work["primary_location"] = {"source": {"display_name": venue}}
+    return _json.dumps({"results": [work]}).encode()
+
+
+TITLE = "SCRUTINIZER: Towards Secure Forensics on Compromised TrustZone"
+
+
+def test_a_title_search_finds_the_right_paper(conn):
+    add_node(conn, "src-venue", "Source", {
+        "url": "https://www.ndss-symposium.org/ndss-paper/scrutinizer",
+        "source_type": "conference-paper", "license": "MIT",
+        "title": TITLE, "venue": "NDSS",
+    })
+    fetch = FakeFetch({"api.openalex.org": _search_body(TITLE)})
+    result = fetch_abstract(conn, "src-venue", fetch=fetch)
+    assert result.stored
+    assert result.abstract_source == "openalex-title-search"
+
+
+def test_a_plausible_but_wrong_paper_is_refused(conn):
+    """THE WHOLE RISK. A title search returns the best match for whatever it is
+    given; a Source whose title belonged to another paper would otherwise
+    receive that paper's abstract, stamped as though it had been looked up."""
+    add_node(conn, "src-venue", "Source", {
+        "url": "https://www.usenix.org/conference/osdi26/presentation/x",
+        "source_type": "conference-paper", "license": "MIT",
+        "title": "A Programming Model for Disaggregated Memory over CXL",
+        "venue": "OSDI",
+    })
+    # Same field, similar words, different paper.
+    wrong = "A Programming Model for Persistent Memory over CXL Interconnects and Fabrics"
+    result = fetch_abstract(conn, "src-venue", fetch=FakeFetch({"api.openalex.org": _search_body(wrong)}))
+    assert not result.stored
+    assert result.reason == "no-title-match"
+    assert "abstract" not in get_node(conn, "src-venue")["attrs"]
+
+
+def test_a_contradicting_venue_is_refused(conn):
+    add_node(conn, "src-venue", "Source", {
+        "url": "https://www.usenix.org/conference/osdi26/presentation/x",
+        "source_type": "conference-paper", "license": "MIT",
+        "title": TITLE, "venue": "OSDI",
+    })
+    body = _search_body(TITLE, venue="Zenodo (CERN European Organization for Nuclear Research)")
+    result = fetch_abstract(conn, "src-venue", fetch=FakeFetch({"api.openalex.org": body}))
+    assert not result.stored
+    assert result.reason == "no-title-match"
+
+
+def test_an_absent_venue_is_not_a_contradiction(conn):
+    """Measured 2026-09-18: only 1 of 4 matches carried any OpenAlex venue.
+    Treating absence as failure would reject every good match for missing data."""
+    add_node(conn, "src-venue", "Source", {
+        "url": "https://www.usenix.org/conference/osdi26/presentation/x",
+        "source_type": "conference-paper", "license": "MIT",
+        "title": TITLE, "venue": "SOSP",
+    })
+    result = fetch_abstract(conn, "src-venue", fetch=FakeFetch({"api.openalex.org": _search_body(TITLE)}))
+    assert result.stored
+
+
+def test_a_partially_matching_venue_agrees(conn):
+    add_node(conn, "src-venue", "Source", {
+        "url": "https://www.usenix.org/conference/osdi26/presentation/x",
+        "source_type": "conference-paper", "license": "MIT",
+        "title": TITLE, "venue": "OSDI",
+    })
+    body = _search_body(TITLE, venue="USENIX OSDI Symposium")
+    assert fetch_abstract(conn, "src-venue", fetch=FakeFetch({"api.openalex.org": body})).stored
+
+
+def test_no_search_result_is_reported_not_stored(conn):
+    import json as _json
+    add_node(conn, "src-venue", "Source", {
+        "url": "https://www.usenix.org/conference/osdi26/presentation/x",
+        "source_type": "conference-paper", "license": "MIT",
+        "title": TITLE, "venue": "OSDI",
+    })
+    empty = _json.dumps({"results": []}).encode()
+    assert fetch_abstract(conn, "src-venue", fetch=FakeFetch({"api.openalex.org": empty})).reason == "no-title-match"
+
+
+def test_the_title_search_floor_is_far_above_the_difference_floor():
+    """0.35 judges two titles DIFFERENT. 0.80 asserts they name the same work,
+    which is the stronger claim needed when the query is what is being trusted."""
+    assert TITLE_SEARCH_MATCH_FLOOR > MIN_PLAUSIBLE_ABSTRACT_CHARS / 1000
+    assert TITLE_SEARCH_MATCH_FLOOR >= 0.8
+    assert titles_match_closely(TITLE, TITLE)
+    assert not titles_match_closely(TITLE, "Some Entirely Different Paper About Scheduling")
+
+
+def test_the_title_search_label_is_its_own_provenance_class():
+    """openalex means the authority was asked about a document. This means it
+    was asked which document best matches a string. Different confidence."""
+    assert "openalex-title-search" in MIN_PLAUSIBLE_CHARS_BY_ROUTE
+    assert "openalex-title-search" != "openalex"

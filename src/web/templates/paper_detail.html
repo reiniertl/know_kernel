@@ -32,6 +32,17 @@
         Reconstructed from OpenAlex&rsquo;s inverted word index &mdash; the wording is
         recovered from a bag of positions, so word order and punctuation may differ
         from the published abstract.
+      {% elif s_attrs.abstract_source == 'openalex-title-search' %}
+        {# The weakest provenance the system has. OpenAlex was asked which
+           document best matches this paper's TITLE, not asked about an
+           identifier, because the source url carries neither an arXiv id nor a
+           DOI. The wording carries the same reconstruction caveat as openalex,
+           and the MATCH itself is a judgement rather than a lookup. #}
+        Found by searching OpenAlex for this paper&rsquo;s title, because its link
+        carries no arXiv id or DOI to look up directly. The match was accepted on
+        a close title agreement rather than an identifier, and the wording is
+        reconstructed from an inverted word index, so it may differ from the
+        published abstract.
       {% elif s_attrs.abstract_source == 'pdf' %}
         Extracted from the paper PDF.
       {% elif s_attrs.abstract_source == 'manual' %}

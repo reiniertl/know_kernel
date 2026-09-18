@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -86,7 +87,20 @@ MIN_PLAUSIBLE_ABSTRACT_CHARS = 250
 MIN_PLAUSIBLE_CHARS_BY_ROUTE = {
     "arxiv": 250,
     "openalex": 120,
+    # Same text, same reconstruction, same floor. The weakness of a title search
+    # is in the LOOKUP, not in the prose it returns.
+    "openalex-title-search": 120,
 }
+
+# A title search returns the best match for whatever string it is given, so the
+# answer is only as good as the question. These two conditions are what make the
+# result a claim about THIS paper rather than about something similarly named.
+#
+# 0.80 is deliberately far above the 0.35 used elsewhere to judge two titles
+# DIFFERENT: there, a low score means "these name different works"; here, the
+# query is itself the thing being trusted, and "something similar exists" is not
+# good enough to write into the corpus.
+TITLE_SEARCH_MATCH_FLOOR = 0.80
 
 # Strict, anchored on the arxiv.org host. The prior art also carried a bare
 # r'(\d{4}\.\d{4,5})' fallback, which matches a year-like number in ANY url and
@@ -264,6 +278,69 @@ def fetch_via_openalex(identifier: Identifier, fetch: Fetch) -> tuple[str, str] 
     return (text, "openalex") if text else None
 
 
+def _title_tokens(text: str | None) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 2}
+
+
+def titles_match_closely(stored: str | None, found: str | None) -> bool:
+    """Whether a search result names the paper we asked about."""
+    a, b = _title_tokens(stored), _title_tokens(found)
+    if not a or not b:
+        return False
+    return len(a & b) / len(a | b) >= TITLE_SEARCH_MATCH_FLOOR
+
+
+def venue_contradicts(stored: str | None, found: str | None) -> bool:
+    """True only when both venues are known AND share nothing.
+
+    An ABSENT venue is not a contradiction. Measured 2026-09-18: only 1 of 4
+    matches carried any OpenAlex venue at all, so treating absence as failure
+    would reject every good match for missing data rather than for disagreement.
+    """
+    a, b = _title_tokens(stored), _title_tokens(found)
+    if not a or not b:
+        return False
+    return not (a & b)
+
+
+def search_by_title(
+    title: str, venue: str | None, fetch: Fetch
+) -> tuple[str, str] | None:
+    """Find an abstract by searching OpenAlex for a title we already hold.
+
+    Returns (text, label) only when the result both matches the title closely
+    and carries no contradicting venue. Anything weaker returns None; the caller
+    reports it rather than storing it.
+    """
+    if not (title or "").strip():
+        return None
+    url = (
+        f"{OPENALEX_API}?filter=title.search:"
+        f"{urllib.parse.quote(title)}&per-page=1"
+    )
+    try:
+        raw = fetch(url, {"User-Agent": USER_AGENT})
+    except Exception as exc:
+        raise RouteTransportError("openalex-title-search", exc) from exc
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    results = data.get("results") or []
+    if not results:
+        return None
+    work = results[0]
+    if work.get("type") == OPENALEX_CONTAINER_TYPE:
+        return None
+    if not titles_match_closely(title, work.get("title")):
+        return None
+    location = (work.get("primary_location") or {}).get("source") or {}
+    if venue_contradicts(venue, location.get("display_name")):
+        return None
+    text = reconstruct_inverted_index(work.get("abstract_inverted_index"))
+    return (text, "openalex-title-search") if text else None
+
+
 # arXiv first: its text is verbatim, OpenAlex's is reconstructed.
 ROUTES: tuple[Callable[[Identifier, Fetch], tuple[str, str] | None], ...] = (
     fetch_via_arxiv,
@@ -312,7 +389,29 @@ def fetch_abstract(
 
     identifier = resolve_identifier(attrs.get("url"))
     if identifier is None:
-        return FetchResult(source_id=source_id, stored=False, reason="no-identifier")
+        # No identifier anywhere in the url — 323 papers, almost all venue
+        # landing pages. The title is the only query available, and it is a
+        # weaker one: see search_by_title for the two conditions that make its
+        # answer usable.
+        if not (attrs.get("title") or "").strip():
+            # No identifier AND no title: nothing to ask with. Kept as its own
+            # code rather than folded into no-title-match, which means the
+            # search ran and found nothing.
+            return FetchResult(source_id=source_id, stored=False, reason="no-identifier")
+        try:
+            found = search_by_title(attrs.get("title"), attrs.get("venue"), fetch)
+        except RouteTransportError:
+            return FetchResult(source_id=source_id, stored=False, reason="transport-error")
+        if found is None:
+            return FetchResult(source_id=source_id, stored=False, reason="no-title-match")
+        text, label = found
+        if not is_plausible(text, label):
+            return FetchResult(source_id=source_id, stored=False, reason="abstract-too-short")
+        set_abstract(conn, source_id, text, label)
+        return FetchResult(
+            source_id=source_id, stored=True, reason="stored",
+            abstract_source=label, chars=len(text.strip()),
+        )
 
     # Why each route declined, most informative last. A transport failure means
     # the question was never asked; a container means it was asked and answered
