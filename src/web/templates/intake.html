@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Intake</h1>
+
+{# ALG-KK-WEB-INTAKE-LIST. Reads verdicts ALG-KK-COMPLETENESS-COMPUTE already
+   wrote; computes nothing.
+
+   INV-KK-COMPLETENESS-ADVISORY: the verdict gates nothing. A filter here is
+   something the operator asked for — the default is "All papers", and when a
+   filter IS applied the page says so plainly rather than silently showing a
+   subset. Nothing is ever hidden on the strength of a verdict alone. #}
+
+<div style="margin-bottom:1rem;">
+  <form method="get" action="/intake" style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+    <label>Missing:</label>
+    <select name="missing" onchange="this.form.submit()" style="font-family:monospace; padding:0.2rem;">
+      <option value="">All papers (no filter)</option>
+      {% for key, label, _explanation in dimensions %}
+      <option value="{{ key }}" {% if missing_filter == key %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+      <option value="any" {% if missing_filter == 'any' %}selected{% endif %}>Everything (no dimension at all)</option>
+      <option value="verdict" {% if missing_filter == 'verdict' %}selected{% endif %}>No verdict computed</option>
+    </select>
+
+    <label style="margin-left:0.5rem;">Summary state:</label>
+    <select name="summary_state" onchange="this.form.submit()" style="font-family:monospace; padding:0.2rem;">
+      <option value="">Any</option>
+      {% for st in ['absent', 'llm-extracted', 'human-reviewed', 'human-authored', 'rejected'] %}
+      <option value="{{ st }}" {% if summary_state_filter == st %}selected{% endif %}>{{ st }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+{% if missing_filter or summary_state_filter %}
+<p style="margin:0.5em 0; padding:0.4rem 0.6rem; background:#fff8e1; border-left:3px solid #f0ad4e; font-size:0.85em;">
+  A filter is applied, so this is a <strong>subset</strong> of the corpus.
+  <a href="/intake">Show all papers</a>.
+</p>
+{% endif %}
+
+{% if papers %}
+<table style="width:100%;">
+  <thead>
+    <tr>
+      <th style="width:34%;">Paper</th>
+      <th style="width:10%;">Venue</th>
+      {% for _key, label, _explanation in dimensions %}
+      <th style="width:6%; font-size:0.8em;">{{ label }}</th>
+      {% endfor %}
+      <th style="width:12%;">Summary state</th>
+      <th style="width:9%;">Computed</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for p in papers %}
+    <tr>
+      <td><a href="/paper/{{ p.source_id }}">{{ p.title }}</a></td>
+      <td style="font-size:0.8em;color:#666;">{{ p.venue }}</td>
+      {% for key, _label, _explanation in dimensions %}
+      <td style="text-align:center;">
+        {% if p.verdict is none %}
+        <span style="color:#bbb;" title="no verdict computed for this paper">?</span>
+        {% elif p.verdict[key] %}&#10003;{% else %}&#8212;{% endif %}
+      </td>
+      {% endfor %}
+      {# summary_state is carried beside has_summary deliberately. Every one of
+         the 3,295 summaries in the corpus is llm-extracted and NOT ONE has been
+         read by a person; a bare tick under "Summary" would read as endorsement. #}
+      <td style="font-size:0.8em;">
+        {% if p.summary_state == 'llm-extracted' %}
+        <span style="color:#b8860b;" title="model output, unreviewed">{{ p.summary_state }}</span>
+        {% elif p.summary_state %}{{ p.summary_state }}
+        {% else %}<span style="color:#bbb;">&mdash;</span>{% endif %}
+      </td>
+      {# INV-KK-COMPLETENESS-STALENESS-TOLERATED: the verdict may disagree with
+         the graph, so the date it was computed is shown rather than implied.
+         In a list of thousands that matters more than on a single page. #}
+      <td style="font-size:0.8em;color:#888;">{{ p.computed_at or "&mdash;"|safe }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<div style="margin-top:1rem; display:flex; gap:1rem; align-items:center;">
+  {% if page > 1 %}
+  <a href="/intake?missing={{ missing_filter }}&summary_state={{ summary_state_filter }}&page={{ page - 1 }}&per_page={{ per_page }}">&larr; Previous</a>
+  {% endif %}
+  <span style="color:#888; font-size:0.85em;">Page {{ page }}</span>
+  {% if has_next %}
+  <a href="/intake?missing={{ missing_filter }}&summary_state={{ summary_state_filter }}&page={{ page + 1 }}&per_page={{ per_page }}">Next &rarr;</a>
+  {% endif %}
+</div>
+{% else %}
+<p style="color:#888;">No papers match.</p>
+{% endif %}
+
+<p style="margin-top:1.5rem; font-size:0.8em; color:#888;">
+  A record of what has been captured, not a score and not a gate. A tick means the
+  field is present, never that it is correct: a summary can be a faithful summary
+  of the wrong paper and still show green here.
+</p>
+{% endblock %}

@@ -41,6 +41,13 @@ from graph.scoring import research_score
 # IFC-KK-PAPER-COMPLETENESS, in the order the interface declares them. Label and
 # one line of plain English per dimension, so the page explains what it shows
 # rather than printing six raw attribute names.
+# The canonical paper vocabulary as a SQL tuple literal, shared by every list
+# view. Hoisted from inside the research-list route on 2026-09-18 when the intake
+# view needed it: a third copy of the literal would have worked directly against
+# INV-KK-PAPER-SOURCE-TYPE-VOCABULARY, which exists because three modules
+# previously carried their own and two disagreed.
+_RESEARCH_TYPES = "('preprint','conference-paper','conference-proceedings')"
+
 COMPLETENESS_DIMENSION_LABELS = (
     ("has_abstract", "Abstract", "The paper's abstract is stored."),
     ("has_summary", "Summary", "A usable summary exists, model-written or human."),
@@ -486,7 +493,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         """
         conn = request.app.state.conn
 
-        _RESEARCH_TYPES = "('preprint','conference-paper','conference-proceedings')"
         _SOURCE_WHERE = (
             "FROM nodes WHERE kind = 'Source' "
             f"AND json_extract(attrs, '$.source_type') IN {_RESEARCH_TYPES}"
@@ -1036,6 +1042,89 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         total_papers = sum(s["total_papers"] for s in subsystems)
         return templates.TemplateResponse(
             request, "radar.html", {"subsystems": subsystems, "total_papers": total_papers},
+        )
+
+    @app.get("/intake", response_class=HTMLResponse)
+    async def intake_list(
+        request: Request,
+        missing: str | None = None,
+        summary_state: str | None = None,
+        page: int = Query(1, ge=1),
+        per_page: int = Query(50, ge=10, le=200),
+    ):
+        """Papers and their intake completeness verdict (ALG-KK-WEB-INTAKE-LIST).
+
+        Reads verdicts ALG-KK-COMPLETENESS-COMPUTE already wrote. Computes
+        nothing, fetches nothing, calls no model.
+
+        INV-KK-WEB-QUERY-BOUNDED: SQL LIMIT/OFFSET pagination.
+        INV-KK-COMPLETENESS-ADVISORY: `missing` defaults to None and the
+        unfiltered view shows every paper. A filter is something the operator
+        asks for, never something the page does on its own.
+        """
+        conn = request.app.state.conn
+        dimensions = [key for key, _label, _explanation in COMPLETENESS_DIMENSION_LABELS]
+
+        # LEFT JOIN, deliberately: a paper with NO verdict node at all is exactly
+        # the kind most likely to be broken, and an inner join would hide it.
+        sql = (
+            "SELECT s.id, s.attrs, v.attrs FROM nodes s "
+            "LEFT JOIN edges e ON e.kind = 'completeness-of' AND e.target_id = s.id "
+            "LEFT JOIN nodes v ON v.id = e.source_id "
+            f"WHERE s.kind = 'Source' AND json_extract(s.attrs, '$.source_type') IN {_RESEARCH_TYPES}"
+        )
+        params: list = []
+        if missing == "verdict":
+            sql += " AND v.id IS NULL"
+        elif missing in dimensions:
+            # NULL (no verdict) counts as missing the dimension.
+            sql += f" AND COALESCE(json_extract(v.attrs, '$.{missing}'), 0) = 0"
+        elif missing == "any":
+            clauses = " AND ".join(
+                f"COALESCE(json_extract(v.attrs, '$.{d}'), 0) = 0" for d in dimensions
+            )
+            sql += f" AND ({clauses})"
+        if summary_state:
+            sql += " AND json_extract(v.attrs, '$.summary_state') = ?"
+            params.append(summary_state)
+        sql += " ORDER BY s.id LIMIT ? OFFSET ?"
+        params.extend([per_page + 1, (page - 1) * per_page])
+
+        rows = conn.execute(sql, params).fetchall()
+        has_next = len(rows) > per_page
+        rows = rows[:per_page]
+
+        papers = []
+        for source_id, source_attrs, verdict_attrs in rows:
+            s_attrs = json.loads(source_attrs) if isinstance(source_attrs, str) else (source_attrs or {})
+            v_attrs = (
+                json.loads(verdict_attrs) if isinstance(verdict_attrs, str) else verdict_attrs
+            ) or None
+            papers.append({
+                "source_id": source_id,
+                "title": s_attrs.get("title") or source_id,
+                "venue": s_attrs.get("venue") or "",
+                "source_type": s_attrs.get("source_type") or "",
+                "verdict": v_attrs,
+                # Carried separately from has_summary: every summary in the corpus
+                # is llm-extracted and none has been read by a person, so a green
+                # tick must not be allowed to read as endorsement.
+                "summary_state": (v_attrs or {}).get("summary_state") or "",
+                "computed_at": (v_attrs or {}).get("computed_at") or "",
+            })
+
+        return templates.TemplateResponse(
+            request,
+            "intake.html",
+            {
+                "papers": papers,
+                "dimensions": COMPLETENESS_DIMENSION_LABELS,
+                "missing_filter": missing or "",
+                "summary_state_filter": summary_state or "",
+                "page": page,
+                "per_page": per_page,
+                "has_next": has_next,
+            },
         )
 
     @app.get("/reviews", response_class=HTMLResponse)

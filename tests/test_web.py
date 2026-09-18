@@ -1888,3 +1888,141 @@ def test_paper_page_still_lists_its_concepts(motivating_client):
     response = motivating_client.get("/paper/src-1")
     assert response.status_code == 200
     assert "Lock-free Queue" in response.text
+
+
+# ---------------------------------------------------------------------------
+# ALG-KK-WEB-INTAKE-LIST — the corpus-wide view of the completeness verdicts.
+#
+# The verdicts were computed for all 3,482 papers and reachable one at a time.
+# These pin the three properties that matter: the filter is opt-in, the verdict
+# gates nothing, and the staleness date survives into a list of thousands.
+# ---------------------------------------------------------------------------
+
+
+def _intake_db(tmp_path, name="intake.db"):
+    """Four papers spanning the combinations that actually occur in the corpus."""
+    import json as _json
+
+    db_path = tmp_path / name
+    conn = init_db(db_path)
+
+    def paper(sid, title, abstract, dims, summary_state, computed="2026-09-17"):
+        attrs = {
+            "url": f"https://example.com/{sid}", "source_type": "preprint",
+            "license": "MIT", "title": title,
+        }
+        if abstract:
+            attrs["abstract"] = abstract
+        add_node(conn, sid, "Source", attrs)
+        if dims is None:
+            return
+        verdict = {"computed_at": computed, "summary_state": summary_state}
+        verdict.update(dims)
+        add_node(conn, f"pcomp-{sid}", "PaperCompleteness", verdict)
+        add_edge(conn, "completeness-of", f"pcomp-{sid}", sid)
+
+    full = dict(has_abstract=True, has_summary=True, links_concept=True,
+                links_subsystem=True, links_kernel=True, links_invariant=False)
+    paper("src-full", "Complete Paper", "An abstract.", full, "llm-extracted")
+    # The evidence-text shape: a summary with no abstract. Lawful, and 174 real
+    # papers look like this.
+    paper("src-noabs", "Summary But No Abstract", "",
+          dict(full, has_abstract=False), "llm-extracted")
+    paper("src-empty", "Nothing At All", "",
+          dict(has_abstract=False, has_summary=False, links_concept=False,
+               links_subsystem=False, links_kernel=False, links_invariant=False),
+          "absent")
+    # No verdict node at all — must still be listed.
+    paper("src-noverdict", "Never Computed", "An abstract.", None, "")
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def _ids_on(client, url):
+    text = client.get(url).text
+    return {sid for sid in ("src-full", "src-noabs", "src-empty", "src-noverdict")
+            if f"/paper/{sid}" in text}
+
+
+def test_intake_unfiltered_shows_every_paper(tmp_path):
+    """INV-KK-COMPLETENESS-ADVISORY: nothing is hidden on the strength of a
+    verdict. The default view is the whole corpus, including the paper that has
+    no verdict at all."""
+    db_path = _intake_db(tmp_path)
+    with _client_for(db_path) as c:
+        assert _ids_on(c, "/intake") == {
+            "src-full", "src-noabs", "src-empty", "src-noverdict"
+        }
+
+
+def test_intake_filters_by_a_missing_dimension(tmp_path):
+    db_path = _intake_db(tmp_path)
+    with _client_for(db_path) as c:
+        assert _ids_on(c, "/intake?missing=has_abstract") == {
+            "src-noabs", "src-empty", "src-noverdict"
+        }
+        assert _ids_on(c, "/intake?missing=has_summary") == {
+            "src-empty", "src-noverdict"
+        }
+
+
+def test_a_paper_with_a_summary_but_no_abstract_appears_under_both(tmp_path):
+    """The evidence-text combination is lawful, not a contradiction."""
+    db_path = _intake_db(tmp_path)
+    with _client_for(db_path) as c:
+        assert "src-noabs" in _ids_on(c, "/intake?missing=has_abstract")
+        assert "src-noabs" not in _ids_on(c, "/intake?missing=has_summary")
+
+
+def test_intake_filters_papers_satisfying_no_dimension(tmp_path):
+    db_path = _intake_db(tmp_path)
+    with _client_for(db_path) as c:
+        assert _ids_on(c, "/intake?missing=any") == {"src-empty", "src-noverdict"}
+
+
+def test_intake_can_isolate_papers_with_no_verdict(tmp_path):
+    db_path = _intake_db(tmp_path)
+    with _client_for(db_path) as c:
+        assert _ids_on(c, "/intake?missing=verdict") == {"src-noverdict"}
+
+
+def test_intake_filters_by_summary_state(tmp_path):
+    """Every summary in the real corpus is llm-extracted and none is reviewed."""
+    db_path = _intake_db(tmp_path)
+    with _client_for(db_path) as c:
+        assert _ids_on(c, "/intake?summary_state=llm-extracted") == {
+            "src-full", "src-noabs"
+        }
+        assert _ids_on(c, "/intake?summary_state=human-reviewed") == set()
+
+
+def test_intake_shows_the_summary_state_not_only_the_tick(tmp_path):
+    """A bare tick under "Summary" would read as endorsement."""
+    db_path = _intake_db(tmp_path)
+    with _client_for(db_path) as c:
+        assert "llm-extracted" in c.get("/intake").text
+
+
+def test_intake_renders_computed_at(tmp_path):
+    """INV-KK-COMPLETENESS-STALENESS-TOLERATED: shown, not implied."""
+    db_path = _intake_db(tmp_path)
+    with _client_for(db_path) as c:
+        assert "2026-09-17" in c.get("/intake").text
+
+
+def test_intake_says_so_when_a_filter_is_applied(tmp_path):
+    """A subset must announce itself, or it reads as the whole corpus."""
+    db_path = _intake_db(tmp_path)
+    with _client_for(db_path) as c:
+        assert "subset" in c.get("/intake?missing=has_abstract").text.lower()
+        assert "subset" not in c.get("/intake").text.lower()
+
+
+def test_intake_is_paginated(tmp_path):
+    """INV-KK-WEB-QUERY-BOUNDED: LIMIT/OFFSET, not the whole table."""
+    db_path = _intake_db(tmp_path)
+    with _client_for(db_path) as c:
+        first = _ids_on(c, "/intake?per_page=10&page=1")
+        assert len(first) == 4
+        assert _ids_on(c, "/intake?per_page=10&page=2") == set()

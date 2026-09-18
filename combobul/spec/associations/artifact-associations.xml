@@ -4144,4 +4144,14 @@
     <link to="INV-KK-INGEST-SOURCE-HAS-ADVISORY" relation="enforces"/>
   </associate>
 
+  <associate source="src/web/routes.py" kind="endpoint" name="GET /intake" scope="setup_routes">
+    <link to="ALG-KK-WEB-INTAKE-LIST" relation="implements"/>
+    <link to="INV-KK-WEB-QUERY-BOUNDED" relation="enforces"/>
+    <link to="INV-KK-COMPLETENESS-ADVISORY" relation="enforces"/>
+  </associate>
+
+  <associate source="src/web/templates/intake.html" kind="source-file" name="intake.html" scope="">
+    <link to="ALG-KK-WEB-INTAKE-LIST" relation="part-of"/>
+  </associate>
+
 </artifact-associations>
