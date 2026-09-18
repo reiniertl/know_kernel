@@ -23,6 +23,9 @@ from ingest.abstract_fetcher import (
     fetch_abstract,
     fetch_via_arxiv,
     fetch_via_openalex,
+    ContainerRecordFound,
+    MIN_PLAUSIBLE_CHARS_BY_ROUTE,
+    RouteTransportError,
     is_plausible,
     reconstruct_inverted_index,
     resolve_identifier,
@@ -188,9 +191,15 @@ def test_arxiv_route_returns_none_on_empty_feed():
     assert fetch_via_arxiv(Identifier("arxiv", ARXIV_ID), fetch) is None
 
 
-def test_arxiv_route_returns_none_on_network_error():
+def test_arxiv_route_raises_on_network_error():
+    """Previously returned None, which made a dead transport indistinguishable
+    from a paper with no abstract. export.arxiv.org returns HTTP 406 to this
+    environment for every request, and the batch reported it as a missing
+    abstract."""
     fetch = FakeFetch({"arxiv": OSError("connection reset")})
-    assert fetch_via_arxiv(Identifier("arxiv", ARXIV_ID), fetch) is None
+    with pytest.raises(RouteTransportError) as exc:
+        fetch_via_arxiv(Identifier("arxiv", ARXIV_ID), fetch)
+    assert exc.value.route == "arxiv"
 
 
 def test_arxiv_route_returns_none_on_malformed_xml():
@@ -248,9 +257,11 @@ def test_openalex_route_returns_none_when_index_missing():
     assert fetch_via_openalex(Identifier("doi", DOI), fetch) is None
 
 
-def test_openalex_route_returns_none_on_http_error():
+def test_openalex_route_raises_on_http_error():
     fetch = FakeFetch({"api.openalex.org": OSError("429")})
-    assert fetch_via_openalex(Identifier("doi", DOI), fetch) is None
+    with pytest.raises(RouteTransportError) as exc:
+        fetch_via_openalex(Identifier("doi", DOI), fetch)
+    assert exc.value.route == "openalex"
 
 
 # --- plausibility gate -------------------------------------------------------
@@ -280,7 +291,7 @@ def test_short_result_leaves_the_source_untouched(conn):
     })
     result = fetch_abstract(conn, "src-arxiv", fetch=fetch)
     assert not result.stored
-    assert result.reason == "no-plausible-result"
+    assert result.reason == "abstract-too-short"
 
     attrs = get_node(conn, "src-arxiv")["attrs"]
     assert "abstract" not in attrs
@@ -522,3 +533,86 @@ def test_batch_limit_bounds_the_run(conn):
     })
     report = run_batch(conn, fetch=fetch, sleep=lambda s: None, limit=1)
     assert report.considered == 1
+
+
+# --- the failure taxonomy ----------------------------------------------------
+#
+# Before 2026-09-18 every non-success collapsed into "no-plausible-result". A
+# 406 from arXiv, a Source carrying a proceedings-volume DOI, and a genuinely
+# abstract-less paper all reported identically, so a broken transport read as
+# missing data. These pin the codes apart.
+
+
+def test_transport_failure_and_empty_result_get_different_codes(conn):
+    dead = FakeFetch({"arxiv": OSError("406"), "api.openalex.org": OSError("406")})
+    assert fetch_abstract(conn, "src-arxiv", fetch=dead).reason == "transport-error"
+
+    empty = FakeFetch({
+        "export.arxiv.org": ARXIV_ATOM_EMPTY.encode(),
+        "api.openalex.org": _openalex_body(None),
+    })
+    assert fetch_abstract(conn, "src-doi", fetch=empty).reason == "no-abstract-in-record"
+
+
+def test_a_declining_route_does_not_mask_a_transport_failure(conn):
+    """src-doi carries a DOI, so the arXiv route declines it outright. That
+    decline must not be counted as evidence about the paper — otherwise it
+    outranks OpenAlex's dead transport and reports a missing abstract for a
+    connection that never answered."""
+    fetch = FakeFetch({"api.openalex.org": OSError("406")})
+    assert fetch_abstract(conn, "src-doi", fetch=fetch).reason == "transport-error"
+
+
+def test_a_container_doi_is_not_reported_as_not_found(conn):
+    """A proceedings-volume DOI RESOLVES; the answer is just about the wrong
+    document. Saying "not found" sends the reader after the API instead of after
+    the Source's DOI, which is where the fault actually is."""
+    import json as _json
+
+    body = _json.dumps({
+        "type": "paratext",
+        "title": "Proceedings of the ACM SIGOPS 31st Symposium on Operating Systems Principles",
+        "abstract_inverted_index": None,
+    }).encode()
+    fetch = FakeFetch({"api.openalex.org": body})
+
+    result = fetch_abstract(conn, "src-doi", fetch=fetch)
+
+    assert not result.stored
+    assert result.reason == "resolved-to-container"
+
+
+def test_the_container_exception_carries_what_it_resolved_to():
+    import json as _json
+
+    body = _json.dumps({"type": "paratext", "title": "Proceedings of Something"}).encode()
+    with pytest.raises(ContainerRecordFound) as exc:
+        fetch_via_openalex(Identifier("doi", DOI), FakeFetch({"api.openalex.org": body}))
+    assert exc.value.title == "Proceedings of Something"
+
+
+# --- per-route plausibility floors -------------------------------------------
+
+
+def test_openalex_floor_is_lower_than_the_arxiv_floor():
+    assert MIN_PLAUSIBLE_CHARS_BY_ROUTE["openalex"] < MIN_PLAUSIBLE_CHARS_BY_ROUTE["arxiv"]
+
+
+def test_a_reconstructed_abstract_below_the_arxiv_floor_is_accepted_for_openalex():
+    """The 8 real abstracts discarded on 2026-09-18 ran 135-235 characters."""
+    text = "x" * 200
+    assert is_plausible(text, "openalex")
+    assert not is_plausible(text, "arxiv")
+
+
+def test_placeholders_are_still_rejected_on_both_routes():
+    for label in ("arxiv", "openalex"):
+        assert not is_plausible("Abstract not available.", label)
+        assert not is_plausible("", label)
+        assert not is_plausible(None, label)
+
+
+def test_is_plausible_without_a_label_keeps_the_strict_floor():
+    """Every caller predating the split passed one argument."""
+    assert is_plausible("x" * MIN_PLAUSIBLE_ABSTRACT_CHARS)
+    assert not is_plausible("x" * (MIN_PLAUSIBLE_ABSTRACT_CHARS - 1))

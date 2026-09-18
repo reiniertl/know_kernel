@@ -35,6 +35,16 @@ from ingest.source_abstract import set_abstract
 ARXIV_API = "http://export.arxiv.org/api/query"
 OPENALEX_API = "https://api.openalex.org/works"
 
+# OpenAlex marks a proceedings VOLUME — the book the papers sit in — with this
+# work type. Several Sources carry the volume's DOI rather than their own paper's
+# (10.1145/3731569, 10.1145/3694715, 10.1145/3713082 among them), and OpenAlex
+# resolves those happily: the lookup SUCCEEDS and returns a record titled e.g.
+# "Proceedings of the ACM SIGOPS 31st Symposium on Operating Systems Principles",
+# which has no abstract. Reporting that as "not found" hides the real fault,
+# which is that the Source carries the wrong DOI. 12 of 20 resolvable candidates
+# failed this way on 2026-09-18.
+OPENALEX_CONTAINER_TYPE = "paratext"
+
 # OpenAlex asks for a contact address in the User-Agent to reach its polite
 # pool, which is what buys the 0.5s rate rather than a harsher one.
 USER_AGENT = "know_kernel/0.1 (mailto:reiniertl@gmail.com)"
@@ -53,6 +63,30 @@ OPENALEX_RATE_LIMIT_SECONDS = 0.5
 # USENIX and ACM abstracts routinely land at 600-900 characters. 250 clears
 # every genuine abstract while still catching the placeholders.
 MIN_PLAUSIBLE_ABSTRACT_CHARS = 250
+
+# PER-ROUTE FLOORS. Operator decision, 2026-09-18.
+#
+# 250 was calibrated on arXiv and USENIX text and holds there. It does NOT hold
+# for OpenAlex, whose abstracts are REBUILT from abstract_inverted_index and come
+# back materially shorter than the published text. Measured over the 20
+# resolvable candidates on 2026-09-18: 8 returned a genuine abstract, every one
+# between 135 and 235 characters, and the 250 floor discarded all 8 — including
+# this, at 226 characters and plainly real:
+#
+#   "Web applications are governed by privacy policies, but developers lack
+#    practical abstractions to ensure that their code actually abides by these
+#    policies. This leads to frequent ov..."
+#
+# The two labels were already kept distinct by INV-KK-ABSTRACT-SOURCE-ENUM
+# precisely because openalex text is not word-for-word, so that is where the
+# different floor belongs. 120 clears every measured case while still rejecting
+# placeholders such as "Abstract not available." at ~23 characters.
+#
+# The arxiv floor is UNCHANGED. Its calibration was never the problem.
+MIN_PLAUSIBLE_CHARS_BY_ROUTE = {
+    "arxiv": 250,
+    "openalex": 120,
+}
 
 # Strict, anchored on the arxiv.org host. The prior art also carried a bare
 # r'(\d{4}\.\d{4,5})' fallback, which matches a year-like number in ANY url and
@@ -82,6 +116,38 @@ class Identifier:
 
     kind: str  # "arxiv" | "doi"
     value: str
+
+
+class ContainerRecordFound(Exception):
+    """The identifier resolved, but to a proceedings volume rather than a paper.
+
+    A distinct outcome from "no record": the lookup worked and the answer is that
+    this Source is carrying a container DOI. The fault is in the Source, not in
+    the route, and saying "not found" would send anyone investigating to the
+    wrong place.
+    """
+
+    def __init__(self, identifier: Identifier, title: str) -> None:
+        super().__init__(f"{identifier.kind}:{identifier.value} resolved to container {title!r}")
+        self.identifier = identifier
+        self.title = title
+
+
+class RouteTransportError(Exception):
+    """The route could not be reached at all.
+
+    Raised when the fetch callable itself fails, so that a transport failure is
+    never reported as an empty result. export.arxiv.org returns HTTP 406 to this
+    environment for every request — http and https, with and without a
+    User-Agent — and the previous bare `except Exception: return None` reported
+    that as "no-plausible-result", which said the abstract was missing when in
+    truth the question was never asked.
+    """
+
+    def __init__(self, route: str, cause: BaseException) -> None:
+        super().__init__(f"{route}: {cause}")
+        self.route = route
+        self.cause = cause
 
 
 @dataclass
@@ -135,11 +201,16 @@ def reconstruct_inverted_index(index: dict | None) -> str | None:
     return " ".join(positions[k] for k in sorted(positions))
 
 
-def is_plausible(text: str | None) -> bool:
-    """True when `text` is long enough to be a real abstract."""
+def is_plausible(text: str | None, source_label: str | None = None) -> bool:
+    """True when `text` is long enough to be a real abstract for its route.
+
+    `source_label` selects the route's floor. Omitting it applies the strict
+    default, which is what every caller predating the per-route split did.
+    """
     if not text:
         return False
-    return len(text.strip()) >= MIN_PLAUSIBLE_ABSTRACT_CHARS
+    floor = MIN_PLAUSIBLE_CHARS_BY_ROUTE.get(source_label, MIN_PLAUSIBLE_ABSTRACT_CHARS)
+    return len(text.strip()) >= floor
 
 
 def fetch_via_arxiv(identifier: Identifier, fetch: Fetch) -> tuple[str, str] | None:
@@ -149,6 +220,9 @@ def fetch_via_arxiv(identifier: Identifier, fetch: Fetch) -> tuple[str, str] | N
     url = f"{ARXIV_API}?id_list={identifier.value}&max_results=1"
     try:
         raw = fetch(url, {"User-Agent": USER_AGENT})
+    except Exception as exc:  # transport only — never a data problem
+        raise RouteTransportError("arxiv", exc) from exc
+    try:
         root = ET.fromstring(raw)
         entries = root.findall("atom:entry", _ATOM_NS)
         if not entries:
@@ -178,11 +252,16 @@ def fetch_via_openalex(identifier: Identifier, fetch: Fetch) -> tuple[str, str] 
 
     try:
         raw = fetch(url, {"User-Agent": USER_AGENT})
+    except Exception as exc:  # transport only — never a data problem
+        raise RouteTransportError("openalex", exc) from exc
+    try:
         data = json.loads(raw)
-        text = reconstruct_inverted_index(data.get("abstract_inverted_index"))
-        return (text, "openalex") if text else None
     except Exception:
         return None
+    if data.get("type") == OPENALEX_CONTAINER_TYPE:
+        raise ContainerRecordFound(identifier, data.get("title") or "")
+    text = reconstruct_inverted_index(data.get("abstract_inverted_index"))
+    return (text, "openalex") if text else None
 
 
 # arXiv first: its text is verbatim, OpenAlex's is reconstructed.
@@ -190,6 +269,17 @@ ROUTES: tuple[Callable[[Identifier, Fetch], tuple[str, str] | None], ...] = (
     fetch_via_arxiv,
     fetch_via_openalex,
 )
+
+# Which identifier kinds each route can answer for. A route that DECLINES an
+# identifier has not failed and must contribute no outcome: fetch_via_arxiv
+# returns None for a DOI, and counting that as "no abstract in the record" would
+# let it outrank a genuine transport failure on the other route — reporting
+# missing data for a dead connection, which is the exact confusion this taxonomy
+# exists to end.
+ROUTE_IDENTIFIER_KINDS: dict[object, tuple[str, ...]] = {
+    fetch_via_arxiv: ("arxiv",),
+    fetch_via_openalex: ("arxiv", "doi"),
+}
 
 
 def fetch_abstract(
@@ -224,12 +314,29 @@ def fetch_abstract(
     if identifier is None:
         return FetchResult(source_id=source_id, stored=False, reason="no-identifier")
 
+    # Why each route declined, most informative last. A transport failure means
+    # the question was never asked; a container means it was asked and answered
+    # about the wrong document; too-short means a real abstract was found and
+    # judged unusable. Collapsing these into one code is what made a 406 look
+    # like a missing abstract.
+    outcomes: list[str] = []
     for route in ROUTES:
-        found = route(identifier, fetch)
+        if identifier.kind not in ROUTE_IDENTIFIER_KINDS[route]:
+            continue  # declined, not failed
+        try:
+            found = route(identifier, fetch)
+        except RouteTransportError:
+            outcomes.append("transport-error")
+            continue
+        except ContainerRecordFound:
+            outcomes.append("resolved-to-container")
+            continue
         if found is None:
+            outcomes.append("no-abstract-in-record")
             continue
         text, label = found
-        if not is_plausible(text):
+        if not is_plausible(text, label):
+            outcomes.append("abstract-too-short")
             continue
         set_abstract(conn, source_id, text, label)
         return FetchResult(
@@ -239,7 +346,18 @@ def fetch_abstract(
             chars=len(text.strip()),
         )
 
+    # Rank by how much each outcome tells the operator. "too short" names a real
+    # abstract we chose not to store; "container" names a wrong DOI on the
+    # Source; those both beat a bare miss, and a pure transport failure last of
+    # all because it says nothing about the paper.
+    for reason in ("abstract-too-short", "resolved-to-container",
+                   "no-abstract-in-record", "transport-error"):
+        if reason in outcomes:
+            break
+    else:
+        reason = "no-plausible-result"
+
     return FetchResult(
-        source_id=source_id, stored=False, reason="no-plausible-result",
+        source_id=source_id, stored=False, reason=reason,
         identifier_kind=identifier.kind, identifier_value=identifier.value,
     )
