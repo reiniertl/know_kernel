@@ -14,9 +14,22 @@ from typing import Any, Protocol
 
 from graph.engine import add_edge, add_node
 from graph.rules import VALID_EVIDENCE_BASES
+from ingest.llm_provider import (
+    DEFAULT_PROVIDER,
+    LLMClient,
+    client_for,
+    default_model_for,
+)
 from ingest.gate import SessionGate
 
 log = logging.getLogger(__name__)
+
+#: The model used when a caller names none. Resolved from the shared port
+#: rather than written out, so the two paths cannot drift again: this file
+#: said "claude-sonnet-4-6" while summary_extractor said "claude-sonnet-5",
+#: and only one of those is a live model id.
+DEFAULT_EXTRACTION_MODEL = default_model_for(DEFAULT_PROVIDER)
+
 
 
 EXTRACTION_SYSTEM_PROMPT = """\
@@ -909,12 +922,6 @@ def mark_edges_superseded(
     return moved
 
 
-class LLMClient(Protocol):
-    def create_message(
-        self, model: str, system: str, user: str, max_tokens: int,
-    ) -> dict[str, Any]: ...
-
-
 @dataclass
 class ExtractionResult:
     evidence_id: str
@@ -939,33 +946,11 @@ class ExtractionResult:
     edges_superseded: int = 0
 
 
-class AnthropicClientAdapter:
-    def __init__(self) -> None:
-        import anthropic
-        self._client = anthropic.Anthropic()
-
-    def create_message(
-        self, model: str, system: str, user: str, max_tokens: int,
-    ) -> dict[str, Any]:
-        response = self._client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        text = response.content[0].text
-        return {
-            "text": text,
-            "prompt_tokens": response.usage.input_tokens,
-            "response_tokens": response.usage.output_tokens,
-        }
-
-
 def extract_concepts(
     conn: sqlite3.Connection,
     evidence_id: str,
     gate: SessionGate,
-    model: str = "claude-sonnet-4-6",
+    model: str = DEFAULT_EXTRACTION_MODEL,
     dry_run: bool = False,
     client: LLMClient | None = None,
     source_type: str | None = None,
@@ -1060,7 +1045,7 @@ def extract_concepts(
         )
 
     if client is None:
-        client = AnthropicClientAdapter()
+        client = client_for(DEFAULT_PROVIDER)
 
     response = client.create_message(
         model=model,

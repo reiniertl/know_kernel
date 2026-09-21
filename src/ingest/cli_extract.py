@@ -9,6 +9,7 @@ from pathlib import Path
 
 from graph.schema import init_db
 from ingest.extractor import edge_carries_a_current_verdict, extract_concepts
+from ingest.llm_provider import DEFAULT_PROVIDER, PROVIDERS, client_for, default_model_for
 from ingest.gate import SessionGate
 
 
@@ -96,8 +97,15 @@ def main() -> None:
              "filter, so N is how many are actually sent. Batch modes only.",
     )
     parser.add_argument(
-        "--model", default="claude-sonnet-4-6",
-        help="LLM model name (default: claude-sonnet-4-6)",
+        "--provider", default=DEFAULT_PROVIDER, choices=sorted(PROVIDERS),
+        help="Which LLM provider to call. AUTHORITATIVE: it selects the "
+             "adapter AND the default model, and is never inferred from "
+             f"--model (default: {DEFAULT_PROVIDER})",
+    )
+    parser.add_argument(
+        "--model", default=None,
+        help="LLM model name. Defaults to the provider's default model; "
+             "naming a model does NOT change the provider.",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -113,6 +121,14 @@ def main() -> None:
         if args.limit < 1:
             parser.error("--limit must be at least 1")
 
+    # Provider is authoritative and the model follows it, never the reverse.
+    # A prefix rule that guessed the provider from the model name would
+    # silently misroute any identifier it did not recognise; this codebase
+    # already refuses one silent-inference shortcut in
+    # INV-KK-SUMMARY-EXTRACT-INPUT-BASIS, and summary_extractor states the
+    # same rule for this port.
+    model = args.model or default_model_for(args.provider)
+
     try:
         conn = init_db(Path(args.db))
     except Exception as exc:
@@ -120,6 +136,12 @@ def main() -> None:
         sys.exit(2)
 
     gate = SessionGate()
+
+    # Built ONCE for the batch rather than per paper, and NOT AT ALL for a dry
+    # run: each adapter constructs its SDK client in __init__ and that raises
+    # immediately when no credential is present. A dry run must stay runnable
+    # without one — it is how the batch is sized before anybody is charged.
+    client = None if args.dry_run else client_for(args.provider)
 
     if args.all_unextracted:
         candidates = select_unextracted(conn)
@@ -143,8 +165,8 @@ def main() -> None:
     for eid in evidence_ids:
         try:
             result = extract_concepts(
-                conn, eid, gate, model=args.model, dry_run=args.dry_run,
-                relink=args.all_relink,
+                conn, eid, gate, model=model, dry_run=args.dry_run,
+                relink=args.all_relink, client=client,
             )
             results.append({
                 "evidence_id": result.evidence_id,
@@ -171,6 +193,8 @@ def main() -> None:
     print(json.dumps({
         "mode": ("relink" if args.all_relink
                  else "unextracted" if args.all_unextracted else "single"),
+        "provider": args.provider,
+        "model": model,
         "selected": selected,
         "skipped_empty": len(skipped_empty),
         "attempted": len(evidence_ids),

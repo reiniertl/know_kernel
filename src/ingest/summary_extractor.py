@@ -113,99 +113,20 @@ RULES:
 """
 
 
-class LLMClient(Protocol):
-    def create_message(
-        self, model: str, system: str, user: str, max_tokens: int,
-    ) -> dict[str, Any]: ...
-
-
-class AnthropicClientAdapter:
-    def __init__(self) -> None:
-        import anthropic
-
-        self._client = anthropic.Anthropic()
-
-    def create_message(
-        self, model: str, system: str, user: str, max_tokens: int,
-    ) -> dict[str, Any]:
-        response = self._client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        return {
-            "text": response.content[0].text,
-            "prompt_tokens": response.usage.input_tokens,
-            "response_tokens": response.usage.output_tokens,
-        }
-
-
-class OpenAIClientAdapter:
-    """The same port, spoken to OpenAI.
-
-    Three normalisations, none of them optional. OpenAI has no system parameter,
-    so the system prompt becomes a leading message with role "system". The reply
-    text is choices[0].message.content rather than content[0].text. And the usage
-    fields are prompt_tokens / completion_tokens rather than input / output. The
-    dict this returns must carry exactly the three keys the Protocol names,
-    because validate_summary parses response["text"] as the raw model string.
-    """
-
-    def __init__(self) -> None:
-        import openai
-
-        self._client = openai.OpenAI()
-
-    def create_message(
-        self, model: str, system: str, user: str, max_tokens: int,
-    ) -> dict[str, Any]:
-        response = self._client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        )
-        usage = response.usage
-        return {
-            # content is None rather than "" when the model returns nothing;
-            # validate_summary would reject None as not-a-str, but "" is the
-            # honest reading and the path it already handles.
-            "text": response.choices[0].message.content or "",
-            "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
-            "response_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
-        }
-
-
-# Provider is authoritative: it selects the adapter AND the default model.
-# Deliberately NOT inferred from the model name — a prefix rule silently
-# misroutes any identifier it does not recognise, and this codebase already
-# refuses one silent-inference shortcut in INV-KK-SUMMARY-EXTRACT-INPUT-BASIS.
-PROVIDERS = {
-    "anthropic": (AnthropicClientAdapter, "claude-sonnet-5"),
-    "openai": (OpenAIClientAdapter, "gpt-4o-mini"),
-}
-DEFAULT_PROVIDER = "anthropic"
-
-
-def default_model_for(provider: str) -> str:
-    """The model used when --model is not given. Raises on an unknown provider."""
-    if provider not in PROVIDERS:
-        raise ValueError(
-            f"Unknown provider '{provider}'. Must be one of: " + ", ".join(sorted(PROVIDERS))
-        )
-    return PROVIDERS[provider][1]
-
-
-def client_for(provider: str) -> LLMClient:
-    """Construct the adapter for a provider. The SDK import happens here."""
-    if provider not in PROVIDERS:
-        raise ValueError(
-            f"Unknown provider '{provider}'. Must be one of: " + ", ".join(sorted(PROVIDERS))
-        )
-    return PROVIDERS[provider][0]()
+# The provider port moved to ingest.llm_provider on 2026-09-21 so that
+# ingest.extractor could share it instead of carrying a second copy — see
+# ANN-KK-SUMMARY-PROVIDER-SPLIT. These re-exports are deliberate: every caller
+# and test that imported these names from here keeps working unchanged, which
+# is what made the move a move rather than a rewrite of a working path.
+from ingest.llm_provider import (  # noqa: F401
+    DEFAULT_PROVIDER,
+    PROVIDERS,
+    AnthropicClientAdapter,
+    LLMClient,
+    OpenAIClientAdapter,
+    client_for,
+    default_model_for,
+)
 
 
 @dataclass

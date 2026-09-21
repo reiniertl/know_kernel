@@ -16,6 +16,12 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from graph.engine import add_edge, add_node
+from ingest.llm_provider import (
+    DEFAULT_PROVIDER,
+    LLMClient,
+    client_for,
+    default_model_for,
+)
 
 log = logging.getLogger(__name__)
 
@@ -103,10 +109,9 @@ VALID_PROPOSAL_STATUSES = frozenset({"draft", "under-review", "accepted", "rejec
 VALID_FORUMS = frozenset({"lkml", "lwn", "hackernews", "plumbers", "phoronix", "other"})
 
 
-class LLMClient(Protocol):
-    def create_message(
-        self, model: str, system: str, user: str, max_tokens: int,
-    ) -> dict[str, Any]: ...
+#: The model used when a caller names none. Resolved from the shared port —
+#: this file said "claude-sonnet-4-6", which is not a live model id.
+DEFAULT_CLAIM_MODEL = default_model_for(DEFAULT_PROVIDER)
 
 
 def build_claim_extraction_context(conn: sqlite3.Connection) -> str:
@@ -338,7 +343,7 @@ def extract_claims(
     conn: sqlite3.Connection,
     evidence_id: str,
     source_date: str,
-    model: str = "claude-sonnet-4-6",
+    model: str = DEFAULT_CLAIM_MODEL,
     dry_run: bool = False,
     client: LLMClient | None = None,
     source_text: str | None = None,
@@ -369,8 +374,10 @@ def extract_claims(
         )
 
     if client is None:
-        from ingest.extractor import AnthropicClientAdapter
-        client = AnthropicClientAdapter()
+        # Was `from ingest.extractor import AnthropicClientAdapter` — a third
+        # module reaching into a second for a vendor adapter. Both now take it
+        # from the one port.
+        client = client_for(DEFAULT_PROVIDER)
 
     response = client.create_message(
         model=model,

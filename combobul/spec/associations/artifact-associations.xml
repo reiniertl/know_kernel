@@ -4350,4 +4350,22 @@
     <link to="ALG-KK-EXTRACT-CLI"               relation="part-of"/>
   </associate>
 
+  <associate source="src/ingest/llm_provider.py" kind="source-file" name="llm_provider.py" scope="">
+    <link to="ANN-KK-SUMMARY-PROVIDER-SPLIT" relation="part-of"/>
+  </associate>
+
+  <associate source="src/ingest/llm_provider.py" kind="function" name="client_for" scope="">
+    <link to="ALG-KK-EXTRACT-CLI"    relation="part-of"/>
+    <link to="ALG-KK-LLM-EXTRACT"    relation="part-of"/>
+  </associate>
+
+  <associate source="src/ingest/llm_provider.py" kind="function" name="default_model_for" scope="">
+    <link to="ALG-KK-EXTRACT-CLI" relation="part-of"/>
+  </associate>
+
+  <associate source="tests/test_llm_provider.py" kind="source-file" name="test_llm_provider.py" scope="">
+    <link to="ANN-KK-SUMMARY-PROVIDER-SPLIT" relation="part-of"/>
+    <link to="ALG-KK-EXTRACT-CLI"            relation="part-of"/>
+  </associate>
+
 </artifact-associations>
