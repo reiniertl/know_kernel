@@ -89,34 +89,98 @@ def test_the_rule_does_not_swallow_the_databases_themselves():
 
 PROVENANCE_EDGE_KIND = "extracted-from"
 
+#: The only files permitted to create a provenance edge, or to call something
+#: that does. The first two write the edges; the other three are sanctioned as
+#: CALLERS ONLY and contain no edge-creating line themselves.
+SANCTIONED_WRITERS = (
+    "src/ingest/extractor.py",
+    "src/ingest/claim_extractor.py",
+)
+SANCTIONED_CALLERS = (
+    "src/ingest/cli_extract.py",
+    "src/ingest/cli_feed.py",
+    "src/ingest/__init__.py",
+)
+INDIRECT_WRITE_IMPORTS = ("extract_concepts", "extract_claims")
+
+
+def _tracked_python_files() -> list[str]:
+    out = _git("ls-files", "*.py").stdout.splitlines()
+    return [p for p in out if p and not p.startswith("tests/")]
+
 
 def test_the_retired_title_regex_linker_is_gone():
     assert not (REPO / "data" / "semantic_link.py").exists()
 
 
-def test_no_script_under_data_writes_a_provenance_edge():
-    """A helper that links a paper to a concept without reading the paper is
-    outside the mechanism however it is spelled, so this greps for the edge
-    kind rather than for one function name."""
+@needs_git
+def test_only_the_two_sanctioned_writers_create_provenance_edges():
+    """The direct half of INV-KK-LINK-MECHANISM-SINGLE, now swept over every
+    tracked .py file rather than only data/. The old version looked at data/
+    alone and so could not see that src/ingest/claim_extractor.py is a second
+    live writer."""
     offenders = []
-    for path in sorted((REPO / "data").glob("*.py")):
-        text = path.read_text(encoding="utf-8", errors="replace")
+    for rel in _tracked_python_files():
+        if rel in SANCTIONED_WRITERS:
+            continue
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
         for lineno, line in enumerate(text.splitlines(), 1):
             if PROVENANCE_EDGE_KIND not in line:
                 continue
             # Reading or counting existing edges is fine; creating them is not.
             if "add_edge" in line or "INSERT INTO edges" in line.upper():
-                offenders.append(f"{path.name}:{lineno}")
+                offenders.append(f"{rel}:{lineno}")
     assert offenders == [], (
-        "these write provenance edges outside src/ingest/extractor.py: "
+        "these create provenance edges outside the sanctioned writers: "
         + ", ".join(offenders))
 
 
-def test_the_extractor_is_still_the_one_that_does_write_them():
-    """Guards the test above from passing because the mechanism moved or was
-    renamed — an empty repo would satisfy a pure absence check."""
-    src = (REPO / "src" / "ingest" / "extractor.py").read_text(encoding="utf-8")
-    assert src.count(f'add_edge(\n        conn, "{PROVENANCE_EDGE_KIND}"') == 7
+@needs_git
+def test_nothing_outside_the_mechanism_calls_an_extractor():
+    """The indirect half, and the half that was missing. data/run_extraction.py
+    wrote provenance edges without containing the string 'extracted-from' at
+    all: it handed extract_concepts a DirectClient returning hand-written JSON,
+    so the edges were created one stack frame away and the old grep passed.
+    Going through an extractor is the same act as writing the edge."""
+    offenders = []
+    for rel in _tracked_python_files():
+        if rel in SANCTIONED_WRITERS or rel in SANCTIONED_CALLERS:
+            continue
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        for lineno, line in enumerate(text.splitlines(), 1):
+            stripped = line.lstrip()
+            if not (stripped.startswith("from ") or stripped.startswith("import ")):
+                continue
+            if any(name in line for name in INDIRECT_WRITE_IMPORTS):
+                offenders.append(f"{rel}:{lineno}")
+    assert offenders == [], (
+        "these import an extractor and so can write provenance edges "
+        "indirectly: " + ", ".join(offenders))
+
+
+def test_the_sanctioned_files_all_exist_and_still_write_the_edges():
+    """Guards both tests above from passing vacuously. An absence check is
+    satisfied by an empty repository, and a sanctioned list is satisfied by a
+    sanctioned file that no longer does the thing it is sanctioned for."""
+    for rel in SANCTIONED_WRITERS + SANCTIONED_CALLERS:
+        assert (REPO / rel).exists(), f"{rel} is named in the spec but missing"
+
+    extractor = (REPO / "src" / "ingest" / "extractor.py").read_text(encoding="utf-8")
+    assert extractor.count(f'add_edge(\n        conn, "{PROVENANCE_EDGE_KIND}"') == 7
+
+    claims = (REPO / "src" / "ingest" / "claim_extractor.py").read_text(encoding="utf-8")
+    assert claims.count(f'add_edge(conn, "{PROVENANCE_EDGE_KIND}"') == 6, (
+        "claim_extractor.py is the second sanctioned mechanism and had six "
+        "writers on 2026-09-21; if that changed, INV-KK-LINK-MECHANISM-SINGLE "
+        "and INV-KK-CLAIM-EXTRACT-EVIDENCE-BARE both name the number")
+
+
+def test_the_manual_extraction_script_is_gone():
+    """data/run_extraction.py fed pre-crafted JSON through the real extractor
+    with model='manual-extraction'. It was inert when removed — none of its
+    four Evidence ids existed — but it was one Evidence node away from writing
+    hand-authored content the graph could not tell from model output."""
+    assert not (REPO / "data" / "run_extraction.py").exists()
 
 
 # ---------------------------------------------------------------------------
