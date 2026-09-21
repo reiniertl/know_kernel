@@ -13,6 +13,7 @@ from datetime import date
 from typing import Any, Protocol
 
 from graph.engine import add_edge, add_node
+from graph.rules import VALID_EVIDENCE_BASES
 from ingest.gate import SessionGate
 
 log = logging.getLogger(__name__)
@@ -784,6 +785,130 @@ def store_rich_concept(
     return concept_id
 
 
+def normalise_concept_name(name: str) -> str:
+    """The key concept identity is matched on in re-link mode.
+
+    casefold rather than lower: the corpus carries names from paper titles and
+    the difference matters for the handful that are not plain ASCII.
+    """
+    return " ".join(str(name).split()).casefold()
+
+
+def find_concept_by_name(conn: sqlite3.Connection, name: str) -> str | None:
+    """The existing Concept with this name, if there is exactly one.
+
+    Returns None on a tie. Two Concepts already sharing a name is a corpus
+    defect, and picking one arbitrarily would attach a paper's provenance to a
+    coin flip — minting a new node is the honest outcome there.
+    """
+    key = normalise_concept_name(name)
+    if not key:
+        return None
+    hits = [
+        row[0] for row in conn.execute(
+            "SELECT id, json_extract(attrs, '$.name') FROM nodes "
+            "WHERE kind = 'Concept'"
+        ).fetchall()
+        if normalise_concept_name(row[1] or "") == key
+    ]
+    return hits[0] if len(hits) == 1 else None
+
+
+def attach_existing_concept(
+    conn: sqlite3.Connection, concept_id: str, item: dict, evidence_id: str,
+    evidence_text: str = "",
+    model: str = "",
+) -> str:
+    """The EIGHTH provenance writer (INV-KK-EXTRACT-PROVENANCE), re-link only.
+
+    Links a Concept that ALREADY EXISTS to the Evidence being re-derived. The
+    other seven mint a node and then link it; this one only links, which is
+    the whole point: store_rich_concept never looks up by name, and the
+    title-regex linker it replaces reused 77 Concepts across 1,433 papers.
+    Re-deriving through minting alone would take a 97-node vocabulary into
+    five figures of near-duplicates, each arriving at weight 1 and so in
+    violation of INV-KK-CONCEPT-ADMISSION.
+
+    It writes the same build_evidence_attrs verdict as the other seven, so the
+    structural claim that no extractor-written edge can be bare still holds.
+
+    IT UPDATES RATHER THAN INSERTS WHEN THE LINK ALREADY EXISTS, and that is
+    the common case, not an edge case. The 77 reused Concepts already point at
+    the papers being re-derived, and the edges table carries
+    UNIQUE (kind, source_id, target_id) — a plain insert would raise
+    IntegrityError on the majority of the 1,433 papers, part way through a
+    paid run. The same link acquiring a real verdict in place of a legacy
+    marker is the correct outcome: it becomes the current edge and is NOT
+    superseded, because it is the replacement.
+    """
+    attrs = build_evidence_attrs(item["description"], evidence_text, model)
+    already = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'extracted-from' "
+        "AND source_id = ? AND target_id = ?", (concept_id, evidence_id),
+    ).fetchone()
+    if already is not None:
+        conn.execute(
+            "UPDATE edges SET attrs = ? WHERE kind = 'extracted-from' "
+            "AND source_id = ? AND target_id = ?",
+            (json.dumps(attrs), concept_id, evidence_id))
+        return concept_id
+    add_edge(
+        conn, "extracted-from", concept_id, evidence_id,
+        attrs,
+    )
+    return concept_id
+
+
+def edge_carries_a_current_verdict(attrs: dict | None) -> bool:
+    """Whether a provenance edge still stands as this paper's live link.
+
+    Current means: a basis the evidence rule accepts, and not superseded. The
+    out-of-scope markers — unverified-legacy, claim-extract-unverified,
+    extractor-preverdict, mechanism-unattributed — are deliberately NOT
+    current, because an edge carrying one is exactly an edge awaiting
+    re-derivation. This one predicate drives both --all-relink's selection and
+    INV-KK-EXTRACT-RELINK-CONVERGENT's guard, which is why a failed run
+    resumes rather than skips.
+    """
+    if not isinstance(attrs, dict):
+        return False
+    if attrs.get("superseded") is True:
+        return False
+    return attrs.get("basis") in VALID_EVIDENCE_BASES
+
+
+def mark_edges_superseded(
+    conn: sqlite3.Connection, evidence_id: str, source_ids: list[str]
+) -> int:
+    """Retire the named edges into this Evidence. Returns how many moved.
+
+    Called only AFTER at least one replacement edge exists. Superseding first
+    and then failing to extract would leave a paper whose only links are
+    retired ones, which is worse than the state it started in.
+    """
+    moved = 0
+    for source_id in source_ids:
+        row = conn.execute(
+            "SELECT attrs FROM edges WHERE kind = 'extracted-from' "
+            "AND source_id = ? AND target_id = ?", (source_id, evidence_id),
+        ).fetchone()
+        if row is None:
+            continue
+        try:
+            attrs = json.loads(row[0]) if row[0] else {}
+        except json.JSONDecodeError:
+            attrs = {}
+        if not isinstance(attrs, dict) or attrs.get("superseded") is True:
+            continue
+        attrs["superseded"] = True
+        conn.execute(
+            "UPDATE edges SET attrs = ? WHERE kind = 'extracted-from' "
+            "AND source_id = ? AND target_id = ?",
+            (json.dumps(attrs), source_id, evidence_id))
+        moved += 1
+    return moved
+
+
 class LLMClient(Protocol):
     def create_message(
         self, model: str, system: str, user: str, max_tokens: int,
@@ -807,6 +932,11 @@ class ExtractionResult:
     extraction_model: str = ""
     prompt_tokens: int = 0
     response_tokens: int = 0
+    #: Re-link mode only. concepts_reused counts links made to a Concept that
+    #: already existed; edges_superseded counts old links retired, and is zero
+    #: whenever concepts_created and concepts_reused are both zero.
+    concepts_reused: int = 0
+    edges_superseded: int = 0
 
 
 class AnthropicClientAdapter:
@@ -839,6 +969,7 @@ def extract_concepts(
     dry_run: bool = False,
     client: LLMClient | None = None,
     source_type: str | None = None,
+    relink: bool = False,
 ) -> ExtractionResult:
     """Extract abstract Concepts from an Evidence node via LLM.
 
@@ -857,10 +988,12 @@ def extract_concepts(
     gate.record_class_a_access()
 
     existing = conn.execute(
-        "SELECT source_id FROM edges WHERE kind = 'extracted-from' AND target_id = ?",
+        "SELECT source_id, attrs FROM edges "
+        "WHERE kind = 'extracted-from' AND target_id = ?",
         (evidence_id,),
     ).fetchall()
-    if existing:
+    if existing and not relink:
+        # INV-KK-EXTRACT-IDEMPOTENT, default mode: any edge at all stops us.
         return ExtractionResult(
             evidence_id=evidence_id,
             concept_ids=[r[0] for r in existing],
@@ -868,6 +1001,25 @@ def extract_concepts(
             concepts_skipped=len(existing),
             extraction_model=model,
         )
+    if existing and relink:
+        # INV-KK-EXTRACT-RELINK-CONVERGENT: a CURRENT edge stops us; a legacy
+        # marker does not, because that is the edge we are here to replace.
+        parsed_existing = []
+        for source_id, raw in existing:
+            try:
+                parsed_existing.append(
+                    (source_id, json.loads(raw) if raw else {}))
+            except json.JSONDecodeError:
+                parsed_existing.append((source_id, {}))
+        if any(edge_carries_a_current_verdict(a) for _, a in parsed_existing):
+            return ExtractionResult(
+                evidence_id=evidence_id,
+                concept_ids=[sid for sid, _ in parsed_existing],
+                concepts_created=0,
+                concepts_skipped=len(parsed_existing),
+                extraction_model=model,
+            )
+    superseding_candidates = [r[0] for r in existing] if relink else []
 
     source_row = conn.execute(
         "SELECT target_id FROM edges WHERE kind = 'sourced-from' AND source_id = ?",
@@ -952,14 +1104,22 @@ def extract_concepts(
         comparative_data = []
 
     concept_ids: list[str] = []
+    concepts_reused = 0
     name_to_id: dict[str, str] = {}
     for item in concepts_data[:10]:
         validated = validate_extraction_item(item)
         if validated is None:
             continue
-        concept_id = store_rich_concept(
-            conn, validated, evidence_id,
-            evidence_text=evidence_text, model=model)
+        reused = find_concept_by_name(conn, validated["name"]) if relink else None
+        if reused is not None:
+            concept_id = attach_existing_concept(
+                conn, reused, validated, evidence_id,
+                evidence_text=evidence_text, model=model)
+            concepts_reused += 1
+        else:
+            concept_id = store_rich_concept(
+                conn, validated, evidence_id,
+                evidence_text=evidence_text, model=model)
         concept_ids.append(concept_id)
         name_to_id[validated["name"].lower()] = concept_id
 
@@ -1059,10 +1219,20 @@ def extract_concepts(
                         item.get("name", "?"), ungrounded,
                     )
 
+    # INV-KK-EXTRACT-RELINK-CONVERGENT: retire the old links only once their
+    # replacements exist. concepts_created == 0 implies edges_superseded == 0.
+    edges_superseded = 0
+    if relink and concept_ids:
+        edges_superseded = mark_edges_superseded(
+            conn, evidence_id,
+            [sid for sid in superseding_candidates if sid not in concept_ids])
+
     return ExtractionResult(
         evidence_id=evidence_id,
         concept_ids=concept_ids,
         subsystem_ids=subsystem_ids,
+        concepts_reused=concepts_reused,
+        edges_superseded=edges_superseded,
         relationships_created=rel_result.edges_created,
         invariants_created=invariants_created,
         failure_modes_created=failure_modes_created,
@@ -1070,7 +1240,7 @@ def extract_concepts(
         profiles_created=profiles_created,
         compatibilities_created=compatibilities_created,
         comparatives_created=comparatives_created,
-        concepts_created=len(concept_ids),
+        concepts_created=len(concept_ids) - concepts_reused,
         concepts_skipped=0,
         extraction_model=model,
         prompt_tokens=response.get("prompt_tokens", 0),

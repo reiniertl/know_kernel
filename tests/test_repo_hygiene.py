@@ -166,7 +166,11 @@ def test_the_sanctioned_files_all_exist_and_still_write_the_edges():
         assert (REPO / rel).exists(), f"{rel} is named in the spec but missing"
 
     extractor = (REPO / "src" / "ingest" / "extractor.py").read_text(encoding="utf-8")
-    assert extractor.count(f'add_edge(\n        conn, "{PROVENANCE_EDGE_KIND}"') == 7
+    # Eight since 2026-09-21, not seven: attach_existing_concept joined the
+    # seven named in INV-KK-EXTRACT-PROVENANCE. It fires only in re-link mode
+    # and calls build_evidence_attrs like the rest, so the structural claim
+    # that no extractor-written edge can be bare holds across all eight.
+    assert extractor.count(f'add_edge(\n        conn, "{PROVENANCE_EDGE_KIND}"') == 8
 
     claims = (REPO / "src" / "ingest" / "claim_extractor.py").read_text(encoding="utf-8")
     assert claims.count(f'add_edge(conn, "{PROVENANCE_EDGE_KIND}"') == 6, (

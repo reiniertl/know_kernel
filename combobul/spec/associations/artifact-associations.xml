@@ -4311,4 +4311,43 @@
     <link to="INV-KK-LINK-MECHANISM-SINGLE" relation="part-of"/>
   </associate>
 
+  <associate source="src/ingest/cli_extract.py" kind="source-file" name="cli_extract.py" scope="">
+    <link to="ALG-KK-EXTRACT-CLI" relation="part-of"/>
+  </associate>
+
+  <associate source="src/ingest/cli_extract.py" kind="function" name="select_for_relink" scope="">
+    <link to="ALG-KK-EXTRACT-CLI"                  relation="part-of"/>
+    <link to="INV-KK-EXTRACT-RELINK-CONVERGENT"    relation="uses"/>
+  </associate>
+
+  <associate source="src/ingest/cli_extract.py" kind="function" name="select_unextracted" scope="">
+    <link to="ALG-KK-EXTRACT-CLI" relation="part-of"/>
+  </associate>
+
+  <associate source="src/ingest/cli_extract.py" kind="function" name="drop_evidence_with_no_input" scope="">
+    <link to="ALG-KK-EXTRACT-CLI" relation="part-of"/>
+  </associate>
+
+  <associate source="src/ingest/extractor.py" kind="function" name="attach_existing_concept" scope="">
+    <link to="INV-KK-EXTRACT-PROVENANCE"       relation="enforces"/>
+    <link to="INV-KK-EXTRACT-EVIDENCE-RECORDED" relation="enforces"/>
+  </associate>
+
+  <associate source="src/ingest/extractor.py" kind="function" name="find_concept_by_name" scope="">
+    <link to="INV-KK-CONCEPT-ADMISSION" relation="uses"/>
+  </associate>
+
+  <associate source="src/ingest/extractor.py" kind="function" name="edge_carries_a_current_verdict" scope="">
+    <link to="INV-KK-EXTRACT-RELINK-CONVERGENT" relation="enforces"/>
+  </associate>
+
+  <associate source="src/ingest/extractor.py" kind="function" name="mark_edges_superseded" scope="">
+    <link to="INV-KK-EXTRACT-RELINK-CONVERGENT" relation="enforces"/>
+  </associate>
+
+  <associate source="tests/test_extract_relink.py" kind="source-file" name="test_extract_relink.py" scope="">
+    <link to="INV-KK-EXTRACT-RELINK-CONVERGENT" relation="part-of"/>
+    <link to="ALG-KK-EXTRACT-CLI"               relation="part-of"/>
+  </associate>
+
 </artifact-associations>
