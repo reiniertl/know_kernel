@@ -417,6 +417,16 @@ EVIDENCE_RECORDED_FROM = "2026-09-21"
 
 VALID_EVIDENCE_BASES = ("evidence-text", "none")
 
+#: INV-KK-LINK-CONFIRMATION-STATE. The only keys permitted ALONGSIDE the
+#: required set. Without this the "exactly these keys" rule below would make a
+#: reviewed edge a violation the moment a person confirmed it. They stay
+#: optional: their absence is what "nobody has looked at this" means.
+CONFIRMATION_ATTR_KEYS = (
+    "confirmation", "confirmed_by", "confirmed_at", "confirmation_note",
+)
+
+VALID_CONFIRMATIONS = ("confirmed", "rejected")
+
 
 #: Marker carried by the 2,022 links that predate the evidence rule. It is
 #: deliberately NOT in VALID_EVIDENCE_BASES: an edge that is IN SCOPE and claims
@@ -491,7 +501,8 @@ def check_link_evidence_recorded(
         if missing:
             bad(f"missing {', '.join(missing)}")
             continue
-        extra = [k for k in attrs if k not in EVIDENCE_ATTR_KEYS]
+        extra = [k for k in attrs
+                 if k not in EVIDENCE_ATTR_KEYS and k not in CONFIRMATION_ATTR_KEYS]
         if extra:
             bad(f"unexpected attrs {', '.join(sorted(extra))}")
             continue
@@ -514,3 +525,45 @@ def check_link_evidence_recorded(
 
     return EvidenceSweep(conforming=conforming, undated=undated,
                          violations=violations, legacy_marked=legacy_marked)
+
+
+def check_link_confirmations(conn: sqlite3.Connection) -> list[Violation]:
+    """INV-KK-LINK-CONFIRMATION-STATE, over every extracted-from edge.
+
+    Unlike check_link_evidence_recorded this is NOT date-scoped: a person can
+    review a legacy title-regex link, and 191 of those are known wrong, so the
+    review surface is exactly where that would be discovered.
+    """
+    violations: list[Violation] = []
+    rows = conn.execute(
+        "SELECT source_id, target_id, attrs FROM edges WHERE kind = 'extracted-from'"
+    ).fetchall()
+
+    for source_id, target_id, raw in rows:
+        try:
+            attrs = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        except json.JSONDecodeError:
+            continue  # reported by check_link_evidence_recorded
+
+        def bad(msg: str) -> None:
+            violations.append(Violation(
+                source_id, "INV-KK-LINK-CONFIRMATION-STATE",
+                f"extracted-from edge to '{target_id}': {msg}"))
+
+        state = attrs.get("confirmation")
+        present = [k for k in CONFIRMATION_ATTR_KEYS if k in attrs]
+
+        if state is None:
+            # A link cannot record who reviewed it without recording the outcome.
+            if present:
+                bad(f"carries {', '.join(sorted(present))} with no confirmation")
+            continue
+        if state not in VALID_CONFIRMATIONS:
+            bad(f"confirmation '{state}' is not one of {VALID_CONFIRMATIONS}")
+            continue
+        if not attrs.get("confirmed_by"):
+            bad("confirmed without a reviewer")
+            continue
+        if not attrs.get("confirmed_at"):
+            bad("confirmed without a date")
+    return violations

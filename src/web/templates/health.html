@@ -26,6 +26,23 @@
   <tr><td>Summaries no person has read</td>
       <td style="text-align:right;">{{ report.summaries_unreviewed }}</td>
       <td style="padding-left:1rem;"><a href="/intake?summary_state=llm-extracted">view</a></td></tr>
+
+  {# Link confirmation (2026-09-21). Counts of review ACTIVITY, not of
+     correctness: a confirmed link is one a person said they believed, which is
+     the strongest claim available and still not a proof. It reads 0 on the day
+     it lands, for the same reason the row above reads 3,295. #}
+  <tr><td style="padding-top:0.6rem;">Paper links</td>
+      <td style="text-align:right; padding-top:0.6rem;">{{ report.links_total }}</td>
+      <td style="padding-left:1rem; padding-top:0.6rem;"><a href="/links/review?state=all">view</a></td></tr>
+  <tr><td>&nbsp;&nbsp;confirmed by a person</td>
+      <td style="text-align:right;">{{ report.links_confirmed }}</td>
+      <td style="padding-left:1rem;"><a href="/links/review?state=confirmed">view</a></td></tr>
+  <tr><td>&nbsp;&nbsp;rejected by a person</td>
+      <td style="text-align:right;">{{ report.links_rejected }}</td>
+      <td style="padding-left:1rem;"><a href="/links/review?state=rejected">view</a></td></tr>
+  <tr><td>&nbsp;&nbsp;nobody has read</td>
+      <td style="text-align:right;">{{ report.links_total - report.links_confirmed - report.links_rejected }}</td>
+      <td style="padding-left:1rem;"><a href="/links/review?state=unreviewed">view</a></td></tr>
 </table>
 
 <h2>Orphan Concepts <span class="count">{{ report.orphan_concepts|length }}</span></h2>

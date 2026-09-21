@@ -4245,4 +4245,45 @@
     <link to="ALG-KK-LLM-EXTRACT" relation="part-of"/>
   </associate>
 
+
+  <!-- ── Human confirmation of a paper link (2026-09-21) ────────────────────
+       INV-KK-EXTRACT-EVIDENCE-RECORDED made a link checkable. Nothing made it
+       checked. These are the state, the screen and the count.            -->
+
+  <associate source="src/ingest/link_confirmation.py" kind="function" name="set_confirmation" scope="">
+    <link to="INV-KK-LINK-CONFIRMATION-STATE" relation="enforces"/>
+  </associate>
+
+  <associate source="src/ingest/link_confirmation.py" kind="function" name="clear_confirmation" scope="">
+    <link to="INV-KK-LINK-CONFIRMATION-STATE" relation="enforces"/>
+  </associate>
+
+  <associate source="src/ingest/link_confirmation.py" kind="function" name="count_confirmations" scope="">
+    <link to="ALG-KK-DIAG-GRAPH-HEALTH" relation="part-of"/>
+  </associate>
+
+  <associate source="src/graph/rules.py" kind="function" name="check_link_confirmations" scope="">
+    <link to="INV-KK-LINK-CONFIRMATION-STATE" relation="enforces"/>
+  </associate>
+
+  <associate source="src/ingest/paper_completeness.py" kind="function" name="_links_confirmed" scope="">
+    <link to="IFC-KK-PAPER-COMPLETENESS"        relation="defines"/>
+    <link to="INV-KK-LINK-CONFIRMATION-STATE"   relation="uses"/>
+  </associate>
+
+  <associate source="src/web/routes.py" kind="endpoint" name="GET /links/review" scope="setup_routes">
+    <link to="ALG-KK-WEB-LINK-REVIEW"           relation="implements"/>
+    <link to="INV-KK-COMPLETENESS-ADVISORY"     relation="enforces"/>
+  </associate>
+
+  <associate source="src/web/routes.py" kind="endpoint" name="PUT /api/link-confirm/{concept_id}/{evidence_id}" scope="setup_routes">
+    <link to="ALG-KK-WEB-LINK-REVIEW"           relation="implements"/>
+    <link to="INV-KK-LINK-CONFIRMATION-STATE"   relation="enforces"/>
+    <link to="INV-KK-WEB-MUTATION-ALLOWLISTED"  relation="enforces"/>
+  </associate>
+
+  <associate source="src/web/templates/link_review.html" kind="source-file" name="link_review.html" scope="">
+    <link to="ALG-KK-WEB-LINK-REVIEW" relation="part-of"/>
+  </associate>
+
 </artifact-associations>

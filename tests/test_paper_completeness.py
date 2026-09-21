@@ -417,4 +417,8 @@ def test_title_verified_is_in_the_declared_dimension_tuple():
     """The tuple is what IFC-KK-PAPER-COMPLETENESS declares and what the web
     labels iterate; a dimension missing from it would compute and never show."""
     assert "title_verified" in BINARY_DIMENSIONS
-    assert len(BINARY_DIMENSIONS) == 7
+    # Eight since 2026-09-21, when links_confirmed joined per operator decision.
+    # The count is asserted, not just membership, so a dimension cannot be added
+    # without someone reading IFC-KK-PAPER-COMPLETENESS and decision D-A first.
+    assert "links_confirmed" in BINARY_DIMENSIONS
+    assert len(BINARY_DIMENSIONS) == 8

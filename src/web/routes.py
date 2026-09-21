@@ -62,6 +62,10 @@ COMPLETENESS_DIMENSION_LABELS = (
     ("links_invariant", "Kernel invariant",
      ("A kernel invariant was extracted from this paper. Recorded only \u2014 it never "
       "gates anything, and today no paper in the corpus has one.")),
+    ("links_confirmed", "Links confirmed",
+     ("A person read every concept link on this paper and agreed with it. False "
+      "when the paper has no links at all, so it never reads complete by having "
+      "nothing to check. It gates nothing, and today it is true of no paper.")),
 )
 
 # INV-KK-WEB-SUMMARY-STATE-AUTHORITY: the states a human may set through the web.
@@ -75,6 +79,7 @@ WEB_MUTATION_ALLOWLIST = (
     "/api/venue/",  # covers both the single-Source edit and the merge
     "/api/summary/",
     "/api/feed/send/",  # side-effecting shell-out, not a graph write
+    "/api/link-confirm/",
 )
 
 
@@ -1201,6 +1206,142 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "min_score_filter": min_score,
             },
         )
+
+    @app.get("/links/review", response_class=HTMLResponse)
+    async def link_review(
+        request: Request,
+        state: str = "unreviewed",
+        page: int = Query(1, ge=1),
+        per_page: int = Query(25, ge=5, le=100),
+    ):
+        """One screen per link: concept, paper and stored verdict together
+        (ALG-KK-WEB-LINK-REVIEW).
+
+        Reads what ALG-KK-LLM-EXTRACT already stored on the edge. It does not
+        re-run the grounding check, call a model, or alter a verdict.
+
+        INV-KK-COMPLETENESS-ADVISORY: `state` defaults to unreviewed because
+        that is the work queue, but every other value is reachable and no link
+        is ever withheld. The legacy title-regex links are INCLUDED — 191 of
+        them are known wrong and this is where a person would find that out.
+
+        INV-KK-WEB-QUERY-BOUNDED: SQL LIMIT/OFFSET.
+        """
+        from ingest.link_confirmation import count_confirmations
+        from ingest.reviewer_registry import list_reviewers
+
+        conn = request.app.state.conn
+
+        where = {
+            "unreviewed": "AND json_extract(e.attrs, '$.confirmation') IS NULL",
+            "confirmed": "AND json_extract(e.attrs, '$.confirmation') = 'confirmed'",
+            "rejected": "AND json_extract(e.attrs, '$.confirmation') = 'rejected'",
+        }.get(state, "")
+
+        rows = conn.execute(
+            "SELECT c.id, c.attrs, ev.id, s.id, s.attrs, e.attrs "
+            "FROM edges e "
+            "JOIN nodes c  ON c.id = e.source_id AND c.kind = 'Concept' "
+            "JOIN nodes ev ON ev.id = e.target_id AND ev.kind = 'Evidence' "
+            "LEFT JOIN edges se ON se.kind = 'sourced-from' AND se.source_id = ev.id "
+            "LEFT JOIN nodes s ON s.id = se.target_id AND s.kind = 'Source' "
+            f"WHERE e.kind = 'extracted-from' {where} "
+            "ORDER BY c.id, ev.id LIMIT ? OFFSET ?",
+            (per_page, (page - 1) * per_page),
+        ).fetchall()
+
+        links = []
+        for cid, c_raw, ev_id, src_id, s_raw, e_raw in rows:
+            c_attrs = json.loads(c_raw) if isinstance(c_raw, str) else (c_raw or {})
+            s_attrs = json.loads(s_raw) if isinstance(s_raw, str) else (s_raw or {})
+            e_attrs = json.loads(e_raw) if isinstance(e_raw, str) else (e_raw or {})
+            links.append({
+                "concept_id": cid,
+                "concept_name": c_attrs.get("name", cid),
+                "concept_description": c_attrs.get("description", ""),
+                "evidence_id": ev_id,
+                "source_id": src_id or "",
+                "paper_title": s_attrs.get("title", src_id or "(no paper)"),
+                "paper_url": s_attrs.get("url", ""),
+                "basis": e_attrs.get("basis", ""),
+                "grounded": e_attrs.get("grounded"),
+                "ungrounded_count": e_attrs.get("ungrounded_count"),
+                # Shown deliberately: `grounded` is false essentially everywhere
+                # on this corpus, so a bare red flag teaches a reader nothing
+                # while the phrases let them judge the paraphrase themselves.
+                "ungrounded": e_attrs.get("ungrounded", []),
+                "confirmation": e_attrs.get("confirmation"),
+                "confirmed_by": e_attrs.get("confirmed_by", ""),
+                "confirmed_at": e_attrs.get("confirmed_at", ""),
+                "confirmation_note": e_attrs.get("confirmation_note", ""),
+            })
+
+        return templates.TemplateResponse(
+            request, "link_review.html",
+            {
+                "links": links,
+                "counts": count_confirmations(conn),
+                "state_filter": state,
+                "page": page,
+                "per_page": per_page,
+                "reviewers": [
+                    {"reviewer_id": r.reviewer_id, "name": r.name}
+                    for r in list_reviewers(conn)
+                ],
+            },
+        )
+
+    @app.put("/api/link-confirm/{concept_id}/{evidence_id}")
+    async def api_link_confirm(request: Request, concept_id: str, evidence_id: str):
+        """Record or clear one person's judgement of one link.
+
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/link-confirm/ is on the allowlist.
+        INV-KK-LINK-CONFIRMATION-STATE: a confirmation with no reviewer is an
+        anonymous assertion and is refused by the store, not by this route.
+        """
+        from ingest.link_confirmation import clear_confirmation, set_confirmation
+        from ingest.paper_completeness import recompute_paper_if_present
+
+        conn = request.app.state.conn
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        confirmation = (body.get("confirmation") or "").strip()
+        source_id = conn.execute(
+            "SELECT target_id FROM edges WHERE kind = 'sourced-from' AND source_id = ?",
+            (evidence_id,),
+        ).fetchone()
+
+        try:
+            if not confirmation:
+                cleared = clear_confirmation(conn, concept_id, evidence_id)
+                if not cleared:
+                    return JSONResponse(
+                        {"error": "No confirmation to clear"}, status_code=404)
+                result = {"confirmation": None}
+            else:
+                r = set_confirmation(
+                    conn, concept_id, evidence_id, confirmation,
+                    body.get("reviewer_id", ""), body.get("note", ""))
+                result = {
+                    "confirmation": r.confirmation,
+                    "confirmed_by": r.confirmed_by,
+                    "confirmed_at": r.confirmed_at,
+                    "note": r.note,
+                }
+        except ValueError as exc:
+            status = 404 if "does not exist" in str(exc) or "No extracted-from" in str(exc) else 422
+            return JSONResponse({"error": str(exc)}, status_code=status)
+
+        # The verdict's links_confirmed dimension moved; keep the paper page
+        # honest rather than waiting for the next batch recompute.
+        if source_id:
+            recompute_paper_if_present(conn, source_id[0])
+        conn.commit()
+        return JSONResponse({"concept_id": concept_id,
+                             "evidence_id": evidence_id, **result})
 
     @app.get("/reviewers", response_class=HTMLResponse)
     async def reviewers_page(request: Request):

@@ -65,6 +65,16 @@ BINARY_DIMENSIONS = (
     "links_subsystem",
     "links_kernel",
     "links_invariant",
+    # Added 2026-09-21. TRUE when the paper has AT LEAST ONE concept link and
+    # EVERY one of them carries confirmation 'confirmed'. The at-least-one
+    # clause is not decoration: without it the 2,049 papers with no concept
+    # link would satisfy "all links confirmed" vacuously and read as complete,
+    # which is the opposite of true.
+    #
+    # BINARY per D-A. The PROPORTION confirmed is deliberately not a dimension:
+    # D-A admits no scores and a ratio dressed as a dimension is a score.
+    # Reads 0 of 3,482 on the day it lands, like links_invariant under D-B.
+    "links_confirmed",
     # Added 2026-09-18. TRUE means a reconciliation run checked this Source's
     # title against the document its identifier resolves to and the authority
     # answered — whether the title already agreed or was corrected. It says the
@@ -98,6 +108,7 @@ class CompletenessVerdict:
     links_kernel: bool = False
     links_invariant: bool = False
     title_verified: bool = False
+    links_confirmed: bool = False
     verdict_id: str = ""
     created: bool = False
 
@@ -170,6 +181,35 @@ SELECT 1 FROM edges e1
  LIMIT 1
 """
 
+# links_confirmed. Two existence tests rather than one, because "every link is
+# confirmed" and "there is a link" are different claims and only their
+# conjunction is meaningful — see the comment on the dimension above.
+_ANY_CONCEPT_LINK_SQL = """
+SELECT 1 FROM edges e1
+  JOIN edges e2 ON e2.kind = 'extracted-from' AND e2.target_id = e1.source_id
+  JOIN nodes cn ON cn.id = e2.source_id AND cn.kind = 'Concept'
+ WHERE e1.kind = 'sourced-from' AND e1.target_id = ?
+ LIMIT 1
+"""
+
+_UNCONFIRMED_CONCEPT_LINK_SQL = """
+SELECT 1 FROM edges e1
+  JOIN edges e2 ON e2.kind = 'extracted-from' AND e2.target_id = e1.source_id
+  JOIN nodes cn ON cn.id = e2.source_id AND cn.kind = 'Concept'
+ WHERE e1.kind = 'sourced-from' AND e1.target_id = ?
+   AND COALESCE(json_extract(e2.attrs, '$.confirmation'), '') <> 'confirmed'
+ LIMIT 1
+"""
+
+
+def _links_confirmed(conn: sqlite3.Connection, source_id: str) -> bool:
+    """INV-KK-LINK-CONFIRMATION-STATE. At least one concept link, and no
+    unconfirmed one among them."""
+    if not _exists(conn, _ANY_CONCEPT_LINK_SQL, (source_id,)):
+        return False
+    return not _exists(conn, _UNCONFIRMED_CONCEPT_LINK_SQL, (source_id,))
+
+
 _CONCEPT_HOP_SQL = """
 SELECT 1 FROM edges e1
   JOIN edges e2 ON e2.kind = 'extracted-from' AND e2.target_id = e1.source_id
@@ -229,6 +269,7 @@ def compute_completeness(conn: sqlite3.Connection, source_id: str) -> Completene
             conn, _CONCEPT_HOP_SQL, ("implemented-in", "Kernel", source_id)
         ),
         links_invariant=_exists(conn, _EXTRACTED_KIND_SQL, ("KernelInvariant", source_id)),
+        links_confirmed=_links_confirmed(conn, source_id),
     )
 
 

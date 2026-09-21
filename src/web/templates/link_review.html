@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Link review</h1>
+
+{# ALG-KK-WEB-LINK-REVIEW. Reads what ALG-KK-LLM-EXTRACT stored on the edge;
+   computes nothing and re-runs no check.
+
+   INV-KK-LINK-CONFIRMATION-STATE: a link with no confirmation has not been
+   looked at — that is what absence means, not an error.
+
+   INV-KK-COMPLETENESS-ADVISORY: the state gates nothing. The default filter is
+   the unreviewed queue because that is the work, but every link stays
+   reachable and none is withheld on the strength of its verdict. #}
+
+<p style="color:#555; max-width:60em;">
+  A stored grounding verdict says the phrases in a concept's description were
+  looked for in the paper. It does not say the concept follows from the paper.
+  Only a person reading both can say that, which is what this page is for.
+</p>
+
+<div style="margin:1rem 0; font-family:monospace;">
+  <strong>{{ counts.confirmed }}</strong> confirmed &middot;
+  <strong>{{ counts.rejected }}</strong> rejected &middot;
+  <strong>{{ counts.unreviewed }}</strong> not yet read
+  &nbsp;of&nbsp; <strong>{{ counts.total }}</strong> links
+</div>
+
+<form method="get" action="/links/review" style="margin-bottom:1rem;">
+  <label>Show:</label>
+  <select name="state" onchange="this.form.submit()" style="font-family:monospace; padding:0.2rem;">
+    {% for value, label in [('unreviewed','Not yet read'), ('confirmed','Confirmed'),
+                            ('rejected','Rejected'), ('all','All links')] %}
+    <option value="{{ value }}" {% if state_filter == value %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <input type="hidden" name="per_page" value="{{ per_page }}">
+</form>
+
+{% if not links %}
+<p><em>No links in this state.</em></p>
+{% endif %}
+
+{% for link in links %}
+<div style="border:1px solid #ccc; padding:1rem; margin-bottom:1rem;"
+     data-concept="{{ link.concept_id }}" data-evidence="{{ link.evidence_id }}">
+
+  <div style="display:flex; gap:2rem; flex-wrap:wrap;">
+    <div style="flex:1; min-width:18em;">
+      <h3 style="margin-top:0;">
+        <a href="/concepts/{{ link.concept_id }}">{{ link.concept_name }}</a>
+      </h3>
+      <p style="color:#333;">{{ link.concept_description }}</p>
+    </div>
+
+    <div style="flex:1; min-width:18em;">
+      <h3 style="margin-top:0;">
+        {% if link.source_id %}
+        <a href="/paper/{{ link.source_id }}">{{ link.paper_title }}</a>
+        {% else %}{{ link.paper_title }}{% endif %}
+      </h3>
+      {% if link.paper_url %}
+      <p style="font-family:monospace; font-size:0.85em; word-break:break-all;">{{ link.paper_url }}</p>
+      {% endif %}
+    </div>
+  </div>
+
+  {# The verdict, and the phrases behind it. `grounded` is false essentially
+     everywhere on this corpus because the extractor is forbidden to quote the
+     source, so showing only a red flag would teach the reader nothing. #}
+  <div style="background:#f6f6f6; padding:0.6rem; margin-top:0.6rem; font-family:monospace; font-size:0.85em;">
+    {% if link.basis == 'unverified-legacy' %}
+    <strong>No verdict.</strong> This link was made from the paper's title alone,
+    before links carried evidence. It may be about a different paper entirely.
+    {% elif link.basis == 'none' %}
+    <strong>Not checkable.</strong> There was no document text to check against.
+    {% else %}
+    grounded: <strong>{{ link.grounded }}</strong>
+    &middot; phrases not found in the paper: <strong>{{ link.ungrounded_count }}</strong>
+    &middot; basis: {{ link.basis }}
+    {% if link.ungrounded %}
+    <div style="margin-top:0.4rem;">{{ link.ungrounded | join(' · ') }}</div>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  <div style="margin-top:0.7rem;">
+    {% if link.confirmation %}
+    <span class="confirmation-state" style="font-family:monospace;">
+      <strong>{{ link.confirmation }}</strong>
+      by {{ link.confirmed_by }} on {{ link.confirmed_at }}
+      {% if link.confirmation_note %}&mdash; {{ link.confirmation_note }}{% endif %}
+    </span>
+    {% else %}
+    <span class="confirmation-state" style="font-family:monospace; color:#777;">
+      Not yet read by anyone.
+    </span>
+    {% endif %}
+  </div>
+
+  <div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+    <select class="reviewer-pick" style="font-family:monospace; padding:0.2rem;">
+      <option value="">Reviewer…</option>
+      {% for r in reviewers %}
+      <option value="{{ r.reviewer_id }}">{{ r.name }}</option>
+      {% endfor %}
+    </select>
+    <input class="note" type="text" placeholder="note (optional)" style="padding:0.2rem; min-width:16em;">
+    <button type="button" onclick="kkConfirm(this, 'confirmed')">Confirm</button>
+    <button type="button" onclick="kkConfirm(this, 'rejected')">Reject</button>
+    <button type="button" onclick="kkConfirm(this, '')">Clear</button>
+  </div>
+</div>
+{% endfor %}
+
+<div style="margin-top:1rem; font-family:monospace;">
+  {% if page > 1 %}<a href="/links/review?state={{ state_filter }}&page={{ page - 1 }}&per_page={{ per_page }}">&larr; previous</a>{% endif %}
+  {% if links | length == per_page %}<a style="margin-left:1rem;" href="/links/review?state={{ state_filter }}&page={{ page + 1 }}&per_page={{ per_page }}">next &rarr;</a>{% endif %}
+</div>
+
+<script>
+async function kkConfirm(button, state) {
+  const card = button.closest('[data-concept]');
+  const reviewer = card.querySelector('.reviewer-pick').value;
+  if (state && !reviewer) {
+    alert('Pick a reviewer first — an unsigned confirmation records nothing useful.');
+    return;
+  }
+  const resp = await fetch(
+    '/api/link-confirm/' + encodeURIComponent(card.dataset.concept)
+      + '/' + encodeURIComponent(card.dataset.evidence),
+    {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        confirmation: state,
+        reviewer_id: reviewer,
+        note: card.querySelector('.note').value,
+      }),
+    });
+  const body = await resp.json();
+  if (!resp.ok) { alert(body.error || 'Failed'); return; }
+  location.reload();
+}
+</script>
+{% endblock %}

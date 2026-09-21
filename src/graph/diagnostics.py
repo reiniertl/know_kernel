@@ -55,6 +55,14 @@ class DiagnosticReport:
     # State llm-extracted with no person having read them. A green tick against
     # has_summary says a summary exists, never that anyone endorsed it.
     summaries_unreviewed: int = 0
+    # --- link confirmation (ALG-KK-DIAG-GRAPH-HEALTH, 2026-09-21) ---
+    # Counts of review ACTIVITY, not of correctness. A confirmed link is one a
+    # person said they believed, which is the strongest claim available and
+    # still not a proof. links_confirmed reads 0 on the day it lands, for the
+    # same reason summaries_unreviewed reads 3,295.
+    links_total: int = 0
+    links_confirmed: int = 0
+    links_rejected: int = 0
 
 
 # The canonical paper vocabulary (INV-KK-PAPER-SOURCE-TYPE-VOCABULARY).
@@ -72,6 +80,7 @@ def _count_intake(conn: sqlite3.Connection, report: DiagnosticReport) -> None:
     ALG-KK-WEB-INTAKE-LIST, and two implementations of the same question would
     eventually disagree."""
     from ingest.abstract_fetcher import resolve_identifier
+    from ingest.link_confirmation import count_confirmations
 
     placeholders = ", ".join("?" for _ in _PAPER_SOURCE_TYPES)
     papers = conn.execute(
@@ -103,6 +112,11 @@ def _count_intake(conn: sqlite3.Connection, report: DiagnosticReport) -> None:
         verdict = json.loads(raw) if isinstance(raw, str) else (raw or {})
         if not any(verdict.get(d) for d in _COMPLETENESS_DIMENSIONS):
             report.papers_no_dimension += 1
+
+    counts = count_confirmations(conn)
+    report.links_total = counts["total"]
+    report.links_confirmed = counts["confirmed"]
+    report.links_rejected = counts["rejected"]
 
     report.summaries_unreviewed = conn.execute(
         "SELECT COUNT(*) FROM nodes WHERE kind = 'PaperSummary' "
