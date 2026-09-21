@@ -1,4 +1,8 @@
-"""INV-KK-DB-BACKUPS-NOT-TRACKED — pre-run database backups never enter Git.
+"""What must never enter Git, and what must never stop entering it.
+
+INV-KK-DB-BACKUPS-NOT-TRACKED — pre-run database backups.
+INV-KK-LINK-MECHANISM-SINGLE — only the extractor writes provenance edges.
+INV-KK-WORKING-SCRATCH-NOT-TRACKED — the zip, tmp/ and root tmp_*.py.
 
 On 2026-09-18 sixteen files matching data/master.db.bak-* totalling 358 MB sat
 untracked in the working tree, matched by no .gitignore rule. The repository's
@@ -113,3 +117,89 @@ def test_the_extractor_is_still_the_one_that_does_write_them():
     renamed — an empty repo would satisfy a pure absence check."""
     src = (REPO / "src" / "ingest" / "extractor.py").read_text(encoding="utf-8")
     assert src.count(f'add_edge(\n        conn, "{PROVENANCE_EDGE_KIND}"') == 7
+
+
+# ---------------------------------------------------------------------------
+# INV-KK-WORKING-SCRATCH-NOT-TRACKED — the scratch that piles up in the working
+# tree is ignored, and the rules that ignore it cannot reach tracked source.
+#
+# 8.5 MB matched by no rule on 2026-09-21: combobul.zip (5.4 MB), tmp/ (3.1 MB)
+# and tmp_test.py. Nothing was deleted — the zip holds 320 files that exist
+# nowhere on disk, and tmp/ holds the only copies of five scripts that write
+# extracted-from edges. That last fact is why this is not tidy-up: committing
+# tmp/ would add five link mechanisms in one command, and
+# INV-KK-LINK-MECHANISM-SINGLE's test greps data/*.py, so it would not see them.
+# ---------------------------------------------------------------------------
+
+
+@needs_git
+@pytest.mark.parametrize("name", [
+    "combobul.zip",
+    "tmp/",
+    "tmp/abstracts-run.json",
+    "tmp/extract_concepts.py",
+    "tmp_test.py",
+    # Scratch that does not exist yet must be covered in advance, for the same
+    # reason the next database backup is: nobody will remember to add a rule.
+    "tmp/some-future-run.log",
+    "tmp_scratch.py",
+])
+def test_a_working_scratch_path_is_ignored(name):
+    assert _git("check-ignore", "-q", "--no-index", name).returncode == 0, (
+        f"{name} is not ignored; a stray `git add -A` would commit it")
+
+
+@needs_git
+def test_no_working_scratch_is_actually_tracked():
+    tracked = _git("ls-files").stdout.splitlines()
+    offenders = [p for p in tracked
+                 if p == "combobul.zip"
+                 or p.startswith("tmp/")
+                 or (p.startswith("tmp_") and p.endswith(".py") and "/" not in p)]
+    assert offenders == []
+
+
+@needs_git
+@pytest.mark.parametrize("kept", [
+    # The negations at the top of .gitignore are the only reason the spec
+    # survives a clone. A rule such as `combobul*` would undo all three.
+    "combobul/spec/mutations/.gitkeep",
+    "combobul/spec/associations/artifact-associations.xml",
+    "combobul/spec/snapshots/.gitkeep",
+    "data/master.db",
+    "data/auth.db",
+    "src/ingest/extractor.py",
+    "tests/test_repo_hygiene.py",
+    # Root-anchoring is what stops `tmp` and `tmp_*.py` from reaching a
+    # directory or helper of the same name nested inside tracked source.
+    "src/web/tmp/renderer.py",
+    "tests/tmp_helper.py",
+])
+def test_the_scratch_rules_do_not_reach_tracked_source(kept):
+    assert _git("check-ignore", "-q", "--no-index", kept).returncode != 0, (
+        f"{kept} must not be ignored")
+
+
+@needs_git
+def test_the_link_mechanisms_parked_in_tmp_are_ignored():
+    """Why the tmp/ rule is load-bearing. These scripts sit outside
+    INV-KK-LINK-MECHANISM-SINGLE's reach, which greps data/*.py, so the ignore
+    rule is the only thing between them and the repository. Skipped on a clone,
+    where tmp/ does not exist."""
+    tmp = REPO / "tmp"
+    if not tmp.is_dir():
+        pytest.skip("tmp/ is local scratch and absent from a fresh clone")
+    writers = []
+    for path in sorted(tmp.glob("*.py")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for line in text.splitlines():
+            if PROVENANCE_EDGE_KIND in line and "add_edge" in line:
+                writers.append(path)
+                break
+    assert writers, (
+        "tmp/ no longer holds any provenance-edge writer; if they were moved, "
+        "check where to and whether they are still ignored")
+    for path in writers:
+        rel = path.relative_to(REPO).as_posix()
+        assert _git("check-ignore", "-q", "--no-index", rel).returncode == 0, (
+            f"{rel} writes {PROVENANCE_EDGE_KIND} edges and is not ignored")

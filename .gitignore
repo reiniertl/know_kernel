@@ -80,3 +80,15 @@ htmlcov/
 # 2026-09-18, then untracked on request: it is a scratch document rewritten
 # between prompts, not a deliverable.
 docs/plans/implementation_list.txt
+
+# Working scratch, one `git add -A` from a commit
+# (INV-KK-WORKING-SCRATCH-NOT-TRACKED). 8.5 MB matched by no rule on
+# 2026-09-21. Nothing here is deleted: combobul.zip is a 2026-07-13 engine
+# snapshot holding 320 files that exist nowhere on disk, and tmp/ holds the
+# only copies of five scripts that write extracted-from edges plus the scraped
+# arxiv/dblp JSON. Every rule is anchored at the repository root on purpose —
+# an unanchored `tmp` would match src/**/tmp, and `combobul*` would reach the
+# combobul/spec/ negations above that make the spec survive a clone.
+/tmp/
+/tmp_*.py
+/combobul.zip
