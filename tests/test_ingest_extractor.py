@@ -1611,3 +1611,69 @@ class TestEvidenceSweep:
         assert conn.execute(
             "SELECT COUNT(*) FROM edges WHERE kind='extracted-from' "
             "AND source_id='concept-old'").fetchone()[0] == 1
+
+
+class TestLegacyLinkMarking:
+    """The 2,022 title-regex links are kept, marked and reversible.
+
+    Operator decision 2026-09-21: keep rather than delete, because deletion is
+    irreversible and 191 of them are known wrong — they stay findable only
+    while they exist.
+    """
+
+    def test_a_marked_legacy_edge_is_neither_conforming_nor_a_violation(
+            self, conn, evidence_node):
+        from graph.rules import LEGACY_UNVERIFIED_BASIS, check_link_evidence_recorded
+
+        add_node(conn, "concept-legacy", "Concept", {
+            "name": "Legacy", "description": "Linked from a title, not a document.",
+            "artifact_class": "abstracted-mechanism", "key_properties": [],
+            "tradeoffs": [], "design_rationale": "n/a"})
+        add_edge(conn, "extracted-from", "concept-legacy", evidence_node,
+                 {"basis": LEGACY_UNVERIFIED_BASIS, "grounded": False,
+                  "superseded": False, "mechanism": "title regex"})
+
+        sweep = check_link_evidence_recorded(conn)
+        assert sweep.legacy_marked == 1
+        assert sweep.undated == 0
+        assert sweep.violations == []
+        assert sweep.conforming == 0
+
+    def test_a_marked_edge_is_distinguishable_from_an_unmarked_one(
+            self, conn, evidence_node):
+        """The split is the point: 'nobody recorded this' and 'this predates the
+        rule and says so' are different states and must not be one number."""
+        from graph.rules import LEGACY_UNVERIFIED_BASIS, check_link_evidence_recorded
+
+        for cid, attrs in (("concept-m", {"basis": LEGACY_UNVERIFIED_BASIS,
+                                          "grounded": False, "superseded": False}),
+                           ("concept-u", None)):
+            add_node(conn, cid, "Concept", {
+                "name": cid, "description": "x", "artifact_class": "abstracted-mechanism",
+                "key_properties": [], "tradeoffs": [], "design_rationale": "n/a"})
+            add_edge(conn, "extracted-from", cid, evidence_node, attrs)
+
+        sweep = check_link_evidence_recorded(conn)
+        assert (sweep.legacy_marked, sweep.undated) == (1, 1)
+
+    def test_the_legacy_basis_is_not_a_legal_basis_for_a_new_edge(self):
+        """Marking the old links must not make the old mechanism acceptable."""
+        from graph.rules import LEGACY_UNVERIFIED_BASIS, VALID_EVIDENCE_BASES
+
+        assert LEGACY_UNVERIFIED_BASIS not in VALID_EVIDENCE_BASES
+
+    def test_an_in_scope_edge_claiming_the_legacy_basis_is_a_violation(
+            self, conn, evidence_node):
+        from graph.rules import LEGACY_UNVERIFIED_BASIS, check_link_evidence_recorded
+
+        add_node(conn, "concept-cheat", "Concept", {
+            "name": "Cheat", "description": "x", "artifact_class": "abstracted-mechanism",
+            "key_properties": [], "tradeoffs": [], "design_rationale": "n/a"})
+        add_edge(conn, "extracted-from", "concept-cheat", evidence_node, {
+            "grounded": False, "ungrounded_count": 0, "ungrounded": [],
+            "basis": LEGACY_UNVERIFIED_BASIS, "basis_sha256": "", "model": "",
+            "checked_at": "2026-12-01"})
+
+        sweep = check_link_evidence_recorded(conn)
+        assert sweep.violations
+        assert "not one of" in sweep.violations[0].message

@@ -418,12 +418,26 @@ EVIDENCE_RECORDED_FROM = "2026-09-21"
 VALID_EVIDENCE_BASES = ("evidence-text", "none")
 
 
+#: Marker carried by the 2,022 links that predate the evidence rule. It is
+#: deliberately NOT in VALID_EVIDENCE_BASES: an edge that is IN SCOPE and claims
+#: this basis must still be a violation, because the point is to retire the
+#: mechanism, not to legitimise it.
+LEGACY_UNVERIFIED_BASIS = "unverified-legacy"
+
+
 @dataclass
 class EvidenceSweep:
-    """Outcome of check_link_evidence_recorded."""
+    """Outcome of check_link_evidence_recorded.
+
+    undated and legacy_marked are both out of scope, and the split is the whole
+    point: legacy_marked edges are known to predate the rule and say so, while
+    undated ones are simply unaccounted for. Re-derivation should drive both to
+    zero; only the second is a surprise.
+    """
     conforming: int
     undated: int
     violations: list[Violation]
+    legacy_marked: int = 0
 
 
 def check_link_evidence_recorded(
@@ -443,6 +457,7 @@ def check_link_evidence_recorded(
 
     conforming = 0
     undated = 0
+    legacy_marked = 0
     violations: list[Violation] = []
 
     for source_id, target_id, raw in rows:
@@ -456,7 +471,13 @@ def check_link_evidence_recorded(
 
         checked_at = attrs.get("checked_at")
         if not checked_at:
-            undated += 1
+            # An edge with no date cannot be placed in or out of scope, because
+            # the edges table records no creation time. A marked legacy edge at
+            # least says why it has none.
+            if attrs.get("basis") == LEGACY_UNVERIFIED_BASIS:
+                legacy_marked += 1
+            else:
+                undated += 1
             continue
         if checked_at < since:
             continue
@@ -491,4 +512,5 @@ def check_link_evidence_recorded(
             continue
         conforming += 1
 
-    return EvidenceSweep(conforming=conforming, undated=undated, violations=violations)
+    return EvidenceSweep(conforming=conforming, undated=undated,
+                         violations=violations, legacy_marked=legacy_marked)

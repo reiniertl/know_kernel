@@ -65,3 +65,51 @@ def test_the_rule_does_not_swallow_the_databases_themselves():
     for kept in ("data/master.db", "data/auth.db"):
         assert _git("check-ignore", "-q", "--no-index", kept).returncode != 0, (
             f"{kept} must not be ignored")
+
+
+# ---------------------------------------------------------------------------
+# INV-KK-LINK-MECHANISM-SINGLE — only the extractor may claim a paper is about
+# something, and only by reading the paper.
+#
+# data/semantic_link.py did it from the title alone. classify_paper(title)
+# applied regex such as r'\bscheduler\b|\bscheduling\b|\bsched[_ ]' with no
+# abstract, no Evidence text and no model, while its docstring claimed it was
+# "NOT substring keyword matching". 191 of the links it produced are known
+# wrong: they were computed from titles that an off-by-one in the arXiv loader
+# had displaced onto the wrong paper. It is deleted; commit 8f84e5f has it if
+# the record of how those 2,022 links were made is ever needed.
+#
+# This test is what stops the next one appearing. 33 scripts were deleted on
+# 2026-09-17 for the same reason and nothing prevented a replacement.
+# ---------------------------------------------------------------------------
+
+PROVENANCE_EDGE_KIND = "extracted-from"
+
+
+def test_the_retired_title_regex_linker_is_gone():
+    assert not (REPO / "data" / "semantic_link.py").exists()
+
+
+def test_no_script_under_data_writes_a_provenance_edge():
+    """A helper that links a paper to a concept without reading the paper is
+    outside the mechanism however it is spelled, so this greps for the edge
+    kind rather than for one function name."""
+    offenders = []
+    for path in sorted((REPO / "data").glob("*.py")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if PROVENANCE_EDGE_KIND not in line:
+                continue
+            # Reading or counting existing edges is fine; creating them is not.
+            if "add_edge" in line or "INSERT INTO edges" in line.upper():
+                offenders.append(f"{path.name}:{lineno}")
+    assert offenders == [], (
+        "these write provenance edges outside src/ingest/extractor.py: "
+        + ", ".join(offenders))
+
+
+def test_the_extractor_is_still_the_one_that_does_write_them():
+    """Guards the test above from passing because the mechanism moved or was
+    renamed — an empty repo would satisfy a pure absence check."""
+    src = (REPO / "src" / "ingest" / "extractor.py").read_text(encoding="utf-8")
+    assert src.count(f'add_edge(\n        conn, "{PROVENANCE_EDGE_KIND}"') == 7
