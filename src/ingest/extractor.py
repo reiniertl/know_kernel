@@ -6,8 +6,10 @@ import json
 import logging
 import re
 import sqlite3
+import hashlib
 import uuid
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Protocol
 
 from graph.engine import add_edge, add_node
@@ -303,6 +305,70 @@ class RelationshipResult:
     edges_skipped: int = 0
 
 
+# INV-KK-EXTRACT-EVIDENCE-RECORDED.
+#
+# Before 2026-09-21 every extracted-from edge was written bare: of 18,256 edges
+# in the graph, 96 carried any attrs and all 96 were contributes-to. A link said
+# a paper was about a topic and offered nothing to check that against.
+#
+# The obvious payload — the cited excerpt — is forbidden here. The block headed
+# "CRITICAL RULES --" LEGAL PROTECTION" in EXTRACTION_SYSTEM_PROMPT tells the
+# model never to quote verbatim and to skip any concept it cannot describe
+# without copying, and INV-KK-EXTRACT-OUTPUT-CLASS-B says no Class A content
+# leaks into the output. So the edge carries a VERDICT and a LOCATOR instead:
+# what the check said, which document it was run against, and a fingerprint of
+# that document. The phrases stored are bigrams of the created node's OWN
+# paraphrase, so no source prose enters the graph.
+#
+# EXPECT grounded=False. Measured 2026-09-21 across 1,758 Concept links whose
+# Evidence carried text, ZERO were fully grounded, median 27 ungrounded phrases.
+# The check compares bigrams of a deliberate paraphrase against the source, so
+# it can essentially never return empty while the legal-protection rules stand.
+# The count and the phrases are the signal; passing is not the goal.
+
+BASIS_EVIDENCE_TEXT = "evidence-text"
+BASIS_NONE = "none"
+
+#: Cap on phrases stored per edge. ungrounded_count carries the true total, so
+#: the cap bounds storage without hiding the size of the disagreement.
+MAX_UNGROUNDED_RECORDED = 20
+
+
+def build_evidence_attrs(
+    claim_text: str,
+    document_text: str,
+    model: str = "",
+    basis: str = BASIS_EVIDENCE_TEXT,
+) -> dict[str, Any]:
+    """Grounding verdict for one created node, to be stored on its
+    extracted-from edge (INV-KK-EXTRACT-EVIDENCE-RECORDED).
+
+    Returns basis=BASIS_NONE with an empty fingerprint when there is no document
+    to check against — an unverifiable link says so rather than claiming a pass.
+    """
+    checked_at = date.today().isoformat()
+    if not document_text or not claim_text:
+        return {
+            "grounded": False,
+            "ungrounded_count": 0,
+            "ungrounded": [],
+            "basis": BASIS_NONE,
+            "basis_sha256": "",
+            "model": model,
+            "checked_at": checked_at,
+        }
+    ungrounded = validate_excerpt_grounding(claim_text, document_text)
+    return {
+        "grounded": not ungrounded,
+        "ungrounded_count": len(ungrounded),
+        "ungrounded": ungrounded[:MAX_UNGROUNDED_RECORDED],
+        "basis": basis,
+        "basis_sha256": hashlib.sha256(document_text.encode("utf-8")).hexdigest(),
+        "model": model,
+        "checked_at": checked_at,
+    }
+
+
 def wire_relationships(
     conn: sqlite3.Connection,
     concepts_data: list[dict],
@@ -373,6 +439,8 @@ def store_kernel_invariant(
     item: dict,
     evidence_id: str,
     concept_name_to_id: dict[str, str],
+    evidence_text: str = "",
+    model: str = "",
 ) -> str | None:
     concept_id = concept_name_to_id.get(item["concept_name"].lower())
     if not concept_id:
@@ -385,7 +453,10 @@ def store_kernel_invariant(
         "artifact_class": "abstracted-mechanism",
     })
     add_edge(conn, "governed-by", kinv_id, concept_id)
-    add_edge(conn, "extracted-from", kinv_id, evidence_id)
+    add_edge(
+        conn, "extracted-from", kinv_id, evidence_id,
+        build_evidence_attrs(item["predicate"], evidence_text, model),
+    )
     return kinv_id
 
 
@@ -420,6 +491,8 @@ def store_failure_mode(
     item: dict,
     evidence_id: str,
     kinv_id: str,
+    evidence_text: str = "",
+    model: str = "",
 ) -> str:
     fm_id = f"fm-{uuid.uuid4().hex[:12]}"
     add_node(conn, fm_id, "FailureMode", {
@@ -429,7 +502,10 @@ def store_failure_mode(
         "artifact_class": "abstracted-mechanism",
     })
     add_edge(conn, "triggered-by", fm_id, kinv_id)
-    add_edge(conn, "extracted-from", fm_id, evidence_id)
+    add_edge(
+        conn, "extracted-from", fm_id, evidence_id,
+        build_evidence_attrs(item["symptom"], evidence_text, model),
+    )
     return fm_id
 
 
@@ -475,6 +551,8 @@ def store_interaction_protocol(
     item: dict,
     evidence_id: str,
     concept_name_to_id: dict[str, str],
+    evidence_text: str = "",
+    model: str = "",
 ) -> str | None:
     a_id = concept_name_to_id.get(item["concept_a"].lower())
     b_id = concept_name_to_id.get(item["concept_b"].lower())
@@ -489,7 +567,10 @@ def store_interaction_protocol(
     })
     add_edge(conn, "constrains-composition", proto_id, a_id)
     add_edge(conn, "constrains-composition", proto_id, b_id)
-    add_edge(conn, "extracted-from", proto_id, evidence_id)
+    add_edge(
+        conn, "extracted-from", proto_id, evidence_id,
+        build_evidence_attrs(item["rule"], evidence_text, model),
+    )
     return proto_id
 
 
@@ -527,6 +608,8 @@ def store_performance_profile(
     evidence_id: str,
     concept_name_to_id: dict[str, str],
     concept_name: str,
+    evidence_text: str = "",
+    model: str = "",
 ) -> str | None:
     concept_id = concept_name_to_id.get(concept_name.lower())
     if not concept_id:
@@ -542,7 +625,10 @@ def store_performance_profile(
         "artifact_class": "abstracted-mechanism",
     })
     add_edge(conn, "profiled-by", profile_id, concept_id)
-    add_edge(conn, "extracted-from", profile_id, evidence_id)
+    add_edge(
+        conn, "extracted-from", profile_id, evidence_id,
+        build_evidence_attrs(item["conditions"], evidence_text, model),
+    )
     return profile_id
 
 
@@ -590,6 +676,8 @@ def store_compatibility_assessment(
     item: dict,
     evidence_id: str,
     concept_name_to_id: dict[str, str],
+    evidence_text: str = "",
+    model: str = "",
 ) -> str | None:
     a_id = concept_name_to_id.get(item["concept_a"].lower())
     b_id = concept_name_to_id.get(item["concept_b"].lower())
@@ -604,7 +692,10 @@ def store_compatibility_assessment(
     })
     add_edge(conn, "assesses-compatibility", compat_id, a_id)
     add_edge(conn, "assesses-compatibility", compat_id, b_id)
-    add_edge(conn, "extracted-from", compat_id, evidence_id)
+    add_edge(
+        conn, "extracted-from", compat_id, evidence_id,
+        build_evidence_attrs(item["rationale"], evidence_text, model),
+    )
     return compat_id
 
 
@@ -648,6 +739,8 @@ def store_comparative_analysis(
     item: dict,
     evidence_id: str,
     concept_name_to_id: dict[str, str],
+    evidence_text: str = "",
+    model: str = "",
 ) -> str | None:
     a_id = concept_name_to_id.get(item["concept_a"].lower())
     b_id = concept_name_to_id.get(item["concept_b"].lower())
@@ -663,12 +756,17 @@ def store_comparative_analysis(
     })
     add_edge(conn, "compares", analysis_id, a_id)
     add_edge(conn, "compares", analysis_id, b_id)
-    add_edge(conn, "extracted-from", analysis_id, evidence_id)
+    add_edge(
+        conn, "extracted-from", analysis_id, evidence_id,
+        build_evidence_attrs(item["conditions"], evidence_text, model),
+    )
     return analysis_id
 
 
 def store_rich_concept(
     conn: sqlite3.Connection, item: dict, evidence_id: str,
+    evidence_text: str = "",
+    model: str = "",
 ) -> str:
     concept_id = f"concept-{uuid.uuid4().hex[:12]}"
     add_node(conn, concept_id, "Concept", {
@@ -679,7 +777,10 @@ def store_rich_concept(
         "tradeoffs": item["tradeoffs"],
         "design_rationale": item["design_rationale"],
     })
-    add_edge(conn, "extracted-from", concept_id, evidence_id)
+    add_edge(
+        conn, "extracted-from", concept_id, evidence_id,
+        build_evidence_attrs(item["description"], evidence_text, model),
+    )
     return concept_id
 
 
@@ -856,7 +957,9 @@ def extract_concepts(
         validated = validate_extraction_item(item)
         if validated is None:
             continue
-        concept_id = store_rich_concept(conn, validated, evidence_id)
+        concept_id = store_rich_concept(
+            conn, validated, evidence_id,
+            evidence_text=evidence_text, model=model)
         concept_ids.append(concept_id)
         name_to_id[validated["name"].lower()] = concept_id
 
@@ -880,13 +983,17 @@ def extract_concepts(
             validated = validate_invariant_item(inv)
             if validated is None:
                 continue
-            inv_id = store_kernel_invariant(conn, validated, evidence_id, name_to_id)
+            inv_id = store_kernel_invariant(
+                conn, validated, evidence_id, name_to_id,
+                evidence_text=evidence_text, model=model)
             if inv_id:
                 invariants_created += 1
                 for fm in inv.get("failure_modes", []):
                     validated_fm = validate_failure_mode_item(fm)
                     if validated_fm:
-                        store_failure_mode(conn, validated_fm, evidence_id, inv_id)
+                        store_failure_mode(
+                            conn, validated_fm, evidence_id, inv_id,
+                            evidence_text=evidence_text, model=model)
                         failure_modes_created += 1
 
     protocols_created = 0
@@ -894,7 +1001,9 @@ def extract_concepts(
         validated_proto = validate_protocol_item(proto, name_to_id)
         if validated_proto is None:
             continue
-        proto_id = store_interaction_protocol(conn, validated_proto, evidence_id, name_to_id)
+        proto_id = store_interaction_protocol(
+            conn, validated_proto, evidence_id, name_to_id,
+            evidence_text=evidence_text, model=model)
         if proto_id:
             protocols_created += 1
 
@@ -909,6 +1018,7 @@ def extract_concepts(
                 continue
             profile_id = store_performance_profile(
                 conn, validated_profile, evidence_id, name_to_id, concept_name,
+                evidence_text=evidence_text, model=model,
             )
             if profile_id:
                 profiles_created += 1
@@ -918,7 +1028,9 @@ def extract_concepts(
         validated_compat = validate_compatibility_item(compat, name_to_id)
         if validated_compat is None:
             continue
-        compat_id = store_compatibility_assessment(conn, validated_compat, evidence_id, name_to_id)
+        compat_id = store_compatibility_assessment(
+            conn, validated_compat, evidence_id, name_to_id,
+            evidence_text=evidence_text, model=model)
         if compat_id:
             compatibilities_created += 1
 
@@ -927,7 +1039,9 @@ def extract_concepts(
         validated_comp = validate_comparative_item(comp, name_to_id)
         if validated_comp is None:
             continue
-        comp_id = store_comparative_analysis(conn, validated_comp, evidence_id, name_to_id)
+        comp_id = store_comparative_analysis(
+            conn, validated_comp, evidence_id, name_to_id,
+            evidence_text=evidence_text, model=model)
         if comp_id:
             comparatives_created += 1
 

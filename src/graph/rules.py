@@ -383,3 +383,112 @@ def validate_node(conn: sqlite3.Connection, node_id: str, kind: str) -> list[Vio
         if v is not None:
             violations.append(v)
     return violations
+
+
+# ---------------------------------------------------------------------------
+# INV-KK-EXTRACT-EVIDENCE-RECORDED — a sweep over provenance edges.
+#
+# This is deliberately NOT wired into RULES_BY_KIND. Those rules are per-node
+# and are run by validate_node on every write; this property is per-EDGE, and
+# attaching it to a node kind would both re-check the same edges once per
+# endpoint and make all 2,022 legacy Concepts invalid, which would break
+# unrelated writes to make a new invariant look satisfied. The invariant is
+# scoped by date precisely so the legacy edges are out of scope, not so they
+# can be hidden.
+#
+# THE BLIND SPOT, STATED RATHER THAN PAPERED OVER. The edges table has no
+# creation timestamp, so an edge's date is knowable only from the checked_at
+# this invariant asks it to carry. A bare edge written today is therefore
+# indistinguishable from a bare edge written in August. The sweep reports it as
+# UNDATED rather than guessing: undated edges are counted and returned
+# separately, and that count is the measure of how much of the graph predates
+# the rule. It should fall to zero when the corpus is re-derived.
+# ---------------------------------------------------------------------------
+
+#: The exact attribute set an in-scope provenance edge must carry.
+EVIDENCE_ATTR_KEYS = (
+    "grounded", "ungrounded_count", "ungrounded",
+    "basis", "basis_sha256", "model", "checked_at",
+)
+
+#: Edges checked on or after this date are in scope. Earlier ones were written
+#: by src/ingest/semantic_link.py from a title regex and carry no verdict.
+EVIDENCE_RECORDED_FROM = "2026-09-21"
+
+VALID_EVIDENCE_BASES = ("evidence-text", "none")
+
+
+@dataclass
+class EvidenceSweep:
+    """Outcome of check_link_evidence_recorded."""
+    conforming: int
+    undated: int
+    violations: list[Violation]
+
+
+def check_link_evidence_recorded(
+    conn: sqlite3.Connection, since: str = EVIDENCE_RECORDED_FROM
+) -> EvidenceSweep:
+    """Sweep every extracted-from edge for its recorded grounding verdict.
+
+    An edge is IN SCOPE if it carries a checked_at of `since` or later. In-scope
+    edges must carry exactly EVIDENCE_ATTR_KEYS, a known basis, a fingerprint
+    present iff the basis is not 'none', and a grounded flag that agrees with
+    ungrounded_count. Edges with no checked_at are counted as undated and are
+    not violations — see the note above on why they cannot be dated.
+    """
+    rows = conn.execute(
+        "SELECT source_id, target_id, attrs FROM edges WHERE kind = 'extracted-from'"
+    ).fetchall()
+
+    conforming = 0
+    undated = 0
+    violations: list[Violation] = []
+
+    for source_id, target_id, raw in rows:
+        try:
+            attrs = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        except json.JSONDecodeError:
+            violations.append(Violation(
+                source_id, "INV-KK-EXTRACT-EVIDENCE-RECORDED",
+                f"extracted-from edge to '{target_id}' has unparseable attrs"))
+            continue
+
+        checked_at = attrs.get("checked_at")
+        if not checked_at:
+            undated += 1
+            continue
+        if checked_at < since:
+            continue
+
+        def bad(msg: str) -> None:
+            violations.append(Violation(
+                source_id, "INV-KK-EXTRACT-EVIDENCE-RECORDED",
+                f"extracted-from edge to '{target_id}': {msg}"))
+
+        missing = [k for k in EVIDENCE_ATTR_KEYS if k not in attrs]
+        if missing:
+            bad(f"missing {', '.join(missing)}")
+            continue
+        extra = [k for k in attrs if k not in EVIDENCE_ATTR_KEYS]
+        if extra:
+            bad(f"unexpected attrs {', '.join(sorted(extra))}")
+            continue
+        if attrs["basis"] not in VALID_EVIDENCE_BASES:
+            bad(f"basis '{attrs['basis']}' is not one of {VALID_EVIDENCE_BASES}")
+            continue
+        has_fp = bool(attrs["basis_sha256"])
+        if has_fp != (attrs["basis"] != "none"):
+            bad("basis_sha256 must be present iff basis is not 'none'")
+            continue
+        expected = attrs["basis"] != "none" and attrs["ungrounded_count"] == 0
+        if bool(attrs["grounded"]) != expected:
+            bad(f"grounded={attrs['grounded']} disagrees with "
+                f"basis={attrs['basis']} ungrounded_count={attrs['ungrounded_count']}")
+            continue
+        if len(attrs["ungrounded"]) > attrs["ungrounded_count"]:
+            bad("stored phrases outnumber ungrounded_count")
+            continue
+        conforming += 1
+
+    return EvidenceSweep(conforming=conforming, undated=undated, violations=violations)

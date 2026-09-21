@@ -1391,3 +1391,223 @@ class TestDiscourseExtraction:
         result = extract_concepts(conn, evidence_node, gate, client=client)
         assert len(client.calls) == 1
         assert "DISCOURSE SOURCE RULES" not in client.calls[0]["system"]
+
+
+# ---------------------------------------------------------------------------
+# INV-KK-EXTRACT-EVIDENCE-RECORDED — the verdict is PERSISTED, not just computed.
+#
+# The defect these pin: extract_concepts ran validate_excerpt_grounding, logged a
+# warning and threw the result away, so a link asserted a paper was about a topic
+# and offered nothing to check that against. Of 18,256 edges on 2026-09-18, 96
+# carried any attrs and all 96 were contributes-to.
+#
+# What is NOT stored is as load-bearing as what is. EXTRACTION_SYSTEM_PROMPT's
+# "CRITICAL RULES --" LEGAL PROTECTION" block forbids the model from quoting the
+# source, so the edge carries a verdict and a fingerprint, never an excerpt.
+# ---------------------------------------------------------------------------
+
+
+def _extracted_from_attrs(conn, source_id):
+    row = conn.execute(
+        "SELECT attrs FROM edges WHERE kind = 'extracted-from' AND source_id = ?",
+        (source_id,),
+    ).fetchone()
+    assert row is not None, f"no extracted-from edge from {source_id}"
+    return json.loads(row[0])
+
+
+class TestEvidenceRecordedOnEdges:
+    def test_the_grounding_verdict_is_persisted_not_merely_logged(self, conn, evidence_node, caplog):
+        """The whole point, and the one test that fails against the old code.
+
+        Pre-2026-09-21 the verdict reached a log line and nothing else. Asserting
+        only that a warning is emitted would have passed then too, so this asserts
+        that the SAME verdict is readable back out of the graph afterwards.
+        """
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ingest.extractor"):
+            extract_concepts(conn, evidence_node, SessionGate(), client=MockLLMClient())
+
+        attrs = [json.loads(r[0]) for r in conn.execute(
+            "SELECT attrs FROM edges WHERE kind = 'extracted-from'").fetchall()]
+        assert attrs, "extraction produced no provenance edges"
+
+        # The verdict survives the call, in the graph, not just in the logs.
+        assert all("grounded" in a for a in attrs)
+        assert any(a["ungrounded_count"] > 0 for a in attrs), (
+            "fixture is too easy to ground; this test would pass vacuously")
+
+        # And the persisted verdict agrees with recomputing it by hand.
+        from ingest.extractor import validate_excerpt_grounding
+        ev_text = json.loads(conn.execute(
+            "SELECT attrs FROM nodes WHERE id = ?", (evidence_node,)).fetchone()[0])["text"]
+        row = conn.execute(
+            "SELECT n.attrs, e.attrs FROM edges e JOIN nodes n ON n.id = e.source_id "
+            "WHERE e.kind = 'extracted-from' AND n.kind = 'Concept' LIMIT 1").fetchone()
+        desc = json.loads(row[0])["description"]
+        stored = json.loads(row[1])
+        assert stored["ungrounded_count"] == len(
+            validate_excerpt_grounding(desc, ev_text))
+
+    def test_every_provenance_edge_carries_the_full_attribute_set(self, conn, evidence_node):
+        from graph.rules import EVIDENCE_ATTR_KEYS
+
+        result = extract_concepts(conn, evidence_node, SessionGate(), client=MockLLMClient())
+        assert result.concepts_created == 2
+
+        rows = conn.execute(
+            "SELECT source_id, attrs FROM edges WHERE kind = 'extracted-from'"
+        ).fetchall()
+        assert rows, "extraction produced no provenance edges"
+        for source_id, raw in rows:
+            attrs = json.loads(raw)
+            assert attrs, f"edge from {source_id} was written bare"
+            assert set(attrs) == set(EVIDENCE_ATTR_KEYS), source_id
+
+    def test_the_verdict_records_the_document_it_was_checked_against(self, conn, evidence_node):
+        import hashlib
+
+        extract_concepts(conn, evidence_node, SessionGate(), client=MockLLMClient())
+        ev_text = json.loads(conn.execute(
+            "SELECT attrs FROM nodes WHERE id = ?", (evidence_node,)).fetchone()[0])["text"]
+        expected = hashlib.sha256(ev_text.encode("utf-8")).hexdigest()
+
+        for (raw,) in conn.execute(
+            "SELECT attrs FROM edges WHERE kind = 'extracted-from'"
+        ).fetchall():
+            attrs = json.loads(raw)
+            assert attrs["basis"] == "evidence-text"
+            assert attrs["basis_sha256"] == expected
+
+    def test_no_source_text_is_copied_onto_the_edge(self, conn, evidence_node):
+        """The legal-protection constraint, enforced rather than trusted. The
+        phrases stored are bigrams of the model's OWN paraphrase; a sentence from
+        the document must never appear in the edge's attrs."""
+        extract_concepts(conn, evidence_node, SessionGate(), client=MockLLMClient())
+        doc = json.loads(conn.execute(
+            "SELECT attrs FROM nodes WHERE id = ?", (evidence_node,)).fetchone()[0])["text"]
+
+        for (raw,) in conn.execute(
+            "SELECT attrs FROM edges WHERE kind = 'extracted-from'"
+        ).fetchall():
+            assert "excerpt" not in json.loads(raw)
+            for phrase in json.loads(raw)["ungrounded"]:
+                # An ungrounded phrase is by definition absent from the document;
+                # this is the property that makes storing it safe.
+                assert phrase.lower() not in doc.lower()
+
+    def test_grounded_agrees_with_the_phrase_count(self, conn, evidence_node):
+        extract_concepts(conn, evidence_node, SessionGate(), client=MockLLMClient())
+        for (raw,) in conn.execute(
+            "SELECT attrs FROM edges WHERE kind = 'extracted-from'"
+        ).fetchall():
+            a = json.loads(raw)
+            assert a["grounded"] == (a["basis"] != "none" and a["ungrounded_count"] == 0)
+
+    def test_a_link_with_no_document_says_so_rather_than_claiming_a_pass(self, conn):
+        """An Evidence node with no text cannot ground anything. The edge must
+        record basis 'none' and grounded False, not an empty-verdict pass."""
+        add_node(conn, "src-no", "Source", {
+            "url": "https://example.com/x.txt", "source_type": "paper", "license": "MIT"})
+        add_node(conn, "ev-no", "Evidence", {
+            "artifact_class": "licensed-evidence", "contamination_level": "weak-copyleft"})
+        add_edge(conn, "sourced-from", "ev-no", "src-no")
+
+        extract_concepts(conn, "ev-no", SessionGate(), client=MockLLMClient())
+        for (raw,) in conn.execute(
+            "SELECT attrs FROM edges WHERE kind = 'extracted-from'"
+        ).fetchall():
+            a = json.loads(raw)
+            assert a["basis"] == "none"
+            assert a["basis_sha256"] == ""
+            assert a["grounded"] is False
+
+    def test_stored_phrases_are_capped_but_the_count_is_not(self, conn, evidence_node):
+        """MAX_UNGROUNDED_RECORDED bounds storage; ungrounded_count must still
+        report the true total, or the cap would hide the size of the gap."""
+        from ingest.extractor import MAX_UNGROUNDED_RECORDED, build_evidence_attrs
+
+        long_claim = " ".join(f"alpha{i} beta{i}" for i in range(60))
+        a = build_evidence_attrs(long_claim, "an unrelated document about kernels", "m")
+        assert a["ungrounded_count"] > MAX_UNGROUNDED_RECORDED
+        assert len(a["ungrounded"]) == MAX_UNGROUNDED_RECORDED
+
+    def test_a_verbatim_claim_is_recorded_as_grounded(self, conn):
+        """The check is not vacuous: text that IS in the document passes."""
+        from ingest.extractor import build_evidence_attrs
+
+        doc = "The scheduler uses a red-black tree to order runnable tasks."
+        a = build_evidence_attrs("red-black tree to order runnable tasks", doc, "m")
+        assert a["grounded"] is True
+        assert a["ungrounded_count"] == 0
+
+
+class TestEvidenceSweep:
+    def test_an_edge_without_a_verdict_is_detectable(self, conn, evidence_node):
+        """The prompt's requirement: a bare link must be findable. It surfaces as
+        UNDATED rather than as a violation, because the edges table carries no
+        creation timestamp and the sweep refuses to guess a date."""
+        from graph.rules import check_link_evidence_recorded
+
+        extract_concepts(conn, evidence_node, SessionGate(), client=MockLLMClient())
+        before = check_link_evidence_recorded(conn)
+        assert before.conforming > 0
+        assert before.undated == 0
+        assert before.violations == []
+
+        # A bare edge, written the way semantic_link.py wrote all 2,022 of them.
+        add_node(conn, "concept-bare", "Concept", {
+            "name": "Bare", "description": "No provenance verdict.",
+            "artifact_class": "abstracted-mechanism", "key_properties": [],
+            "tradeoffs": [], "design_rationale": "n/a"})
+        add_edge(conn, "extracted-from", "concept-bare", evidence_node)
+
+        after = check_link_evidence_recorded(conn)
+        assert after.undated == 1
+        assert after.conforming == before.conforming
+
+    def test_a_malformed_in_scope_edge_is_a_violation(self, conn, evidence_node):
+        from graph.rules import check_link_evidence_recorded
+
+        extract_concepts(conn, evidence_node, SessionGate(), client=MockLLMClient())
+        conn.execute(
+            "UPDATE edges SET attrs = json_remove(attrs, '$.basis_sha256') "
+            "WHERE kind = 'extracted-from'")
+        sweep = check_link_evidence_recorded(conn)
+        assert sweep.violations
+        assert "basis_sha256" in sweep.violations[0].message
+        assert sweep.violations[0].rule == "INV-KK-EXTRACT-EVIDENCE-RECORDED"
+
+    def test_an_edge_claiming_grounded_against_ungrounded_phrases_is_caught(
+            self, conn, evidence_node):
+        """A verdict that contradicts itself is worse than none, because it reads
+        as a pass."""
+        from graph.rules import check_link_evidence_recorded
+
+        extract_concepts(conn, evidence_node, SessionGate(), client=MockLLMClient())
+        conn.execute(
+            "UPDATE edges SET attrs = json_set(attrs, '$.grounded', json('true'), "
+            "'$.ungrounded_count', 5) WHERE kind = 'extracted-from'")
+        sweep = check_link_evidence_recorded(conn)
+        assert sweep.violations
+        assert "disagrees" in sweep.violations[0].message
+
+    def test_legacy_edges_are_out_of_scope_not_deleted(self, conn, evidence_node):
+        """The invariant is date-scoped so the 2,022 regex links can be left in
+        place. A dated-but-old edge is neither conforming nor a violation."""
+        from graph.rules import check_link_evidence_recorded
+
+        add_node(conn, "concept-old", "Concept", {
+            "name": "Old", "description": "Linked by title regex in August.",
+            "artifact_class": "abstracted-mechanism", "key_properties": [],
+            "tradeoffs": [], "design_rationale": "n/a"})
+        add_edge(conn, "extracted-from", "concept-old", evidence_node,
+                 {"checked_at": "2026-08-01"})
+
+        sweep = check_link_evidence_recorded(conn)
+        assert sweep.violations == []
+        assert sweep.undated == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE kind='extracted-from' "
+            "AND source_id='concept-old'").fetchone()[0] == 1
