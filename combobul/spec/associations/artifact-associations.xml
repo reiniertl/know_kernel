@@ -4286,4 +4286,29 @@
     <link to="ALG-KK-WEB-LINK-REVIEW" relation="part-of"/>
   </associate>
 
+  <associate source="src/graph/link_origin.py" kind="source-file" name="link_origin.py" scope="">
+    <link to="ANN-KK-UNLINKED-PROVENANCE-CENSUS" relation="part-of"/>
+  </associate>
+
+  <associate source="src/graph/link_origin.py" kind="function" name="classify_link_origin" scope="">
+    <link to="INV-KK-EXTRACT-EVIDENCE-RECORDED" relation="uses"/>
+  </associate>
+
+  <associate source="src/graph/link_origin.py" kind="function" name="build_origin_marker" scope="">
+    <link to="INV-KK-EXTRACT-EVIDENCE-RECORDED" relation="enforces"/>
+  </associate>
+
+  <associate source="src/graph/link_origin.py" kind="function" name="mark_unmarked_provenance_edges" scope="">
+    <link to="INV-KK-EXTRACT-EVIDENCE-RECORDED" relation="enforces"/>
+    <link to="INV-KK-CLAIM-EXTRACT-EVIDENCE-BARE" relation="uses"/>
+  </associate>
+
+  <associate source="tests/test_link_origin.py" kind="source-file" name="test_link_origin.py" scope="">
+    <link to="INV-KK-EXTRACT-EVIDENCE-RECORDED" relation="part-of"/>
+  </associate>
+
+  <associate source="tests/test_repo_hygiene.py" kind="source-file" name="test_repo_hygiene.py" scope="">
+    <link to="INV-KK-LINK-MECHANISM-SINGLE" relation="part-of"/>
+  </associate>
+
 </artifact-associations>

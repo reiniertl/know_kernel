@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -434,20 +434,52 @@ VALID_CONFIRMATIONS = ("confirmed", "rejected")
 #: mechanism, not to legitimise it.
 LEGACY_UNVERIFIED_BASIS = "unverified-legacy"
 
+#: The other three markers, added 2026-09-21 for the 1,147 edges the legacy
+#: pass did not touch. One basis would have described them the way one basis
+#: described the 2,022, and it would have been a worse description: those came
+#: from a single known-bad mechanism, these come from at least three origins
+#: and one of them is a LIVE, SANCTIONED writer. See ANN-KK-UNLINKED-PROVENANCE-
+#: CENSUS and INV-KK-CLAIM-EXTRACT-EVIDENCE-BARE.
+#:
+#: Like LEGACY_UNVERIFIED_BASIS, none of these is in VALID_EVIDENCE_BASES: an
+#: edge that is IN SCOPE and claims one is still a violation.
+CLAIM_EXTRACT_UNVERIFIED_BASIS = "claim-extract-unverified"
+EXTRACTOR_PREVERDICT_BASIS = "extractor-preverdict"
+MECHANISM_UNATTRIBUTED_BASIS = "mechanism-unattributed"
+
+#: Every marker that means "out of scope, and here is what is known about why".
+OUT_OF_SCOPE_BASES = (
+    LEGACY_UNVERIFIED_BASIS,
+    CLAIM_EXTRACT_UNVERIFIED_BASIS,
+    EXTRACTOR_PREVERDICT_BASIS,
+    MECHANISM_UNATTRIBUTED_BASIS,
+)
+
 
 @dataclass
 class EvidenceSweep:
     """Outcome of check_link_evidence_recorded.
 
-    undated and legacy_marked are both out of scope, and the split is the whole
-    point: legacy_marked edges are known to predate the rule and say so, while
-    undated ones are simply unaccounted for. Re-derivation should drive both to
-    zero; only the second is a surprise.
+    undated and the marked counts are all out of scope, and the split is the
+    whole point: a marked edge is known to predate the rule and says what is
+    known about its origin, while an undated one is simply unaccounted for.
+    Re-derivation should drive both to zero; only the second is a surprise.
+
+    legacy_marked is kept as its own field rather than folded into
+    marked_by_basis because it is the one population whose mechanism is known
+    to be WRONG rather than merely unrecorded, and callers written before the
+    other three markers existed still read it.
     """
     conforming: int
     undated: int
     violations: list[Violation]
     legacy_marked: int = 0
+    marked_by_basis: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def marked(self) -> int:
+        """Every out-of-scope edge that carries a marker, legacy included."""
+        return sum(self.marked_by_basis.values())
 
 
 def check_link_evidence_recorded(
@@ -468,6 +500,7 @@ def check_link_evidence_recorded(
     conforming = 0
     undated = 0
     legacy_marked = 0
+    marked_by_basis: dict[str, int] = {}
     violations: list[Violation] = []
 
     for source_id, target_id, raw in rows:
@@ -484,8 +517,11 @@ def check_link_evidence_recorded(
             # An edge with no date cannot be placed in or out of scope, because
             # the edges table records no creation time. A marked legacy edge at
             # least says why it has none.
-            if attrs.get("basis") == LEGACY_UNVERIFIED_BASIS:
-                legacy_marked += 1
+            basis = attrs.get("basis")
+            if basis in OUT_OF_SCOPE_BASES:
+                marked_by_basis[basis] = marked_by_basis.get(basis, 0) + 1
+                if basis == LEGACY_UNVERIFIED_BASIS:
+                    legacy_marked += 1
             else:
                 undated += 1
             continue
@@ -524,7 +560,8 @@ def check_link_evidence_recorded(
         conforming += 1
 
     return EvidenceSweep(conforming=conforming, undated=undated,
-                         violations=violations, legacy_marked=legacy_marked)
+                         violations=violations, legacy_marked=legacy_marked,
+                         marked_by_basis=marked_by_basis)
 
 
 def check_link_confirmations(conn: sqlite3.Connection) -> list[Violation]:
