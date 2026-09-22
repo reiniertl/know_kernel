@@ -43,6 +43,8 @@ def test_node_kinds_complete():
 def test_edge_kinds_complete():
     expected = {
         "belongs-to", "extracted-from", "sourced-from", "defined-by",
+        # IFC-KK-PAPER-KERNEL: which kernel a PAPER is about.
+        "about-kernel",
         "alternative-to",
         "refines", "contradicts", "prerequisite", "supersedes",
         "assessed-by", "governed-by", "triggered-by", "constrains-composition",
@@ -63,10 +65,11 @@ def test_edge_kinds_complete():
         "completeness-of",
     }
     assert set(EDGE_KINDS) == expected
-    # 40 since 2026-09-22: defined-by, the seminal marker
-    # IFC-KK-CONCEPT-SEMINAL-MARKER has specified since D-12 and which
-    # add_edge rejected as an unknown kind until then.
-    assert len(EDGE_KINDS) == 40
+    # 41 since 2026-09-22. Two landed that day: defined-by, the seminal marker
+    # IFC-KK-CONCEPT-SEMINAL-MARKER had specified since D-12 and which add_edge
+    # rejected as an unknown kind until then; and about-kernel, which is the
+    # first edge in the schema with a Kernel TARGET other than implemented-in.
+    assert len(EDGE_KINDS) == 41
 
 
 def test_edge_valid_pairs_covers_all_edge_kinds():
@@ -340,3 +343,97 @@ def test_master_db_has_no_edge_with_a_missing_source():
     finally:
         conn.close()
     assert rows == [], f"{len(rows)} edge(s) have a missing source: {rows[:10]}"
+
+
+# --- IFC-KK-PAPER-KERNEL: which kernel a paper is about ---------------------
+
+
+def _kernel_fixture(conn):
+    from graph.engine import add_node
+    add_node(conn, "src-1", "Source", {
+        "url": "https://example.com/p.pdf", "source_type": "paper",
+        "license": "MIT", "title": "A paper"})
+    add_node(conn, "ev-1", "Evidence", {
+        "artifact_class": "licensed-evidence",
+        "contamination_level": "weak-copyleft", "text": "t"})
+    add_node(conn, "k-1", "Kernel", {
+        "name": "Linux Mainline", "description": "Upstream.",
+        "kernel_type": "general-purpose"})
+    add_node(conn, "concept-1", "Concept", {
+        "name": "Vmalloc", "description": "d",
+        "artifact_class": "abstracted-mechanism", "key_properties": [],
+        "tradeoffs": [], "design_rationale": "r"})
+    conn.commit()
+
+
+def test_about_kernel_is_accepted_from_a_source(conn: sqlite3.Connection):
+    """The decided pair. Operator chose Source over Evidence on 2026-09-22
+    because Source is what a reader filters by and is the stable layer —
+    Evidence is re-derived and would orphan the association every relink."""
+    from graph.engine import add_edge
+    _kernel_fixture(conn)
+    add_edge(conn, "about-kernel", "src-1", "k-1")
+    conn.commit()
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'about-kernel'").fetchone()[0] == 1
+
+
+def test_about_kernel_is_refused_from_evidence(conn: sqlite3.Connection):
+    """The pair NOT chosen must be rejected, or the decision is decorative."""
+    import pytest
+    from graph.engine import add_edge
+    _kernel_fixture(conn)
+    with pytest.raises(ValueError):
+        add_edge(conn, "about-kernel", "ev-1", "k-1")
+
+
+def test_about_kernel_is_refused_from_a_concept(conn: sqlite3.Connection):
+    """A Concept reaches a Kernel by implemented-in. about-kernel is about a
+    PAPER, and letting a Concept use it would make the two edges synonyms."""
+    import pytest
+    from graph.engine import add_edge
+    _kernel_fixture(conn)
+    with pytest.raises(ValueError):
+        add_edge(conn, "about-kernel", "concept-1", "k-1")
+
+
+def test_about_kernel_is_refused_pointing_at_a_non_kernel(conn: sqlite3.Connection):
+    import pytest
+    from graph.engine import add_edge
+    _kernel_fixture(conn)
+    with pytest.raises(ValueError):
+        add_edge(conn, "about-kernel", "src-1", "concept-1")
+
+
+def test_a_source_may_carry_two_kernels(conn: sqlite3.Connection):
+    """Cardinality is deliberately NOT capped at one. The extractor answers with
+    a single name so writes at most one, but a comparison paper genuinely
+    concerns two kernels and a human must be able to say so without a schema
+    change. That the extractor cannot express it is the extractor's limit."""
+    from graph.engine import add_edge, add_node
+    _kernel_fixture(conn)
+    add_node(conn, "k-2", "Kernel", {
+        "name": "PREEMPT_RT", "description": "Realtime.", "kernel_type": "real-time"})
+    add_edge(conn, "about-kernel", "src-1", "k-1")
+    add_edge(conn, "about-kernel", "src-1", "k-2")
+    conn.commit()
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'about-kernel' AND source_id = 'src-1'"
+    ).fetchone()[0] == 2
+
+
+def test_kernel_had_exactly_one_edge_pair_before_this(conn: sqlite3.Connection):
+    """The measurement that motivated the edge, pinned so it stays true.
+
+    Scanning EDGE_VALID_PAIRS for the string "Kernel" finds four entries and
+    three of them are a near-miss: governed-by, triggered-by and belongs-to all
+    involve KernelInvariant, a different node kind sharing a prefix. Only
+    implemented-in and now about-kernel touch a real Kernel.
+    """
+    def pairs(v):
+        return v if isinstance(v, list) else [v]
+    touching = {
+        k for k, v in EDGE_VALID_PAIRS.items()
+        if any("Kernel" in (s, t) for s, t in pairs(v))
+    }
+    assert touching == {"implemented-in", "about-kernel"}

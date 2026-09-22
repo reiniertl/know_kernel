@@ -16,6 +16,12 @@ EDGE_KINDS = (
     # marker was not merely unused, add_edge refused it as an unknown kind, so
     # INV-KK-CONCEPT-ADMISSION's only escape hatch could never be exercised.
     "defined-by",
+    # IFC-KK-PAPER-KERNEL. Which kernel a PAPER is about — the signal the graph
+    # could not carry until 2026-09-22. Kernel appeared in exactly ONE entry of
+    # EDGE_VALID_PAIRS before this, implemented-in = (Concept, Kernel). The near
+    # miss is worth naming: governed-by, triggered-by and belongs-to all involve
+    # KernelInvariant, a DIFFERENT kind that merely shares a prefix.
+    "about-kernel",
     "alternative-to",
     "refines",
     "contradicts",
@@ -61,6 +67,15 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence"), ("InteractionProtocol", "Evidence"), ("PerformanceProfile", "Evidence"), ("CompatibilityAssessment", "Evidence"), ("ComparativeAnalysis", "Evidence"), ("Problem", "Evidence"), ("Observation", "Evidence"), ("Discussion", "Evidence"), ("Benchmark", "Evidence"), ("Rejection", "Evidence"), ("Proposal", "Evidence")],
     "sourced-from": ("Evidence", "Source"),
     "defined-by": ("Concept", "Source"),
+    # On the Source and not the Evidence, per operator decision 2026-09-22:
+    # Source is what a reader filters by and is the STABLE layer. Evidence is
+    # re-derived — --all-relink selected 1,538 of them on 2026-09-21 — so an
+    # association hanging there would be rebuilt or orphaned on every run while
+    # the paper it describes had not changed. Cardinality is deliberately not
+    # capped at one: the extractor answers with a single name and so writes at
+    # most one, but a comparison paper genuinely concerns two kernels and a
+    # human should be able to say so without a schema change.
+    "about-kernel": ("Source", "Kernel"),
     # INV-KK-VENUE-SOURCE-EDGE: a Source is linked to its Venue by this edge, and
     # to at most one. The raw Source.attrs.venue string is retained as provenance
     # but is no longer what the viewer groups on.
