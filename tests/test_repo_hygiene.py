@@ -15,6 +15,8 @@ rule, and this test is what stops the rule from being lost again.
 
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -271,3 +273,100 @@ def test_the_link_mechanisms_parked_in_tmp_are_ignored():
         rel = path.relative_to(REPO).as_posix()
         assert _git("check-ignore", "-q", "--no-index", rel).returncode == 0, (
             f"{rel} writes {PROVENANCE_EDGE_KIND} edges and is not ignored")
+
+
+# ---------------------------------------------------------------------------
+# Cited-but-absent spec ids.
+#
+# Source files cite spec node ids in docstrings and comments, and the id is
+# load-bearing: it is how a reader gets from the code to the rule that governs
+# it. Ten citations have been found pointing at nodes that never existed —
+# eight in extractor.py on 2026-09-21, then ALG-KK-EXTRACT-CLI, then
+# ALG-KK-CLAIM-EXTRACT on 2026-09-22, whose docstring had claimed it since the
+# module was written.
+#
+# Each was found by hand. This sweep is what finds the next one.
+# ---------------------------------------------------------------------------
+
+SPEC_ID = re.compile(r"\b(?:ALG|INV|IFC|ANN)-KK-[A-Z0-9-]+")
+
+#: Cited in src/ and absent from the graph as of 2026-09-22. Frozen rather than
+#: asserted-empty because they predate this sweep and live in modules nobody
+#: has read for this purpose; authoring an algorithm node for a module from its
+#: docstring alone is how the wrong node gets written. Authoring any of them
+#: SHOULD fail this test — shrink the set, that is the direction of travel.
+KNOWN_UNRESOLVED_SPEC_IDS = frozenset({
+    "ALG-KK-CLASSIFY-ASSIGN",                    # src/ingest/classifier.py
+    "ALG-KK-SCORE-FRONTIER",                     # src/graph/scoring.py
+    "INV-KK-ADVISORY-REQUIRES-ASSESSMENT",       # src/ingest/reviewer.py
+    "INV-KK-GRAPH-RESEARCH-SCORE-NON-NEGATIVE",  # src/graph/scoring.py
+    "INV-KK-VALIDATE-RATE-LIMITED",              # src/ingest/validate_sources.py
+})
+
+
+def _cited_spec_ids() -> dict[str, set[str]]:
+    cited: dict[str, set[str]] = {}
+    for path in sorted((REPO / "src").rglob("*.py")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for node_id in SPEC_ID.findall(text):
+            cited.setdefault(node_id.rstrip("-"), set()).add(
+                path.relative_to(REPO).as_posix())
+    return cited
+
+
+def _unresolved(ids: list[str]) -> set[str]:
+    """Ask the RIL which of these do not exist. spec.db is opaque binary and
+    the CLI is the only interface to it (CLAUDE.md), so this shells out.
+
+    `query node` answers RIL-ERR-QUERY-NOT-FOUND and `query-multi` answers a
+    bare `Node not found: X`. Greps for either alone have produced false
+    readings in BOTH directions, so this matches the id out of whichever
+    phrasing comes back rather than the phrasing itself.
+    """
+    commands = [{"cmd": "node-info", "args": ids[i:i + 50]}
+                for i in range(0, len(ids), 50)]
+    proc = subprocess.run(
+        ["node", "combobul/cli/ril.mjs", "query-multi",
+         json.dumps(commands), "--json"],
+        cwd=REPO, capture_output=True, text=True, check=False)
+    if proc.returncode != 0 or "{" not in proc.stdout:
+        pytest.skip("ril CLI unavailable")
+    payload = json.loads(proc.stdout[proc.stdout.index("{"):])
+    missing: set[str] = set()
+    for block in payload["results"]:
+        for result in (block.get("results") or [block]):
+            if isinstance(result, dict) and "error" in result:
+                found = SPEC_ID.search(result["error"])
+                if found:
+                    missing.add(found.group(0))
+    return missing
+
+
+def test_no_new_spec_id_is_cited_without_existing():
+    cited = _cited_spec_ids()
+    assert len(cited) > 100, "the citation scan found almost nothing; it broke"
+    unresolved = _unresolved(sorted(cited))
+    new = unresolved - KNOWN_UNRESOLVED_SPEC_IDS
+    assert new == set(), (
+        "these spec ids are cited in src/ and do not exist: "
+        + ", ".join(f"{i} ({', '.join(sorted(cited[i]))})" for i in sorted(new)))
+
+
+def test_the_known_unresolved_set_has_not_silently_been_fixed():
+    """The counterpart. If one of the five is authored, this fails and the
+    frozen set shrinks — so the list cannot quietly rot into a description of
+    a problem that no longer exists."""
+    cited = _cited_spec_ids()
+    unresolved = _unresolved(sorted(cited))
+    fixed = KNOWN_UNRESOLVED_SPEC_IDS - unresolved
+    assert fixed == set(), (
+        "these now exist and should be removed from KNOWN_UNRESOLVED_SPEC_IDS: "
+        + ", ".join(sorted(fixed)))
+
+
+def test_the_claim_extractor_no_longer_cites_a_node_that_does_not_exist():
+    """ALG-KK-CLAIM-EXTRACT, authored 2026-09-22. The docstring had cited it
+    since the module was written."""
+    src = (REPO / "src" / "ingest" / "claim_extractor.py").read_text(encoding="utf-8")
+    assert "ALG-KK-CLAIM-EXTRACT" in src
+    assert "ALG-KK-CLAIM-EXTRACT" not in KNOWN_UNRESOLVED_SPEC_IDS
