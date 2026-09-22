@@ -15,7 +15,7 @@
   <input type="search" name="q" value="{{ q }}" placeholder="Filter by name">
   <select name="state">
     <option value="">any state</option>
-    {% for s in ['admissible', 'seminal', 'thin', 'unlinked'] %}
+    {% for s in ['admissible', 'multi-kernel', 'seminal', 'thin', 'unlinked'] %}
     <option value="{{ s }}" {% if state_filter == s %}selected{% endif %}>{{ s }}</option>
     {% endfor %}
   </select>

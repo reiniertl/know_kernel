@@ -622,6 +622,28 @@ def seminal_concepts(conn: sqlite3.Connection) -> set[str]:
     }
 
 
+#: A Concept implemented in this many DISTINCT Kernels is an established class
+#: by construction. Added 2026-09-22 as INV-KK-CONCEPT-ADMISSION's third route.
+#: BETTER evidence than two papers, because two papers can be the same research
+#: group twice while two kernels cannot.
+ADMISSIBLE_KERNELS = 2
+
+
+def kernel_breadth(conn: sqlite3.Connection, concept_id: str) -> int:
+    """Distinct Kernels a Concept is implemented-in.
+
+    The third admission route. Unlike concept_weight this counts curation, not
+    corpus coverage, which is exactly why it catches what weight misses: Zswap
+    and KSM sit at one paper each in this corpus while being present in several
+    kernels.
+    """
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT target_id) FROM edges "
+        "WHERE kind = 'implemented-in' AND source_id = ?", (concept_id,)
+    ).fetchone()
+    return row[0] if row else 0
+
+
 def admission_state(
     conn: sqlite3.Connection, concept_id: str, seminal: set[str]
 ) -> str:
@@ -642,6 +664,11 @@ def admission_state(
     weight = concept_weight(conn, concept_id)
     if weight >= ADMISSIBLE_WEIGHT:
         return "admissible"
+    # The third route, 2026-09-22. Checked AFTER weight so a concept that
+    # already clears the paper bar keeps reading as "admissible" rather than
+    # being relabelled — the states must stay comparable across the amendment.
+    if kernel_breadth(conn, concept_id) >= ADMISSIBLE_KERNELS:
+        return "multi-kernel"
     return "unlinked" if weight == 0 else "thin"
 
 
@@ -669,7 +696,7 @@ def check_concept_admission(conn: sqlite3.Connection) -> AdmissionSweep:
         "SELECT id FROM nodes WHERE kind = 'Concept' ORDER BY id"
     ).fetchall():
         state = admission_state(conn, concept_id, seminal)
-        if state in ("seminal", "admissible"):
+        if state in ("seminal", "admissible", "multi-kernel"):
             admissible += 1
         elif state == "unlinked":
             unlinked.append(concept_id)

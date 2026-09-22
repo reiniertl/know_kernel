@@ -167,3 +167,96 @@ def test_an_empty_graph_sweeps_cleanly(conn):
     assert isinstance(sweep, AdmissionSweep)
     assert sweep.total == 0
     assert sweep.violations == []
+
+
+# --- the third admission route (2026-09-22) ---------------------------------
+
+
+def _kernel_node(conn, kid, name):
+    from graph.engine import add_node
+    add_node(conn, kid, "Kernel", {
+        "name": name, "description": f"{name}.", "kernel_type": "general-purpose"})
+
+
+def test_a_concept_in_two_kernels_is_admissible_at_weight_one(conn):
+    """The amendment. Zswap and KSM are the real cases: one paper each in this
+    corpus, present in several kernels. Weight measures corpus coverage;
+    kernel breadth measures curation, which is why it catches what weight
+    misses."""
+    from graph.engine import add_edge
+    from graph.rules import admission_state, concept_weight, seminal_concepts
+
+    cid = _concept(conn, "concept-zswap", "Zswap")
+    eid = _paper(conn, "a")
+    add_edge(conn, "extracted-from", cid, eid)
+    _kernel_node(conn, "k-1", "Linux Mainline")
+    _kernel_node(conn, "k-2", "PREEMPT_RT")
+    add_edge(conn, "implemented-in", cid, "k-1")
+    add_edge(conn, "implemented-in", cid, "k-2")
+    conn.commit()
+
+    assert concept_weight(conn, cid) == 1, "still one paper — weight did not move"
+    assert admission_state(conn, cid, seminal_concepts(conn)) == "multi-kernel"
+
+
+def test_one_kernel_is_not_enough(conn):
+    """Vmalloc is the case that does NOT benefit: one implemented-in edge, to
+    Linux Mainline. The proposal cited it as the motivating example; measuring
+    showed the route does not reach it, and the rule must not pretend it does."""
+    from graph.engine import add_edge
+    from graph.rules import admission_state, seminal_concepts
+
+    cid = _concept(conn, "concept-vmalloc", "Vmalloc")
+    eid = _paper(conn, "a")
+    add_edge(conn, "extracted-from", cid, eid)
+    _kernel_node(conn, "k-1", "Linux Mainline")
+    add_edge(conn, "implemented-in", cid, "k-1")
+    conn.commit()
+
+    assert admission_state(conn, cid, seminal_concepts(conn)) == "thin"
+
+
+def test_kernel_breadth_counts_distinct_kernels_not_edges(conn):
+    from graph.engine import add_edge
+    from graph.rules import kernel_breadth
+
+    cid = _concept(conn, "concept-1", "X")
+    _kernel_node(conn, "k-1", "Linux Mainline")
+    add_edge(conn, "implemented-in", cid, "k-1")
+    conn.commit()
+    assert kernel_breadth(conn, cid) == 1
+
+
+def test_a_concept_already_admissible_on_papers_keeps_that_label(conn):
+    """The third route is checked AFTER weight, so a concept clearing the paper
+    bar is not relabelled. The states have to stay comparable across the
+    amendment or the census before/after means nothing."""
+    from graph.engine import add_edge
+    from graph.rules import admission_state, seminal_concepts
+
+    cid = _concept(conn, "concept-1", "X")
+    for n in ("a", "b"):
+        add_edge(conn, "extracted-from", cid, _paper(conn, n))
+    _kernel_node(conn, "k-1", "Linux Mainline")
+    _kernel_node(conn, "k-2", "PREEMPT_RT")
+    add_edge(conn, "implemented-in", cid, "k-1")
+    add_edge(conn, "implemented-in", cid, "k-2")
+    conn.commit()
+    assert admission_state(conn, cid, seminal_concepts(conn)) == "admissible"
+
+
+def test_the_sweep_counts_multi_kernel_as_admissible(conn):
+    from graph.engine import add_edge
+    from graph.rules import check_concept_admission
+
+    cid = _concept(conn, "concept-1", "X")
+    add_edge(conn, "extracted-from", cid, _paper(conn, "a"))
+    _kernel_node(conn, "k-1", "Linux Mainline")
+    _kernel_node(conn, "k-2", "PREEMPT_RT")
+    add_edge(conn, "implemented-in", cid, "k-1")
+    add_edge(conn, "implemented-in", cid, "k-2")
+    conn.commit()
+
+    s = check_concept_admission(conn)
+    assert s.admissible == 1
+    assert s.thin == [] and s.unlinked == []
