@@ -4407,4 +4407,42 @@
     <link to="ALG-KK-WEB-NODE-DETAIL"          relation="part-of"/>
   </associate>
 
+  <associate source="src/graph/concept_vocabulary.py" kind="source-file" name="concept_vocabulary.py" scope="">
+    <link to="INV-KK-EXTRACT-CONCEPT-MATCHED" relation="part-of"/>
+  </associate>
+
+  <associate source="src/graph/concept_vocabulary.py" kind="function" name="fuzzy_match_concept" scope="">
+    <link to="INV-KK-EXTRACT-CONCEPT-MATCHED" relation="enforces"/>
+  </associate>
+
+  <associate source="src/graph/concept_vocabulary.py" kind="function" name="build_vocabulary_context" scope="">
+    <link to="INV-KK-EXTRACT-CONCEPT-MATCHED" relation="enforces"/>
+    <link to="ALG-KK-LLM-EXTRACT"             relation="part-of"/>
+  </associate>
+
+  <associate source="src/graph/concept_vocabulary.py" kind="function" name="record_candidate" scope="">
+    <link to="IFC-KK-CONCEPT-CANDIDATE" relation="defines"/>
+  </associate>
+
+  <associate source="src/graph/concept_vocabulary.py" kind="function" name="candidate_ranking" scope="">
+    <link to="IFC-KK-CONCEPT-CANDIDATE" relation="defines"/>
+  </associate>
+
+  <associate source="src/graph/rules.py" kind="function" name="check_concept_admission" scope="">
+    <link to="INV-KK-CONCEPT-ADMISSION" relation="enforces"/>
+  </associate>
+
+  <associate source="src/graph/rules.py" kind="function" name="concept_weight" scope="">
+    <link to="INV-KK-CONCEPT-ADMISSION" relation="uses"/>
+  </associate>
+
+  <associate source="tests/test_concept_admission.py" kind="source-file" name="test_concept_admission.py" scope="">
+    <link to="INV-KK-CONCEPT-ADMISSION" relation="part-of"/>
+  </associate>
+
+  <associate source="tests/test_concept_matching.py" kind="source-file" name="test_concept_matching.py" scope="">
+    <link to="INV-KK-EXTRACT-CONCEPT-MATCHED" relation="part-of"/>
+    <link to="IFC-KK-CONCEPT-CANDIDATE"       relation="part-of"/>
+  </associate>
+
 </artifact-associations>

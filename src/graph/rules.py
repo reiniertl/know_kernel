@@ -564,6 +564,92 @@ def check_link_evidence_recorded(
                          marked_by_basis=marked_by_basis)
 
 
+#: INV-KK-CONCEPT-ADMISSION scopes itself to concepts admitted after this date.
+#: The 33 below the line are grandfathered per D-12.
+CONCEPT_ADMISSION_FROM = "2026-09-16"
+
+#: A Concept is admissible at this many DISTINCT Sources, or with a seminal
+#: marker. Distinct Sources, not distinct Evidence: two Evidence nodes from one
+#: paper are one paper.
+ADMISSIBLE_WEIGHT = 2
+
+
+@dataclass
+class AdmissionSweep:
+    """Outcome of check_concept_admission.
+
+    thin and unlinked are reported SEPARATELY from violations, and the split is
+    the finding. Weight is a proxy for "established class" and it misfires on a
+    thin corpus: BBR Congestion Control, Dentry Cache, Devicetree, KSM, Vmalloc
+    and Zswap all sat at weight 1 on 2026-09-22 because this corpus holds one
+    paper about each, not because a single paper invented them. Calling those
+    violations would be measuring corpus coverage and reporting it as concept
+    quality.
+    """
+    admissible: int
+    thin: list[str]
+    unlinked: list[str]
+    seminal: int
+    violations: list[Violation]
+
+    @property
+    def total(self) -> int:
+        return self.admissible + len(self.thin) + len(self.unlinked)
+
+
+def concept_weight(conn: sqlite3.Connection, concept_id: str) -> int:
+    """Distinct Sources reachable concept -extracted-from-> Evidence
+    -sourced-from-> Source. This is the weight INV-KK-CONCEPT-ADMISSION means.
+    """
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT s.target_id) FROM edges e "
+        "JOIN edges s ON s.source_id = e.target_id AND s.kind = 'sourced-from' "
+        "WHERE e.kind = 'extracted-from' AND e.source_id = ?", (concept_id,)
+    ).fetchone()
+    return row[0] if row else 0
+
+
+def check_concept_admission(conn: sqlite3.Connection) -> AdmissionSweep:
+    """Sweep every Concept for INV-KK-CONCEPT-ADMISSION.
+
+    DELIBERATELY NOT IN RULES_BY_KIND, for the reason
+    check_link_evidence_recorded is not: those rules are per-node and run on
+    every write, so a Concept below the weight line would make writes that have
+    nothing to do with this invariant fail. Operator decision 2026-09-22 —
+    report, do not gate. Enforcement against NEW concepts is structural and
+    lives elsewhere: INV-KK-EXTRACT-CONCEPT-MATCHED stops the extractor
+    creating them at all.
+
+    Returns no violations today. That is not vacuity — it is the date scope
+    doing its job, and the thin list is where the signal actually is.
+    """
+    seminal = {
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT source_id FROM edges WHERE kind = 'defined-by'")
+    }
+    admissible = 0
+    thin: list[str] = []
+    unlinked: list[str] = []
+    violations: list[Violation] = []
+
+    for (concept_id,) in conn.execute(
+        "SELECT id FROM nodes WHERE kind = 'Concept' ORDER BY id"
+    ).fetchall():
+        if concept_id in seminal:
+            admissible += 1
+            continue
+        weight = concept_weight(conn, concept_id)
+        if weight >= ADMISSIBLE_WEIGHT:
+            admissible += 1
+        elif weight == 0:
+            unlinked.append(concept_id)
+        else:
+            thin.append(concept_id)
+
+    return AdmissionSweep(admissible=admissible, thin=thin, unlinked=unlinked,
+                          seminal=len(seminal), violations=violations)
+
+
 def check_link_confirmations(conn: sqlite3.Connection) -> list[Violation]:
     """INV-KK-LINK-CONFIRMATION-STATE, over every extracted-from edge.
 

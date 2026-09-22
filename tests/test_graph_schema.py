@@ -42,7 +42,8 @@ def test_node_kinds_complete():
 
 def test_edge_kinds_complete():
     expected = {
-        "belongs-to", "extracted-from", "sourced-from", "alternative-to",
+        "belongs-to", "extracted-from", "sourced-from", "defined-by",
+        "alternative-to",
         "refines", "contradicts", "prerequisite", "supersedes",
         "assessed-by", "governed-by", "triggered-by", "constrains-composition",
         "profiled-by", "assesses-compatibility",
@@ -62,7 +63,10 @@ def test_edge_kinds_complete():
         "completeness-of",
     }
     assert set(EDGE_KINDS) == expected
-    assert len(EDGE_KINDS) == 39
+    # 40 since 2026-09-22: defined-by, the seminal marker
+    # IFC-KK-CONCEPT-SEMINAL-MARKER has specified since D-12 and which
+    # add_edge rejected as an unknown kind until then.
+    assert len(EDGE_KINDS) == 40
 
 
 def test_edge_valid_pairs_covers_all_edge_kinds():

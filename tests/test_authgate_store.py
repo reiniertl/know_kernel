@@ -327,7 +327,13 @@ def test_auth_schema_declares_no_graph_table():
 
 
 def test_auth_db_and_master_db_share_no_tables(tmp_path):
-    """The two stores are disjoint by construction (INV-KK-AUTH-STORE-SEPARATE)."""
+    """The two stores are disjoint by construction (INV-KK-AUTH-STORE-SEPARATE).
+
+    The master set is asserted by name rather than only for disjointness, so a
+    table appearing in master is a deliberate act: concept_candidates was added
+    on 2026-09-22 for IFC-KK-CONCEPT-CANDIDATE and this test is where that has
+    to be acknowledged.
+    """
     from graph.schema import init_db
 
     auth_conn = init_auth_db(tmp_path / "auth.db")
@@ -352,5 +358,5 @@ def test_auth_db_and_master_db_share_no_tables(tmp_path):
         master_conn.close()
 
     assert auth_tables == {"users", "sessions", "remember_tokens"}
-    assert master_tables == {"nodes", "edges"}
+    assert master_tables == {"nodes", "edges", "concept_candidates"}
     assert auth_tables & master_tables == set()

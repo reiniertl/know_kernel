@@ -11,6 +11,11 @@ EDGE_KINDS = (
     "belongs-to",
     "extracted-from",
     "sourced-from",
+    # IFC-KK-CONCEPT-SEMINAL-MARKER, per D-12. Absent from this list until
+    # 2026-09-22, which is why zero defined-by edges existed: the seminal
+    # marker was not merely unused, add_edge refused it as an unknown kind, so
+    # INV-KK-CONCEPT-ADMISSION's only escape hatch could never be exercised.
+    "defined-by",
     "alternative-to",
     "refines",
     "contradicts",
@@ -55,6 +60,7 @@ EDGE_VALID_PAIRS: dict[str, tuple[str, str] | list[tuple[str, str]]] = {
     "belongs-to": [("Concept", "Subsystem"), ("KernelInvariant", "Subsystem")],
     "extracted-from": [("Concept", "Evidence"), ("KernelInvariant", "Evidence"), ("FailureMode", "Evidence"), ("InteractionProtocol", "Evidence"), ("PerformanceProfile", "Evidence"), ("CompatibilityAssessment", "Evidence"), ("ComparativeAnalysis", "Evidence"), ("Problem", "Evidence"), ("Observation", "Evidence"), ("Discussion", "Evidence"), ("Benchmark", "Evidence"), ("Rejection", "Evidence"), ("Proposal", "Evidence")],
     "sourced-from": ("Evidence", "Source"),
+    "defined-by": ("Concept", "Source"),
     # INV-KK-VENUE-SOURCE-EDGE: a Source is linked to its Venue by this edge, and
     # to at most one. The raw Source.attrs.venue string is retained as provenance
     # but is no longer what the viewer groups on.
@@ -202,6 +208,20 @@ CREATE TABLE IF NOT EXISTS edges (
     target_id TEXT NOT NULL REFERENCES nodes(id),
     attrs TEXT NOT NULL DEFAULT '{}',
     UNIQUE (kind, source_id, target_id)
+);
+
+-- IFC-KK-CONCEPT-CANDIDATE: names the extractor proposed that the curated
+-- vocabulary did not contain. NOT a node kind, deliberately — admitting a
+-- rejected candidate as a node would put the very thing
+-- INV-KK-CONCEPT-ADMISSION excludes into the graph under another label. One
+-- row per (name, Evidence) pair so distinct-Source weight can be counted
+-- before the Concept exists rather than after.
+CREATE TABLE IF NOT EXISTS concept_candidates (
+    normalised  TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    evidence_id TEXT NOT NULL,
+    proposed_at TEXT NOT NULL,
+    PRIMARY KEY (normalised, evidence_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
