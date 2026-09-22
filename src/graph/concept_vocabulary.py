@@ -294,9 +294,76 @@ def dismiss_candidate(conn: sqlite3.Connection, normalised: str) -> int:
         "DELETE FROM concept_candidates WHERE normalised = ?", (normalised,))
     return cur.rowcount
 
+
+# --- the kernel vocabulary (IFC-KK-PAPER-KERNEL) ----------------------------
+
+
+def resolve_kernel_names(conn: sqlite3.Connection) -> dict[str, str]:
+    """normalised kernel name -> node id, for every Kernel in the graph."""
+    rows = conn.execute(
+        "SELECT id, json_extract(attrs, '$.name') FROM nodes WHERE kind = 'Kernel'"
+    ).fetchall()
+    return {normalise_concept_name(r[1]): r[0] for r in rows if r[1]}
+
+
+def build_kernel_context(conn: sqlite3.Connection) -> str:
+    """The kernel vocabulary, for the prompt.
+
+    Four names on 2026-09-22, so this costs almost nothing to include — and the
+    failure of NOT including a vocabulary is already measured: a matcher added
+    on 2026-09-21 required an exact name the model had never been shown and
+    matched 0 of 114 candidates.
+
+    "none" IS AN EXPLICIT, PROMINENT OPTION AND THAT IS THE POINT. This corpus
+    is broad systems and security research, not kernel documentation; the
+    concept vocabulary matched 0 of 43 proposed names on 2026-09-22, which is
+    the same coverage gap seen from the other side. A model forced to choose
+    from a four-item list would manufacture a Linux association for every paper
+    that is not about a kernel at all, and those edges would be
+    indistinguishable from real ones. A field empty for most papers is a true
+    field.
+    """
+    names = sorted(
+        r[0] for r in conn.execute(
+            "SELECT json_extract(attrs, '$.name') FROM nodes WHERE kind = 'Kernel'"
+        ).fetchall() if r[0]
+    )
+    if not names:
+        return ""
+    return (
+        "KERNELS — if this document concerns one of these kernels specifically, "
+        'name it EXACTLY as written here under the key "kernel". If it concerns '
+        "none of them, concerns operating systems generally, or is not about a "
+        'kernel at all, answer "none". Most documents are "none"; that is the '
+        "expected answer and is more useful than a guess. Do NOT name a kernel "
+        "that is not in this list.\n" + ", ".join(names)
+    )
+
+
+def match_kernel_name(conn: sqlite3.Connection, name: str) -> str | None:
+    """The Kernel node id for a name the model returned, or None.
+
+    EXACT ON THE NORMALISED NAME, deliberately unlike the concept matcher,
+    which fuzzes to Levenshtein 2. The kernel vocabulary is four proper nouns
+    given verbatim in the prompt, so a near-miss is not a paraphrase to be
+    rescued — at distance 2 "Linux Mainline" and a hypothetical "Linux
+    Mainline 6" would collide, and associating a paper with the wrong kernel is
+    worse than associating it with none.
+
+    "none", the empty string and anything absent from the table all return
+    None, and the caller writes no edge. Nothing here creates a Kernel node:
+    INV-KK-PAPER-KERNEL-MATCHED forbids extraction changing how many exist,
+    for the same reason INV-KK-EXTRACT-CONCEPT-MATCHED forbids it for concepts.
+    """
+    key = normalise_concept_name(name or "")
+    if not key or key == "none":
+        return None
+    return resolve_kernel_names(conn).get(key)
+
 __all__ = [
     "Candidate", "DEFAULT_MAX_DISTANCE", "PROMOTION_REQUIRED_ATTRS",
-    "build_vocabulary_context", "candidate_sources", "dismiss_candidate",
+    "build_kernel_context", "build_vocabulary_context", "candidate_sources",
+    "dismiss_candidate", "match_kernel_name", "resolve_kernel_names",
     "promote_candidate",
     "candidate_ranking", "fuzzy_match_concept", "levenshtein_distance",
     "normalise_concept_name", "record_candidate", "resolve_concept_names",

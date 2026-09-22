@@ -533,3 +533,147 @@ def test_every_counter_in_a_result_reaches_the_report(monkeypatch, capsys, corpu
         assert not missing, f"per-result dict dropped {sorted(missing)}"
         for k in totalled:
             assert report[k] == sum(r[k] for r in report["results"])
+
+
+# --- IFC-KK-PAPER-KERNEL: which kernel the paper is about -------------------
+
+
+def _kernel(conn, name):
+    add_node(conn, f"k-{normalise_concept_name(name).replace(' ', '-')}", "Kernel", {
+        "name": name, "description": f"{name}.", "kernel_type": "general-purpose"})
+    conn.commit()
+
+
+class KernelMockClient:
+    """Returns a dict response naming a kernel, the shape the field needs."""
+
+    def __init__(self, kernel, concepts=None):
+        self.kernel = kernel
+        self.concepts = [] if concepts is None else concepts
+        self.calls: list[dict] = []
+
+    def create_message(self, model, system, user, max_tokens):
+        self.calls.append({"model": model, "user": user})
+        return {"text": json.dumps({"concepts": self.concepts, "kernel": self.kernel}),
+                "prompt_tokens": 100, "response_tokens": 50}
+
+
+def test_a_named_kernel_is_associated_with_the_paper_not_the_evidence(conn):
+    """Operator decision: the edge hangs off Source, the stable layer."""
+    eid = _paper(conn, "p")
+    _kernel(conn, "Linux Mainline")
+    result = extract_concepts(conn, eid, SessionGate(),
+                              client=KernelMockClient("Linux Mainline"))
+    conn.commit()
+
+    assert result.kernel_id == "k-linux-mainline"
+    assert result.kernels_rejected == 0
+    rows = conn.execute(
+        "SELECT source_id, target_id FROM edges WHERE kind = 'about-kernel'").fetchall()
+    assert rows == [("src-p", "k-linux-mainline")], "the edge is not on the Source"
+
+
+def test_none_writes_no_edge_at_all(conn):
+    """'none' is a permitted answer and is EXPECTED to be the common one.
+
+    This corpus is broad systems research, not kernel documentation — the
+    concept vocabulary matched 0 of 43 proposed names on 2026-09-22. Forcing a
+    choice from a four-item list would manufacture a Linux association for
+    every paper that is not about a kernel, and those edges would be
+    indistinguishable from real ones.
+    """
+    eid = _paper(conn, "p")
+    _kernel(conn, "Linux Mainline")
+    result = extract_concepts(conn, eid, SessionGate(),
+                              client=KernelMockClient("none"))
+    conn.commit()
+    assert result.kernel_id == ""
+    assert result.kernels_rejected == 0, "'none' is an answer, not a rejection"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'about-kernel'").fetchone()[0] == 0
+
+
+def test_a_kernel_not_in_the_table_is_DROPPED_and_never_created(conn):
+    """INV-KK-PAPER-KERNEL-MATCHED. The same rule concepts follow: extraction
+    must not change how many Kernels exist. Seeding non-Linux kernels is human
+    curation (ANN-KK-KERNEL-CURATION-GAP) and no model judgement substitutes."""
+    eid = _paper(conn, "p")
+    _kernel(conn, "Linux Mainline")
+    before = conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind = 'Kernel'").fetchone()[0]
+
+    result = extract_concepts(conn, eid, SessionGate(),
+                              client=KernelMockClient("seL4"))
+    conn.commit()
+
+    assert result.kernel_id == ""
+    assert result.kernels_rejected == 1, "a dropped name must be counted, not silent"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind = 'Kernel'").fetchone()[0] == before
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'about-kernel'").fetchone()[0] == 0
+
+
+def test_the_kernel_vocabulary_reaches_the_prompt(conn):
+    """The failure of NOT showing a vocabulary is measured: a matcher that
+    required an unseen exact name matched 0 of 114 candidates."""
+    eid = _paper(conn, "p")
+    _kernel(conn, "Linux Mainline")
+    _kernel(conn, "PREEMPT_RT")
+    client = KernelMockClient("none")
+    extract_concepts(conn, eid, SessionGate(), client=client)
+    prompt = client.calls[0]["user"]
+    assert "Linux Mainline" in prompt and "PREEMPT_RT" in prompt
+    assert '"none"' in prompt, "the none option must be visible in the prompt"
+
+
+def test_matching_is_exact_and_does_not_fuzz_like_the_concept_matcher(conn):
+    """Four proper nouns given verbatim: a near miss is not a paraphrase to
+    rescue, and associating a paper with the WRONG kernel is worse than none."""
+    eid = _paper(conn, "p")
+    _kernel(conn, "Linux Mainline")
+    result = extract_concepts(conn, eid, SessionGate(),
+                              client=KernelMockClient("Linux Mainlin"))
+    conn.commit()
+    assert result.kernel_id == ""
+    assert result.kernels_rejected == 1
+
+
+def test_re_running_does_not_duplicate_the_association(conn):
+    """A relink run re-asks the same question of the same paper. A plain INSERT
+    would raise on UNIQUE (kind, source_id, target_id) mid-batch."""
+    eid = _paper(conn, "p")
+    _kernel(conn, "Linux Mainline")
+    for _ in range(3):
+        extract_concepts(conn, eid, SessionGate(),
+                         client=KernelMockClient("Linux Mainline"))
+        conn.commit()
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'about-kernel'").fetchone()[0] == 1
+
+
+def test_a_bare_list_response_carries_no_kernel_and_does_not_error(conn):
+    """The list form predates the field; it must degrade, not raise."""
+    eid = _paper(conn, "p")
+    _kernel(conn, "Linux Mainline")
+    result = extract_concepts(conn, eid, SessionGate(), client=MockLLMClient())
+    conn.commit()
+    assert result.kernel_id == ""
+    assert result.kernels_rejected == 0
+
+
+def test_the_cli_reports_the_kernel_counters(monkeypatch, capsys, corpus):
+    import sqlite3
+    from ingest import cli_extract
+
+    c = sqlite3.connect(corpus)
+    _kernel(c, "Linux Mainline")
+    c.close()
+
+    monkeypatch.setattr(cli_extract, "client_for",
+                        lambda provider: KernelMockClient("Linux Mainline"))
+    _, report = _run_cli(monkeypatch, capsys,
+                         "--db", corpus, "--all-relink", "--limit", "1")
+    assert report["kernels_associated"] == 1
+    assert report["kernels_rejected"] == 0
+    assert report["results"][0]["kernel_id"] == "k-linux-mainline"

@@ -14,7 +14,9 @@ from typing import Any, Protocol
 
 from graph.engine import add_edge, add_node
 from graph.concept_vocabulary import (
+    build_kernel_context,
     build_vocabulary_context,
+    match_kernel_name,
     fuzzy_match_concept,
     record_candidate,
     resolve_concept_names,
@@ -266,7 +268,7 @@ the source actually says.\
 
 def build_extraction_prompt(
     evidence_text: str, source_type: str | None = None,
-    vocabulary: str = "",
+    vocabulary: str = "", kernels: str = "",
 ) -> str:
     """Build the user prompt, with the curated vocabulary when one is given.
 
@@ -281,6 +283,11 @@ def build_extraction_prompt(
     else:
         prefix = "Extract abstract concepts from this document:\n\n"
     head = f"{vocabulary}\n\n" if vocabulary else ""
+    # The kernel vocabulary sits beside the concept one (IFC-KK-PAPER-KERNEL).
+    # Four names, so the cost is negligible; both default to empty so every
+    # existing caller and test is unaffected.
+    if kernels:
+        head += f"{kernels}\n\n"
     if evidence_text:
         return f"{head}{prefix}{evidence_text}"
     return head + "Extract abstract concepts from metadata only -- no source text available."
@@ -965,6 +972,15 @@ class ExtractionResult:
     #: Names the model proposed that the vocabulary did not contain. They are
     #: queued in concept_candidates (IFC-KK-CONCEPT-CANDIDATE), not created.
     concepts_rejected: int = 0
+    #: IFC-KK-PAPER-KERNEL. The Kernel the paper was associated with, or "".
+    #: Empty is the EXPECTED value on this corpus: most papers are not about a
+    #: specific kernel, and "none" is a permitted answer that writes no edge.
+    kernel_id: str = ""
+    #: A kernel name the model returned that is not in the Kernel table. Dropped,
+    #: never created (INV-KK-PAPER-KERNEL-MATCHED). Unlike a rejected concept it
+    #: is NOT queued: seeding kernels is human curation, not a work queue, per
+    #: ANN-KK-KERNEL-CURATION-GAP.
+    kernels_rejected: int = 0
 
 
 def extract_concepts(
@@ -1057,7 +1073,9 @@ def extract_concepts(
 
     system_prompt = get_system_prompt(source_type)
     vocabulary = build_vocabulary_context(conn)
-    user_prompt = build_extraction_prompt(evidence_text, source_type, vocabulary)
+    kernels = build_kernel_context(conn)
+    user_prompt = build_extraction_prompt(
+        evidence_text, source_type, vocabulary, kernels)
 
     if dry_run:
         return ExtractionResult(
@@ -1084,6 +1102,10 @@ def extract_concepts(
         parsed = json.loads(text)
     except (json.JSONDecodeError, KeyError, IndexError):
         parsed = []
+
+    # IFC-KK-PAPER-KERNEL. Only a dict response can carry it; the bare-list
+    # form predates the field and legitimately has no kernel to report.
+    kernel_named = parsed.get("kernel", "") if isinstance(parsed, dict) else ""
 
     if isinstance(parsed, dict):
         concepts_data = parsed.get("concepts", [])
@@ -1244,12 +1266,37 @@ def extract_concepts(
             conn, evidence_id,
             [sid for sid in superseding_candidates if sid not in concept_ids])
 
+    # IFC-KK-PAPER-KERNEL: associate the PAPER, not the Evidence, and only with
+    # a Kernel that already exists (INV-KK-PAPER-KERNEL-MATCHED). A name the
+    # table does not hold is counted and dropped — extraction may not change how
+    # many Kernels exist, exactly as it may not change how many Concepts exist.
+    kernel_id = ""
+    kernels_rejected = 0
+    if kernel_named and source_id:
+        matched = match_kernel_name(conn, kernel_named)
+        if matched:
+            # Upsert: a relink run re-asks the same question of the same paper,
+            # and a plain INSERT would raise on UNIQUE (kind, source_id,
+            # target_id) part-way through a paid batch.
+            already = conn.execute(
+                "SELECT 1 FROM edges WHERE kind = 'about-kernel' "
+                "AND source_id = ? AND target_id = ?", (source_id, matched),
+            ).fetchone()
+            if not already:
+                add_edge(conn, "about-kernel", source_id, matched,
+                         {"basis": "llm-extracted", "extracted_at": today})
+            kernel_id = matched
+        elif normalise_concept_name(kernel_named) != "none":
+            kernels_rejected = 1
+
     return ExtractionResult(
         evidence_id=evidence_id,
         concept_ids=concept_ids,
         subsystem_ids=subsystem_ids,
         concepts_reused=concepts_reused,
         concepts_rejected=concepts_rejected,
+        kernel_id=kernel_id,
+        kernels_rejected=kernels_rejected,
         edges_superseded=edges_superseded,
         relationships_created=rel_result.edges_created,
         invariants_created=invariants_created,

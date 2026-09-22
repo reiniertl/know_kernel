@@ -175,6 +175,8 @@ def main() -> None:
                 "concepts_created": result.concepts_created,
                 "concepts_reused": result.concepts_reused,
                 "concepts_rejected": result.concepts_rejected,
+                "kernel_id": result.kernel_id,
+                "kernels_rejected": result.kernels_rejected,
                 "concepts_skipped": result.concepts_skipped,
                 "edges_superseded": result.edges_superseded,
                 "extraction_model": result.extraction_model,
@@ -204,6 +206,11 @@ def main() -> None:
         "concepts_created": sum(r["concepts_created"] for r in results),
         "concepts_reused": sum(r["concepts_reused"] for r in results),
         "concepts_rejected": sum(r["concepts_rejected"] for r in results),
+        # IFC-KK-PAPER-KERNEL. kernels_associated counts papers that got an
+        # edge; the rest answered "none", which on this corpus is expected to
+        # be most of them and is a true answer rather than a failure.
+        "kernels_associated": sum(1 for r in results if r["kernel_id"]),
+        "kernels_rejected": sum(r["kernels_rejected"] for r in results),
         "edges_superseded": sum(r["edges_superseded"] for r in results),
         "results": results,
         "error_details": errors,
