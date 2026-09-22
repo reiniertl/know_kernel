@@ -366,7 +366,6 @@ KNOWN_UNRESOLVED_SPEC_IDS = frozenset({
     # src/ingest/claim_extractor.py
     "INV-KK-CLAIM-CONCEPT-CONTEXT",
     "INV-KK-CLAIM-EDGE-VALID",
-    "INV-KK-CLAIM-FUZZY-THRESHOLD",
     "INV-KK-CLAIM-SOURCE-DATE",
     # src/ingest/classifier.py
     "ALG-KK-CLASSIFY-ASSIGN",

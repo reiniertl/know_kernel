@@ -131,50 +131,20 @@ def build_claim_user_prompt(source_text: str, concept_context: str) -> str:
 
 
 def _resolve_concept_names(conn: sqlite3.Connection) -> dict[str, str]:
-    """Build lowercase concept name -> node ID map."""
-    rows = conn.execute(
-        "SELECT id, json_extract(attrs, '$.name') as name FROM nodes WHERE kind = 'Concept'"
-    ).fetchall()
-    return {r[1].lower(): r[0] for r in rows if r[1]}
+    """Build normalised concept name -> node ID map."""
+    from graph.concept_vocabulary import resolve_concept_names
+
+    return resolve_concept_names(conn)
 
 
-def levenshtein_distance(s: str, t: str) -> int:
-    """Compute Levenshtein edit distance between two strings."""
-    if len(s) < len(t):
-        return levenshtein_distance(t, s)
-    if not t:
-        return len(s)
-    prev = list(range(len(t) + 1))
-    for i, sc in enumerate(s):
-        curr = [i + 1]
-        for j, tc in enumerate(t):
-            cost = 0 if sc == tc else 1
-            curr.append(min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost))
-        prev = curr
-    return prev[-1]
-
-
-def fuzzy_match_concept(
-    query: str, name_to_id: dict[str, str], max_distance: int = 2,
-) -> str | None:
-    """Three-tier fuzzy match: exact, prefix, Levenshtein (INV-KK-CLAIM-FUZZY-THRESHOLD).
-
-    Returns the concept node ID or None.
-    """
-    q = query.lower()
-    if q in name_to_id:
-        return name_to_id[q]
-    for name, cid in name_to_id.items():
-        if name.startswith(q) or q.startswith(name):
-            return cid
-    best_id = None
-    best_dist = max_distance + 1
-    for name, cid in name_to_id.items():
-        d = levenshtein_distance(q, name)
-        if d <= max_distance and d < best_dist:
-            best_dist = d
-            best_id = cid
-    return best_id
+# The matcher moved to graph.concept_vocabulary on 2026-09-22 so the PAPER
+# extractor could share it instead of growing a second copy — the same move the
+# LLM provider port got, and for the same reason. These re-exports keep every
+# caller and test importing exactly what it imported before.
+from graph.concept_vocabulary import (  # noqa: F401,E402
+    fuzzy_match_concept,
+    levenshtein_distance,
+)
 
 
 def validate_problem(item: Any) -> dict | None:

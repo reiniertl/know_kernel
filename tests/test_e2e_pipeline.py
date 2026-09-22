@@ -35,6 +35,25 @@ from ingest.pipeline import ingest_document
 from ingest.reviewer import review_source
 
 
+#: The concepts this suite's mock proposes. From 2026-09-22 extract_concepts
+#: MATCHES against the vocabulary and never mints
+#: (INV-KK-EXTRACT-CONCEPT-MATCHED), so a pipeline test running against an
+#: empty graph gets nothing at all — not just no Concepts, but no
+#: KernelInvariants or FailureModes either, since those attach to a concept by
+#: name. Seeding is how this suite states the precondition it always assumed.
+E2E_VOCABULARY = ("Virtual Address Translation", "Demand Paging")
+
+
+def seed_vocabulary(conn) -> None:
+    for i, name in enumerate(E2E_VOCABULARY):
+        add_node(conn, f"concept-vocab-{i}", "Concept", {
+            "name": name, "description": f"{name}, a vocabulary entry.",
+            "artifact_class": "abstracted-mechanism",
+            "key_properties": ["seeded"], "tradeoffs": [],
+            "design_rationale": "n/a"})
+    conn.commit()
+
+
 class MockLLMClient:
     def create_message(self, model: str, system: str, user: str, max_tokens: int) -> dict:
         return {
@@ -137,6 +156,7 @@ class TestE2EPipeline:
     def test_full_pipeline_extracts_all_class_b_kinds(self, master_db):
         """INV-KK-E2E-PIPELINE-SOUND: ingest -> review -> extract produces the full Class B set."""
         conn = init_db(master_db)
+        seed_vocabulary(conn)
 
         # Step 1: Ingest
         doc = master_db.parent / "test_doc.txt"
@@ -158,7 +178,8 @@ class TestE2EPipeline:
             conn, ingest_result.evidence_id, gate,
             model="test-model", client=MockLLMClient(),
         )
-        assert extract_result.concepts_created == 2
+        assert extract_result.concepts_created == 0
+        assert extract_result.concepts_reused == 2
         assert all(cid.startswith("concept-") for cid in extract_result.concept_ids)
         _link_kinvs_to_subsystems(conn)
 
@@ -219,6 +240,7 @@ class TestE2EPipeline:
     def test_extraction_idempotent_in_pipeline(self, master_db):
         """Re-extraction from same Evidence skips -- no duplicates."""
         conn = init_db(master_db)
+        seed_vocabulary(conn)
         doc = master_db.parent / "test_doc5.txt"
         doc.write_text("MIT License. Scheduler design patterns.")
 
@@ -228,7 +250,8 @@ class TestE2EPipeline:
 
         client = MockLLMClient()
         r1 = extract_concepts(conn, result.evidence_id, gate, client=client)
-        assert r1.concepts_created == 2
+        assert r1.concepts_created == 0
+        assert r1.concepts_reused == 2
 
         r2 = extract_concepts(conn, result.evidence_id, gate, client=client)
         assert r2.concepts_created == 0
@@ -237,6 +260,7 @@ class TestE2EPipeline:
     def test_advisory_edge_present_after_review(self, master_db):
         """Review creates assessed-by edge from Source to Advisory."""
         conn = init_db(master_db)
+        seed_vocabulary(conn)
         doc = master_db.parent / "test_doc6.txt"
         doc.write_text("BSD License. Memory allocator internals.")
 
@@ -253,6 +277,7 @@ class TestE2EPipeline:
     def test_concept_provenance_in_pipeline(self, master_db):
         """Every extracted Concept has extracted-from edge to Evidence."""
         conn = init_db(master_db)
+        seed_vocabulary(conn)
         doc = master_db.parent / "test_doc7.txt"
         doc.write_text("MIT License. Lock-free data structures.")
 
@@ -271,6 +296,7 @@ class TestE2EPipeline:
     def test_kernel_invariants_in_pipeline(self, master_db):
         """KernelInvariant nodes are created during extraction."""
         conn = init_db(master_db)
+        seed_vocabulary(conn)
         doc = master_db.parent / "test_doc_kinv.txt"
         doc.write_text("MIT License. Concurrency control mechanisms in operating systems.")
 
@@ -301,6 +327,7 @@ class TestE2EPipeline:
     def _setup_full_graph(self, master_db):
         """Run pipeline + seed optimization/kernel nodes. Returns (master_conn, concept_ids, goal_id, kernel_id)."""
         conn = init_db(master_db)
+        seed_vocabulary(conn)
         doc = master_db.parent / "test_all_kinds.txt"
         doc.write_text("MIT License. Virtual memory and demand paging mechanisms.")
         gate = SessionGate()

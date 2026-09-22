@@ -13,6 +13,12 @@ from datetime import date
 from typing import Any, Protocol
 
 from graph.engine import add_edge, add_node
+from graph.concept_vocabulary import (
+    build_vocabulary_context,
+    fuzzy_match_concept,
+    record_candidate,
+    resolve_concept_names,
+)
 from graph.rules import VALID_EVIDENCE_BASES
 from ingest.llm_provider import (
     DEFAULT_PROVIDER,
@@ -258,14 +264,26 @@ the source actually says.\
 """
 
 
-def build_extraction_prompt(evidence_text: str, source_type: str | None = None) -> str:
+def build_extraction_prompt(
+    evidence_text: str, source_type: str | None = None,
+    vocabulary: str = "",
+) -> str:
+    """Build the user prompt, with the curated vocabulary when one is given.
+
+    The vocabulary is the half that was missing on 2026-09-21. A matcher was
+    added that day and matched 0 of 114 candidates, because a model never shown
+    the vocabulary proposes "uSTM" and "BR-WFD Algorithm" — names no matcher
+    can rescue. ALG-KK-CLAIM-EXTRACT has always done this on the discourse
+    path. Defaults to empty so every existing caller and test is unaffected.
+    """
     if source_type == "discourse":
         prefix = "Extract abstract concepts from this discourse source:\n\n"
     else:
         prefix = "Extract abstract concepts from this document:\n\n"
+    head = f"{vocabulary}\n\n" if vocabulary else ""
     if evidence_text:
-        return f"{prefix}{evidence_text}"
-    return "Extract abstract concepts from metadata only -- no source text available."
+        return f"{head}{prefix}{evidence_text}"
+    return head + "Extract abstract concepts from metadata only -- no source text available."
 
 
 def get_system_prompt(source_type: str | None = None) -> str:
@@ -944,6 +962,9 @@ class ExtractionResult:
     #: whenever concepts_created and concepts_reused are both zero.
     concepts_reused: int = 0
     edges_superseded: int = 0
+    #: Names the model proposed that the vocabulary did not contain. They are
+    #: queued in concept_candidates (IFC-KK-CONCEPT-CANDIDATE), not created.
+    concepts_rejected: int = 0
 
 
 def extract_concepts(
@@ -1035,7 +1056,8 @@ def extract_concepts(
             source_type = st_attrs.get("source_type")
 
     system_prompt = get_system_prompt(source_type)
-    user_prompt = build_extraction_prompt(evidence_text, source_type)
+    vocabulary = build_vocabulary_context(conn)
+    user_prompt = build_extraction_prompt(evidence_text, source_type, vocabulary)
 
     if dry_run:
         return ExtractionResult(
@@ -1090,21 +1112,31 @@ def extract_concepts(
 
     concept_ids: list[str] = []
     concepts_reused = 0
+    concepts_rejected = 0
+    vocabulary_ids = resolve_concept_names(conn)
+    today = date.today().isoformat()
     name_to_id: dict[str, str] = {}
     for item in concepts_data[:10]:
         validated = validate_extraction_item(item)
         if validated is None:
             continue
-        reused = find_concept_by_name(conn, validated["name"]) if relink else None
-        if reused is not None:
-            concept_id = attach_existing_concept(
-                conn, reused, validated, evidence_id,
-                evidence_text=evidence_text, model=model)
-            concepts_reused += 1
-        else:
-            concept_id = store_rich_concept(
-                conn, validated, evidence_id,
-                evidence_text=evidence_text, model=model)
+        # INV-KK-EXTRACT-CONCEPT-MATCHED: link to the vocabulary, never mint.
+        # store_rich_concept is NOT reached from here any more. The other six
+        # writers still mint their own nodes, and that stays correct — a
+        # FailureMode or a PerformanceProfile IS paper-specific. A Concept is
+        # a shared class by definition, which is the whole distinction.
+        matched = fuzzy_match_concept(validated["name"], vocabulary_ids)
+        if matched is None:
+            # Not a failure. A name two distinct Sources reach for on their own
+            # is the weight-2 evidence INV-KK-CONCEPT-ADMISSION asks for, and
+            # this records it BEFORE a node exists rather than after 114 do.
+            record_candidate(conn, validated["name"], evidence_id, today)
+            concepts_rejected += 1
+            continue
+        concept_id = attach_existing_concept(
+            conn, matched, validated, evidence_id,
+            evidence_text=evidence_text, model=model)
+        concepts_reused += 1
         concept_ids.append(concept_id)
         name_to_id[validated["name"].lower()] = concept_id
 
@@ -1217,6 +1249,7 @@ def extract_concepts(
         concept_ids=concept_ids,
         subsystem_ids=subsystem_ids,
         concepts_reused=concepts_reused,
+        concepts_rejected=concepts_rejected,
         edges_superseded=edges_superseded,
         relationships_created=rel_result.edges_created,
         invariants_created=invariants_created,

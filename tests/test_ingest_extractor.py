@@ -120,6 +120,42 @@ def conn(tmp_path):
     return init_db(tmp_path / "test.db")
 
 
+def seed_vocabulary(conn, *names: str) -> None:
+    """Put concepts into the graph so the extractor has something to MATCH.
+
+    From 2026-09-22 extract_concepts links to the curated vocabulary and never
+    mints (INV-KK-EXTRACT-CONCEPT-MATCHED), so a test running against an empty
+    graph gets nothing at all — not just no Concepts, but no KernelInvariants
+    or FailureModes either, because those attach to a concept by name. Seeding
+    is how these tests say "this concept is in the vocabulary", which is the
+    precondition they always implicitly assumed.
+    """
+    wanted = set(names) if names else {c["name"] for c in _DEFAULT_CONCEPTS}
+    for i, item in enumerate(_DEFAULT_CONCEPTS):
+        if item["name"] not in wanted:
+            continue
+        # Seeded from the payload the mock will propose, so the matched node is
+        # a REAL vocabulary entry rather than a stub. That matters: extraction
+        # attaches to an existing Concept and does NOT overwrite its
+        # attributes — one paper must not rewrite a shared class — so a test
+        # asserting the concept's key_properties is asserting the vocabulary's
+        # content, not the model's.
+        add_node(conn, f"concept-seed-{i}", "Concept", {
+            "name": item["name"],
+            "description": item["description"],
+            "artifact_class": "abstracted-mechanism",
+            "key_properties": item.get("key_properties", []),
+            "tradeoffs": item.get("tradeoffs", []),
+            "design_rationale": item.get("design_rationale", "n/a"),
+        })
+    for name in wanted - {c["name"] for c in _DEFAULT_CONCEPTS}:
+        add_node(conn, f"concept-seed-x{abs(hash(name)) % 10**8}", "Concept", {
+            "name": name, "description": "seeded vocabulary entry",
+            "artifact_class": "abstracted-mechanism", "key_properties": [],
+            "tradeoffs": [], "design_rationale": "n/a"})
+    conn.commit()
+
+
 @pytest.fixture
 def evidence_node(conn):
     add_node(conn, "src-ext1", "Source", {
@@ -133,6 +169,7 @@ def evidence_node(conn):
         "text": "This paper describes page table walking and copy-on-write mechanisms in modern kernels.",
     })
     add_edge(conn, "sourced-from", "ev-ext1", "src-ext1")
+    seed_vocabulary(conn)
     return "ev-ext1"
 
 
@@ -142,7 +179,11 @@ class TestExtractConcepts:
         client = MockLLMClient()
         result = extract_concepts(conn, evidence_node, gate, client=client)
         assert isinstance(result, ExtractionResult)
-        assert result.concepts_created == 2
+        # concepts_created is 0 BY DESIGN from 2026-09-22: extraction links
+        # to the vocabulary and never mints (INV-KK-EXTRACT-CONCEPT-MATCHED).
+        # concepts_reused is where the work now shows up.
+        assert result.concepts_created == 0
+        assert result.concepts_reused == 2
         assert len(result.concept_ids) == 2
         for cid in result.concept_ids:
             row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
@@ -164,7 +205,11 @@ class TestExtractConcepts:
         gate = SessionGate()
         client = MockLLMClient()
         result1 = extract_concepts(conn, evidence_node, gate, client=client)
-        assert result1.concepts_created == 2
+        # concepts_created is 0 BY DESIGN from 2026-09-22: extraction links
+        # to the vocabulary and never mints (INV-KK-EXTRACT-CONCEPT-MATCHED).
+        # concepts_reused is where the work now shows up.
+        assert result1.concepts_created == 0
+        assert result1.concepts_reused == 2
         result2 = extract_concepts(conn, evidence_node, gate, client=client)
         assert result2.concepts_created == 0
         assert result2.concepts_skipped >= 2
@@ -220,7 +265,11 @@ class TestExtractConcepts:
         gate = SessionGate()
         client = MockLLMClient()
         result = extract_concepts(conn, evidence_node, gate, client=client)
-        assert result.concepts_created == 2
+        # concepts_created is 0 BY DESIGN from 2026-09-22: extraction links
+        # to the vocabulary and never mints (INV-KK-EXTRACT-CONCEPT-MATCHED).
+        # concepts_reused is where the work now shows up.
+        assert result.concepts_created == 0
+        assert result.concepts_reused == 2
         for cid in result.concept_ids:
             row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
             attrs = json.loads(row[0])
@@ -1454,7 +1503,11 @@ class TestEvidenceRecordedOnEdges:
         from graph.rules import EVIDENCE_ATTR_KEYS
 
         result = extract_concepts(conn, evidence_node, SessionGate(), client=MockLLMClient())
-        assert result.concepts_created == 2
+        # concepts_created is 0 BY DESIGN from 2026-09-22: extraction links
+        # to the vocabulary and never mints (INV-KK-EXTRACT-CONCEPT-MATCHED).
+        # concepts_reused is where the work now shows up.
+        assert result.concepts_created == 0
+        assert result.concepts_reused == 2
 
         rows = conn.execute(
             "SELECT source_id, attrs FROM edges WHERE kind = 'extracted-from'"

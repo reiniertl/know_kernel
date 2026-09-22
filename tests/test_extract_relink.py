@@ -271,17 +271,19 @@ def test_the_default_mode_still_stops_on_any_existing_edge(conn):
 def test_relink_walks_past_a_legacy_edge_and_writes_a_verdict(conn):
     eid = _paper(conn, "p")
     old = _concept(conn, "concept-old", "Something Else")
+    _concept(conn, "concept-cow", "Copy-on-Write")   # the vocabulary entry
     _legacy_link(conn, old, eid)
     client = MockLLMClient()
     result = extract_concepts(conn, eid, SessionGate(), client=client, relink=True)
     conn.commit()
 
     assert len(client.calls) == 1
-    assert result.concepts_created == 1
+    # INV-KK-EXTRACT-CONCEPT-MATCHED: linked, not minted.
+    assert result.concepts_created == 0
+    assert result.concepts_reused == 1
     assert result.edges_superseded == 1
     assert _edge_attrs(conn, old, eid)["superseded"] is True
-    new_id = result.concept_ids[0]
-    assert edge_carries_a_current_verdict(_edge_attrs(conn, new_id, eid))
+    assert edge_carries_a_current_verdict(_edge_attrs(conn, "concept-cow", eid))
 
 
 def test_relink_reuses_a_concept_that_already_exists_by_name(conn):
@@ -304,14 +306,31 @@ def test_relink_reuses_a_concept_that_already_exists_by_name(conn):
     assert result.concept_ids == [existing]
 
 
-def test_relink_still_mints_when_no_concept_of_that_name_exists(conn):
+def test_relink_queues_a_candidate_when_no_concept_of_that_name_exists(conn):
+    """This test asserted the opposite until 2026-09-22 — that an unmatched
+    name is MINTED. INV-KK-EXTRACT-CONCEPT-MATCHED forbids it: 114 Concepts of
+    weight 1 arrived that way over two batches. It is recorded as a candidate
+    for a person to admit, and nothing is created."""
+    from graph.concept_vocabulary import candidate_ranking
+
     eid = _paper(conn, "p")
     _legacy_link(conn, _concept(conn, "concept-old", "Something Else"), eid)
+    before = conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind='Concept'").fetchone()[0]
+
     result = extract_concepts(conn, eid, SessionGate(),
                               client=MockLLMClient(), relink=True)
     conn.commit()
-    assert result.concepts_created == 1
+
+    assert result.concepts_created == 0
     assert result.concepts_reused == 0
+    assert result.concepts_rejected == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind='Concept'").fetchone()[0] == before
+    # And nothing was superseded, because nothing replaced it.
+    assert result.edges_superseded == 0
+    queued = {c.name for c in candidate_ranking(conn)}
+    assert "Copy-on-Write" in queued
 
 
 def test_running_relink_twice_does_the_work_once(conn):
@@ -319,11 +338,12 @@ def test_running_relink_twice_does_the_work_once(conn):
     interrupted USD-scale batch safe."""
     eid = _paper(conn, "p")
     _legacy_link(conn, _concept(conn, "concept-old", "Something Else"), eid)
+    _concept(conn, "concept-cow", "Copy-on-Write")   # the vocabulary entry
 
     first_client = MockLLMClient()
     first = extract_concepts(conn, eid, SessionGate(), client=first_client, relink=True)
     conn.commit()
-    assert first.concepts_created == 1 and len(first_client.calls) == 1
+    assert first.concepts_reused == 1 and len(first_client.calls) == 1
 
     second_client = MockLLMClient()
     second = extract_concepts(conn, eid, SessionGate(), client=second_client, relink=True)
