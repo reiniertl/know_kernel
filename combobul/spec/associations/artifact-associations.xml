@@ -4385,4 +4385,26 @@
     <link to="ALG-KK-CLAIM-EXTRACT" relation="part-of"/>
   </associate>
 
+  <associate source="src/web/routes.py" kind="function" name="route_for_node" scope="">
+    <link to="INV-KK-WEB-SEARCH-RESULT-ROUTED" relation="enforces"/>
+    <link to="ALG-KK-WEB-SEARCH"               relation="part-of"/>
+  </associate>
+
+  <associate source="src/web/routes.py" kind="function" name="concept_detail" scope="">
+    <link to="ALG-KK-WEB-NODE-DETAIL" relation="part-of"/>
+  </associate>
+
+  <associate source="src/web/templates/concept_detail.html" kind="source-file" name="concept_detail.html" scope="">
+    <link to="ALG-KK-WEB-NODE-DETAIL" relation="part-of"/>
+  </associate>
+
+  <associate source="src/web/templates/search_results.html" kind="source-file" name="search_results.html" scope="">
+    <link to="INV-KK-WEB-SEARCH-RESULT-ROUTED" relation="part-of"/>
+  </associate>
+
+  <associate source="tests/test_web_navigation.py" kind="source-file" name="test_web_navigation.py" scope="">
+    <link to="INV-KK-WEB-SEARCH-RESULT-ROUTED" relation="part-of"/>
+    <link to="ALG-KK-WEB-NODE-DETAIL"          relation="part-of"/>
+  </associate>
+
 </artifact-associations>

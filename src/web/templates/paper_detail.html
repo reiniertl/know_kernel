@@ -15,9 +15,24 @@
 <p style="color:#888;">
   {{ s_attrs.published_date or "" }}
   {% if s_attrs.url %}
-  &middot; <a href="{{ s_attrs.url }}" target="_blank">source paper &rarr;</a>
+  &middot; <a href="{{ s_attrs.url }}" target="_blank" rel="noopener">source paper &rarr;</a>
   {% endif %}
 </p>
+
+{# --- SOURCE DETAILS ---------------------------------------------------- #}
+{# /concepts/{id} used to render these three for a Source and now redirects
+   here (ALG-KK-WEB-NODE-DETAIL), so this page has to carry them or the
+   redirect would quietly lose what that view guaranteed. rel="noopener" is
+   on every outbound link here: without it the opened tab can reach back
+   through window.opener. #}
+<div class="attrs-section">
+  {% if s_attrs.url %}
+  <h3>Documentation URL</h3>
+  <p><a href="{{ s_attrs.url }}" target="_blank" rel="noopener">{{ s_attrs.url }}</a></p>
+  {% endif %}
+  {% if s_attrs.source_type %}<p><strong>Source Type:</strong> {{ s_attrs.source_type }}</p>{% endif %}
+  {% if s_attrs.license %}<p><strong>License:</strong> {{ s_attrs.license }}</p>{% endif %}
+</div>
 
 {# --- ABSTRACT (ALG-KK-WEB-ABSTRACT-EDIT, IFC-KK-SOURCE-ABSTRACT) --- #}
 {% if s_attrs.abstract %}

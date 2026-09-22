@@ -20,7 +20,7 @@ import json
 import os
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from graph.diagnostics import diagnose_graph
@@ -142,6 +142,30 @@ def display_name_for_node(kind: str, attrs: dict, node_id: str) -> str:
     return node_id
 
 
+#: Which page renders which kind (INV-KK-WEB-SEARCH-RESULT-ROUTED). Only
+#: Source has a page of its own; every other kind is rendered by the per-kind
+#: node view at /concepts/{id} (ALG-KK-WEB-NODE-DETAIL).
+_ROUTE_FOR_KIND = {
+    "Source": "/paper/",
+}
+_DEFAULT_ROUTE = "/concepts/"
+
+
+def route_for_node(kind: str, node_id: str) -> str:
+    """The page that renders this node (INV-KK-WEB-SEARCH-RESULT-ROUTED).
+
+    TOTAL, like display_name_for_node beside it: a kind absent from the table
+    gets the node view rather than a broken link or none. That totality is the
+    point — the search box has to return something clickable for every kind
+    the graph holds, and a KeyError here would be a blank result row.
+
+    Resolution lives on the server so no template can reintroduce the defect
+    this replaced: search_results.html hardcoded /concepts/{id} for every row,
+    so a paper linked to a page of raw edges instead of to /paper/{id}.
+    """
+    return _ROUTE_FOR_KIND.get(kind, _DEFAULT_ROUTE) + node_id
+
+
 def _batch_review_status(conn, source_ids: list[str]) -> dict[str, dict]:
     """Batch-query review status for multiple sources (ALG-KK-WEB-FEED-REVIEW-BADGE).
 
@@ -201,6 +225,15 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         if row is None:
             raise HTTPException(status_code=404, detail="Node not found")
         node = _rows_to_dicts([row])[0]
+        if node["kind"] == "Source":
+            # ALG-KK-WEB-NODE-DETAIL: a paper has a page of its own. Redirecting
+            # HERE rather than fixing each caller fixes every entry point at
+            # once — health.html, impact.html, feed.html, radar.html,
+            # link_review.html and this view's own neighbour links all send ids
+            # to this route, and a Source arriving at a raw edge dump was the
+            # whole complaint. Existing links keep working and start going
+            # somewhere useful.
+            return RedirectResponse(route_for_node("Source", node["id"]), status_code=302)
         node["display_name"] = display_name_for_node(
             node["kind"], node.get("attrs") or {}, node["id"]
         )
@@ -434,19 +467,40 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         if kind:
             sql += " AND kind = ?"
             params.append(kind)
-        sql += " ORDER BY kind, id LIMIT 30"
+        # Kind PRIORITY, not kind name. "ORDER BY kind" is alphabetical and
+        # Source is 21st of 26, while Evidence — 3,566 nodes carrying the full
+        # paper text, which the attrs LIKE above matches against — is 5th. A
+        # topical query therefore filled all 30 rows with Evidence bodies and
+        # never reached the paper the reader was looking for.
+        #
+        # INV-KK-WEB-SEARCH-FULL-ACCESS is NOT weakened by this: no kind is
+        # excluded, no WHERE clause is added, and the 30-row cap remains the
+        # only thing that removes a match. Ordering decides which matches fall
+        # off the far side of that cap, which is what ordering does.
+        # INV-KK-WEB-QUERY-BOUNDED is satisfied because the ordering is in SQL
+        # — no row is fetched or enriched beyond the cap.
+        sql += (
+            " ORDER BY CASE kind"
+            "   WHEN 'Source' THEN 0"
+            "   WHEN 'Concept' THEN 1"
+            "   WHEN 'Evidence' THEN 8"
+            "   ELSE 4 END,"
+            " kind, id LIMIT 30"
+        )
         rows = conn.execute(sql, params).fetchall()
         results = _rows_to_dicts(rows)
         for r in results:
             r["display_name"] = display_name_for_node(
                 r["kind"], r.get("attrs") or {}, r["id"]
             )
+            r["url"] = route_for_node(r["kind"], r["id"])
         if request.headers.get("HX-Request"):
             return templates.TemplateResponse(
                 request, "search_results.html", {"results": results}
             )
         return JSONResponse(
-            [{"id": r["id"], "kind": r["kind"], "attrs": r["attrs"], "display_name": r["display_name"]} for r in results]
+            [{"id": r["id"], "kind": r["kind"], "attrs": r["attrs"],
+              "display_name": r["display_name"], "url": r["url"]} for r in results]
         )
 
     @app.get("/api/diagnostics")
