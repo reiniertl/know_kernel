@@ -290,24 +290,143 @@ def test_the_link_mechanisms_parked_in_tmp_are_ignored():
 
 SPEC_ID = re.compile(r"\b(?:ALG|INV|IFC|ANN)-KK-[A-Z0-9-]+")
 
-#: Cited in src/ and absent from the graph as of 2026-09-22. Frozen rather than
-#: asserted-empty because they predate this sweep and live in modules nobody
-#: has read for this purpose; authoring an algorithm node for a module from its
-#: docstring alone is how the wrong node gets written. Authoring any of them
-#: SHOULD fail this test — shrink the set, that is the direction of travel.
+#: Cited in src/ and absent from the graph. 92 of 221, measured 2026-09-22 —
+#: FORTY-TWO PERCENT. Thirteen modules cite a governing node that was never
+#: written: scoring.py, inference.py, briefing.py, feed.py, vuln_tracker.py,
+#: repo_tracker.py, validate_sources.py, scanner.py, classifier.py, gate.py,
+#: cli_feed.py, reviewer.py and claim_extractor.py.
+#:
+#: THE FIRST VERSION OF THIS SWEEP REPORTED FIVE, AND FIVE WAS NOT A
+#: MEASUREMENT. It batched fifty ids into one `node-info` call, and that
+#: command ABORTS THE WHOLE BLOCK on the first id it cannot find — so the sweep
+#: saw exactly one missing id per batch and 220/50 rounds to five batches. The
+#: number was the batch count. It is one command per id now.
+#:
+#: Frozen rather than asserted-empty because authoring ninety-two nodes from
+#: their own docstrings is how ninety-two wrong nodes get written; each needs
+#: its module read. Authoring any of them SHOULD fail this test — the set
+#: shrinks deliberately, which is the direction of travel.
 KNOWN_UNRESOLVED_SPEC_IDS = frozenset({
-    "ALG-KK-CLASSIFY-ASSIGN",                    # src/ingest/classifier.py
-    "ALG-KK-SCORE-FRONTIER",                     # src/graph/scoring.py
-    "INV-KK-ADVISORY-REQUIRES-ASSESSMENT",       # src/ingest/reviewer.py
-    "INV-KK-GRAPH-RESEARCH-SCORE-NON-NEGATIVE",  # src/graph/scoring.py
-    "INV-KK-VALIDATE-RATE-LIMITED",              # src/ingest/validate_sources.py
+    # src/graph/briefing.py
+    "ALG-KK-GRAPH-BUILD-ARGUMENT",
+    "ALG-KK-GRAPH-CLASSIFY-MOTIVATIONS",
+    "ALG-KK-GRAPH-CONCEPT-BRIEF",
+    "INV-KK-GRAPH-BRIEF-ALL-CATEGORIES",
+    "INV-KK-GRAPH-BRIEF-EMPTY-SAFE",
+    "INV-KK-GRAPH-BRIEF-VERBATIM",
+    # src/graph/inference.py
+    "ALG-KK-IDEA-FEED",
+    "ALG-KK-INFER-OPPORTUNITY",
+    "ALG-KK-INFER-TREND",
+    "INV-KK-IDEA-FEED-RANKED",
+    "INV-KK-OPP-CLASS-B",
+    "INV-KK-OPP-CONFIDENCE",
+    "INV-KK-OPP-FRONTIER-GATE",
+    "INV-KK-OPP-SUPPORTED",
+    "INV-KK-TREND-CLASS-B",
+    "INV-KK-TREND-INDEPENDENT",
+    "INV-KK-TREND-INFERRED",
+    "INV-KK-TREND-MIN-EVIDENCE",
+    "INV-KK-TREND-WINDOW",
+    # src/graph/scoring.py
+    "ALG-KK-GRAPH-FEASIBILITY-SCORE",
+    "ALG-KK-GRAPH-IMPACT-PROJECTION",
+    "ALG-KK-GRAPH-RESEARCH-SCORE",
+    "ALG-KK-SCORE-FRONTIER",
+    "ALG-KK-SCORE-HEAT",
+    "ALG-KK-SCORE-IMPACT",
+    "ALG-KK-SCORE-LEVERAGE",
+    "ALG-KK-SCORE-PAIN",
+    "ALG-KK-SCORE-REFRESH",
+    "ALG-KK-VULN-PROPAGATE",
+    "INV-KK-GRAPH-FEASIBILITY-BOUNDED",
+    "INV-KK-GRAPH-FEASIBILITY-FORMULA",
+    "INV-KK-GRAPH-FEASIBILITY-PURE",
+    "INV-KK-GRAPH-IMPACT-PROJECTION-COMPLETE",
+    "INV-KK-GRAPH-IMPACT-PROJECTION-FORMULA",
+    "INV-KK-GRAPH-RESEARCH-SCORE-FORMULA",
+    "INV-KK-GRAPH-RESEARCH-SCORE-NO-SECURITY-ONLY",
+    "INV-KK-GRAPH-RESEARCH-SCORE-NON-NEGATIVE",
+    "INV-KK-GRAPH-RESEARCH-SCORE-PURE",
+    "INV-KK-SCORE-CACHE-ATTR",
+    "INV-KK-SCORE-CVSS-BRACKETS",
+    "INV-KK-SCORE-FRONTIER-FORMULA",
+    "INV-KK-SCORE-HEAT-EDGES",
+    "INV-KK-SCORE-HEAT-WINDOW",
+    "INV-KK-SCORE-LEVERAGE-WEIGHTS",
+    "INV-KK-SCORE-NON-NEGATIVE",
+    "INV-KK-SCORE-PAIN-WEIGHTS",
+    "INV-KK-SCORE-REFRESH-ALL",
+    "INV-KK-SCORE-SOLVED-RATIO",
+    "INV-KK-VULN-PROP-COMPOSE",
+    "INV-KK-VULN-PROP-DIRECT",
+    "INV-KK-VULN-PROP-INVARIANT",
+    "INV-KK-VULN-PROP-NO-SELF",
+    "INV-KK-VULN-PROP-PREREQ",
+    # src/ingest/claim_extractor.py
+    "INV-KK-CLAIM-CONCEPT-CONTEXT",
+    "INV-KK-CLAIM-EDGE-VALID",
+    "INV-KK-CLAIM-FUZZY-THRESHOLD",
+    "INV-KK-CLAIM-SOURCE-DATE",
+    # src/ingest/classifier.py
+    "ALG-KK-CLASSIFY-ASSIGN",
+    "ALG-KK-CLASSIFY-PARSE-LLM",
+    "ALG-KK-CLASSIFY-RESOLVE-SUBSYSTEM",
+    # src/ingest/cli_feed.py
+    "ALG-KK-FEED-CLI",
+    "INV-KK-FEED-CLI-SOURCE-VALID",
+    "INV-KK-FEED-CLI-STATE-REPORT",
+    # src/ingest/feed.py
+    "ALG-KK-FEED-HN",
+    "ALG-KK-FEED-RSS",
+    "INV-KK-FEED-DEDUP",
+    "INV-KK-FEED-HN-EPOCH",
+    "INV-KK-FEED-RSS-CONTENT",
+    "INV-KK-FEED-RSS-DATE",
+    "INV-KK-FEED-SOURCE-DATE",
+    "INV-KK-FEED-STATE",
+    # src/ingest/gate.py
+    "INV-KK-SESSION-SEPARATION",
+    # src/ingest/repo_tracker.py
+    "ALG-KK-REPO-TRACK",
+    "INV-KK-REPO-FIX-TYPE",
+    "INV-KK-REPO-FIXES-TAG",
+    "INV-KK-REPO-SUBSYSTEM-MAP",
+    # src/ingest/reviewer.py
+    "ALG-KK-REVIEW-SOURCE",
+    "INV-KK-ADVISORY-REQUIRES-ASSESSMENT",
+    "INV-KK-ADVISORY-SINGLE-PER-SOURCE",
+    # src/ingest/scanner.py
+    "INV-KK-ALL-EVIDENCE-CLASS-A",
+    "INV-KK-SCAN-DISCOURSE",
+    "INV-KK-UNKNOWN-LICENSE-L4",
+    # src/ingest/validate_sources.py
+    "ALG-KK-CLASSIFY-SOURCE-CONTENT",
+    "ALG-KK-EXTRACT-KERNEL-DOC-REFS",
+    "ALG-KK-RESOLVE-DIRECTORY-SOURCE",
+    "ALG-KK-VALIDATE-SOURCE-CONTENT",
+    "INV-KK-SOURCE-CONTENT-SUFFICIENT",
+    "INV-KK-VALIDATE-RATE-LIMITED",
+    # src/ingest/vuln_tracker.py
+    "ALG-KK-VULN-TRACK",
+    "INV-KK-VULN-CVE-DEDUP",
+    "INV-KK-VULN-CVSS-SEVERITY",
+    "INV-KK-VULN-CWE-MAP",
 })
+
+
+#: An id broken across a comment wrap — a line ending in a hyphen, continued on
+#: the next line after an optional `#` or `#:` marker. src/graph/rules.py wraps
+#: ANN-KK-UNLINKED-PROVENANCE-CENSUS exactly this way, and without rejoining it
+#: the scan reports the fragment as a missing node.
+WRAPPED_ID = re.compile(r"([A-Z0-9]-)[ \t]*\n[ \t]*(?:#+:?)?[ \t]*([A-Z][A-Z0-9-]*)")
 
 
 def _cited_spec_ids() -> dict[str, set[str]]:
     cited: dict[str, set[str]] = {}
     for path in sorted((REPO / "src").rglob("*.py")):
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = WRAPPED_ID.sub(
+            r"\1\2", path.read_text(encoding="utf-8", errors="replace"))
         for node_id in SPEC_ID.findall(text):
             cited.setdefault(node_id.rstrip("-"), set()).add(
                 path.relative_to(REPO).as_posix())
@@ -323,8 +442,14 @@ def _unresolved(ids: list[str]) -> set[str]:
     readings in BOTH directions, so this matches the id out of whichever
     phrasing comes back rather than the phrasing itself.
     """
-    commands = [{"cmd": "node-info", "args": ids[i:i + 50]}
-                for i in range(0, len(ids), 50)]
+    # ONE COMMAND PER ID, not one command with many args. `node-info` with
+    # several args ABORTS THE WHOLE BLOCK on the first id it cannot find and
+    # returns a single error, so batching by 50 reported exactly one missing id
+    # per batch — the first version of this sweep reported "five", which was
+    # the batch count and not a measurement. One command each costs nothing
+    # extra: query-multi still runs them in a single subprocess, which is the
+    # expense worth avoiding.
+    commands = [{"cmd": "node-info", "args": [i]} for i in ids]
     proc = subprocess.run(
         ["node", "combobul/cli/ril.mjs", "query-multi",
          json.dumps(commands), "--json"],
