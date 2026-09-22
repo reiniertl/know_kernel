@@ -246,3 +246,233 @@ def test_the_detail_preview_is_bounded_and_offers_the_full_route(tmp_path):
         assert text.count("Big paper") <= 5, "detail page rendered an unbounded list"
         assert "See all 12 papers" in text
         assert c.get("/concepts/concept-big/papers").text.count("Big paper") == 12
+
+
+# --- admission: the mutating half ------------------------------------------
+#
+# ALG-KK-WEB-CONCEPT-ADMIT and INV-KK-WEB-ADMIT-HONOURS-ADMISSION.
+#
+# The load-bearing pair is the two weight-1 tests: a promotion WITHOUT a
+# seminal marker must be refused and one WITH a marker allowed. A suite that
+# asserted only the happy path would pass against a browser that ignored the
+# admission rule entirely, which is the whole thing this route could get wrong.
+
+import json as _json
+
+from graph.concept_vocabulary import (
+    candidate_sources,
+    dismiss_candidate,
+    promote_candidate,
+)
+
+
+def _queue(conn, name, evidence_ids):
+    from graph.concept_vocabulary import record_candidate
+    for eid in evidence_ids:
+        record_candidate(conn, name, eid, "2026-09-22")
+
+
+@pytest.fixture
+def queued(tmp_path):
+    """Two queued candidates: one at weight 1, one at weight 2.
+
+    Weight 1 is not the edge case here — all 43 candidates queued on
+    2026-09-22 sit at exactly one Source, so the refusal path is the normal one.
+    """
+    path = tmp_path / "queue.db"
+    conn = init_db(path)
+    add_node(conn, "sub-1", "Subsystem", {"name": "Memory"})
+    e1 = _paper(conn, "q1", "The paper that invented it")
+    e2 = _paper(conn, "q2", "A second, independent paper")
+    e3 = _paper(conn, "q3", "One lonely paper")
+    _queue(conn, "Tiered Memory", [e1, e2])   # two distinct Sources
+    _queue(conn, "uSTM", [e3])                 # one
+    conn.commit()
+    conn.close()
+    return str(path)
+
+
+@pytest.fixture
+def admin_client(queued):
+    app = create_app(queued)
+
+    @app.middleware("http")
+    async def _as_curator(request, call_next):
+        request.state.user = {"username": "root", "role": "admin",
+                              "reviewer": "reviewer-root"}
+        return await call_next(request)
+
+    with TestClient(app) as c:
+        yield c
+
+
+def _full_attrs(name):
+    return {
+        "name": name,
+        "description": f"{name} is a mechanism described abstractly.",
+        "artifact_class": "abstracted-mechanism",
+        "key_properties": ["a property"],
+        "tradeoffs": ["a tradeoff"],
+        "design_rationale": "Why it is shaped this way.",
+    }
+
+
+def test_the_queue_page_lists_candidates_with_their_weight(admin_client):
+    text = admin_client.get("/concepts/candidates").text
+    assert "Tiered Memory" in text and "uSTM" in text
+    assert "below threshold" in text, "the weight-1 candidate is not flagged"
+
+
+def test_a_candidate_above_the_threshold_is_admitted_without_a_marker(admin_client):
+    r = admin_client.post("/api/concept-admit/tiered memory",
+                          json=_full_attrs("Tiered Memory"))
+    assert r.status_code == 200, r.text
+    cid = r.json()["concept_id"]
+
+    conn = admin_client.app.state.conn
+    row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
+    attrs = _json.loads(row[0])
+    for k in ("name", "description", "artifact_class", "key_properties",
+              "tradeoffs", "design_rationale"):
+        assert attrs.get(k), f"promoted Concept is missing {k}"
+    assert attrs["admitted_by"] == "reviewer-root"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM concept_candidates WHERE normalised = 'tiered memory'"
+    ).fetchone()[0] == 0, "the queue still offers an admitted candidate"
+
+
+def test_a_weight_one_candidate_is_REFUSED_without_a_seminal_marker(admin_client):
+    """The half of the pair that a happy-path-only suite would miss."""
+    conn = admin_client.app.state.conn
+    before = conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind = 'Concept'").fetchone()[0]
+
+    r = admin_client.post("/api/concept-admit/ustm", json=_full_attrs("uSTM"))
+
+    assert r.status_code == 422, r.text
+    assert "seminal" in r.json()["error"].lower() or "defined" in r.json()["error"].lower()
+    assert conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind = 'Concept'").fetchone()[0] == before, \
+        "a refused promotion still wrote a Concept"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM concept_candidates WHERE normalised = 'ustm'"
+    ).fetchone()[0] > 0, "a refused promotion consumed the queue row"
+
+
+def test_a_weight_one_candidate_IS_admitted_with_a_seminal_marker(admin_client):
+    """The other half. IFC-KK-CONCEPT-SEMINAL-MARKER's first use in this corpus."""
+    body = {**_full_attrs("uSTM"), "seminal_source_id": "src-q3"}
+    r = admin_client.post("/api/concept-admit/ustm", json=body)
+    assert r.status_code == 200, r.text
+    cid = r.json()["concept_id"]
+
+    conn = admin_client.app.state.conn
+    marker = conn.execute(
+        "SELECT target_id FROM edges WHERE kind = 'defined-by' AND source_id = ?",
+        (cid,)).fetchall()
+    assert [m[0] for m in marker] == ["src-q3"], "the marker was not written"
+
+    # And the concept now reads as admissible by the seminal route, not by weight.
+    from graph.rules import admission_state, concept_weight, seminal_concepts
+    assert concept_weight(conn, cid) == 0, "no extracted-from edges were invented"
+    assert admission_state(conn, cid, seminal_concepts(conn)) == "seminal"
+
+
+def test_the_marker_must_name_a_source_and_is_never_guessed(admin_client):
+    """At weight 1 there is exactly one proposing Source, so defaulting would
+    look helpful — and would promote every candidate automatically."""
+    body = {**_full_attrs("uSTM"), "seminal_source_id": "sub-1"}
+    r = admin_client.post("/api/concept-admit/ustm", json=body)
+    assert r.status_code == 422
+    assert "Source" in r.json()["error"]
+
+
+def test_a_promotion_missing_any_required_attribute_is_refused(admin_client):
+    for drop in ("description", "artifact_class", "key_properties",
+                 "tradeoffs", "design_rationale"):
+        body = _full_attrs("Tiered Memory")
+        body[drop] = "" if isinstance(body[drop], str) else []
+        r = admin_client.post("/api/concept-admit/tiered memory", json=body)
+        assert r.status_code == 422, f"blank {drop} was accepted"
+        assert drop in r.json()["error"]
+
+
+def test_an_anonymous_caller_cannot_admit(queued):
+    """INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION: no session, no admission. The
+    gate never lets an anonymous request this far, so this is the defence
+    behind the defence."""
+    with TestClient(create_app(queued)) as c:
+        r = c.post("/api/concept-admit/tiered memory", json=_full_attrs("Tiered Memory"))
+        assert r.status_code == 401
+        assert c.app.state.conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE kind = 'Concept'").fetchone()[0] == 0
+
+
+def test_the_body_cannot_name_the_admitting_curator(admin_client):
+    """Attribution comes from the session and an admitted_by field is ignored."""
+    body = {**_full_attrs("Tiered Memory"), "admitted_by": "someone-else"}
+    r = admin_client.post("/api/concept-admit/tiered memory", json=body)
+    assert r.status_code == 200
+    attrs = _json.loads(admin_client.app.state.conn.execute(
+        "SELECT attrs FROM nodes WHERE id = ?", (r.json()["concept_id"],)
+    ).fetchone()[0])
+    assert attrs["admitted_by"] == "reviewer-root"
+
+
+def test_admitting_an_unqueued_name_is_404(admin_client):
+    r = admin_client.post("/api/concept-admit/never-proposed",
+                          json=_full_attrs("Never Proposed"))
+    assert r.status_code == 404
+
+
+def test_a_name_that_does_not_match_its_queue_row_is_refused(admin_client):
+    """The form pre-fills the name and a curator may edit it; editing it into a
+    different concept would admit something nobody proposed."""
+    r = admin_client.post("/api/concept-admit/ustm",
+                          json={**_full_attrs("Something Else Entirely"),
+                                "seminal_source_id": "src-q3"})
+    assert r.status_code == 422
+    assert "normalise" in r.json()["error"]
+
+
+def test_dismissing_a_candidate_removes_it_and_writes_no_node(admin_client):
+    conn = admin_client.app.state.conn
+    before = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+    r = admin_client.post("/api/concept-dismiss/ustm")
+    assert r.status_code == 200
+    assert conn.execute(
+        "SELECT COUNT(*) FROM concept_candidates WHERE normalised = 'ustm'"
+    ).fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == before
+
+
+def test_promotion_is_one_transaction(queued):
+    """A refused promotion leaves nothing behind — not a node, not an edge, not
+    a consumed queue row. A half-applied admission would leave a Concept the
+    queue still offers."""
+    import sqlite3
+    conn = sqlite3.connect(queued)
+    before = (conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
+              conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0],
+              conn.execute("SELECT COUNT(*) FROM concept_candidates").fetchone()[0])
+    with pytest.raises(ValueError):
+        promote_candidate(conn, "ustm", _full_attrs("uSTM"), "reviewer-root")
+    after = (conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
+             conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0],
+             conn.execute("SELECT COUNT(*) FROM concept_candidates").fetchone()[0])
+    assert after == before
+    conn.close()
+
+
+def test_candidate_sources_counts_distinct_papers_not_evidence(queued):
+    import sqlite3
+    conn = sqlite3.connect(queued)
+    assert candidate_sources(conn, "tiered memory") == 2
+    assert candidate_sources(conn, "ustm") == 1
+    conn.close()
+
+
+def test_the_new_prefixes_are_on_the_mutation_allowlist():
+    from web.routes import WEB_MUTATION_ALLOWLIST
+    assert "/api/concept-admit/" in WEB_MUTATION_ALLOWLIST
+    assert "/api/concept-dismiss/" in WEB_MUTATION_ALLOWLIST

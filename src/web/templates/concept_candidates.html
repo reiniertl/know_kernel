@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Candidate concepts</h1>
+<p class="muted">
+  Names the extractor proposed that the vocabulary did not contain. Nothing here
+  is in the graph, and nothing is promoted automatically — admission is a human
+  act. Ordered by how many <strong>distinct papers</strong> reached for the name
+  independently, which is the same test the admission rule applies to a concept
+  that already exists.
+</p>
+<p class="muted">
+  A candidate proposed by fewer than {{ threshold }} papers can still be
+  admitted, but only by naming the paper that <em>defined</em> the concept. That
+  marker is set by you and is never inferred: at one paper there is exactly one
+  candidate for it, so guessing would admit everything and the threshold would
+  mean nothing.
+</p>
+
+{% for c in candidates %}
+<div class="card" style="margin-bottom:1rem;">
+  <h3>{{ c.name }}</h3>
+  <p>
+    <span class="badge">{{ c.sources }} paper{{ '' if c.sources == 1 else 's' }}</span>
+    {% if c.needs_marker %}
+    <span class="badge badge-thin">below threshold — needs a seminal marker</span>
+    {% else %}
+    <span class="badge badge-admissible">clears the threshold on evidence</span>
+    {% endif %}
+  </p>
+
+  {% if c.papers %}
+  <p class="muted small">Proposed by:</p>
+  <ul>
+    {% for p in c.papers %}
+    <li><a href="{{ p.route }}">{{ p.title }}</a> <code>{{ p.id }}</code></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <form class="admit-form" data-normalised="{{ c.normalised }}">
+    <label>Name <input name="name" value="{{ c.name }}" required></label>
+    <label>Description <textarea name="description" required rows="2"></textarea></label>
+    <label>Artifact class
+      <input name="artifact_class" value="abstracted-mechanism" required>
+    </label>
+    <label>Key properties <span class="muted small">(one per line)</span>
+      <textarea name="key_properties" rows="2" required></textarea>
+    </label>
+    <label>Tradeoffs <span class="muted small">(one per line)</span>
+      <textarea name="tradeoffs" rows="2" required></textarea>
+    </label>
+    <label>Design rationale <textarea name="design_rationale" rows="2" required></textarea></label>
+    <label>Subsystem
+      <select name="subsystem_id">
+        <option value="">— none —</option>
+        {% for s in subsystems %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Seminal paper {% if c.needs_marker %}<strong>(required at this weight)</strong>{% endif %}
+      <select name="seminal_source_id" {% if c.needs_marker %}required{% endif %}>
+        <option value="">— none —</option>
+        {% for p in c.papers %}<option value="{{ p.id }}">{{ p.title }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit">Admit</button>
+    <button type="button" class="dismiss" data-normalised="{{ c.normalised }}">Dismiss</button>
+    <span class="result muted"></span>
+  </form>
+</div>
+{% else %}
+<p>The queue is empty. Every name the extractor proposed matched the vocabulary.</p>
+{% endfor %}
+
+<p>
+  {% if page > 1 %}<a href="/concepts/candidates?page={{ page - 1 }}&per_page={{ per_page }}">&larr; Previous</a>{% endif %}
+  <span class="muted">page {{ page }}</span>
+  {% if has_next %}<a href="/concepts/candidates?page={{ page + 1 }}&per_page={{ per_page }}">Next &rarr;</a>{% endif %}
+</p>
+
+<script>
+function lines(v) { return v.split('\n').map(s => s.trim()).filter(Boolean); }
+
+document.querySelectorAll('.admit-form').forEach(form => {
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const out = form.querySelector('.result');
+    const f = new FormData(form);
+    const body = {
+      name: f.get('name'),
+      description: f.get('description'),
+      artifact_class: f.get('artifact_class'),
+      key_properties: lines(f.get('key_properties') || ''),
+      tradeoffs: lines(f.get('tradeoffs') || ''),
+      design_rationale: f.get('design_rationale'),
+      subsystem_id: f.get('subsystem_id') || '',
+      seminal_source_id: f.get('seminal_source_id') || '',
+    };
+    out.textContent = 'admitting…';
+    const r = await fetch('/api/concept-admit/' + encodeURIComponent(form.dataset.normalised),
+                          {method: 'POST', headers: {'Content-Type': 'application/json'},
+                           body: JSON.stringify(body)});
+    const data = await r.json();
+    out.textContent = r.ok ? ('admitted as ' + data.concept_id) : ('refused: ' + data.error);
+    if (r.ok) form.querySelector('button[type=submit]').disabled = true;
+  });
+});
+
+document.querySelectorAll('.dismiss').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const form = btn.closest('.admit-form');
+    const out = form.querySelector('.result');
+    const r = await fetch('/api/concept-dismiss/' + encodeURIComponent(btn.dataset.normalised),
+                          {method: 'POST'});
+    const data = await r.json();
+    out.textContent = r.ok ? 'dismissed' : ('failed: ' + data.error);
+    if (r.ok) form.querySelectorAll('button').forEach(b => b.disabled = true);
+  });
+});
+</script>
+{% endblock %}

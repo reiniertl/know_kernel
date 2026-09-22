@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from uuid import uuid4
 
 #: Levenshtein tolerance. Two edits catches plurals, a dropped hyphen and a
 #: British/American spelling; it does not catch a different concept.
@@ -164,8 +166,138 @@ def candidate_ranking(conn: sqlite3.Connection, limit: int = 50) -> list[Candida
                       evidence_ids=(r[3] or "").split(",")) for r in rows]
 
 
+
+#: Every attribute a Concept node requires. A promotion that cannot supply all
+#: six is refused rather than defaulted: a Concept with an empty
+#: design_rationale is exactly the thin entry the admission rule exists to keep
+#: out, and a blank string would satisfy the schema while saying nothing.
+PROMOTION_REQUIRED_ATTRS = (
+    "name", "description", "artifact_class",
+    "key_properties", "tradeoffs", "design_rationale",
+)
+
+
+def candidate_sources(conn: sqlite3.Connection, normalised: str) -> int:
+    """How many DISTINCT Sources proposed this queued name.
+
+    The same weight test INV-KK-CONCEPT-ADMISSION applies to an admitted
+    Concept, asked before the node exists. Evidence with no sourced-from edge
+    counts as its own source, matching candidate_ranking, so an orphan Evidence
+    cannot quietly contribute zero and drag a candidate below the bar.
+    """
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT COALESCE(s.target_id, c.evidence_id)) "
+        "FROM concept_candidates c "
+        "LEFT JOIN edges s ON s.source_id = c.evidence_id AND s.kind = 'sourced-from' "
+        "WHERE c.normalised = ?", (normalised,)
+    ).fetchone()
+    return row[0] if row else 0
+
+
+def promote_candidate(
+    conn: sqlite3.Connection,
+    normalised: str,
+    attrs: dict,
+    admitted_by: str,
+    seminal_source_id: str = "",
+    subsystem_id: str = "",
+) -> str:
+    """Admit a queued candidate into the vocabulary. Returns the new Concept id.
+
+    ALG-KK-WEB-CONCEPT-ADMIT's store half, here rather than in the route so the
+    rule is testable without a router and cannot be restated by a second caller.
+
+    THE ADMISSION RULE IS ENFORCED HERE, NOT ADVERTISED HERE
+    (INV-KK-WEB-ADMIT-HONOURS-ADMISSION). A candidate below ADMISSIBLE_WEIGHT is
+    refused unless the caller names the Source that defined the class. All 43
+    candidates queued on 2026-09-22 sit at exactly one Source, so this branch is
+    the normal path and not an edge case — which is precisely why it may not be
+    softened. A promotion form that wrote a Concept on request would be a faster
+    way to produce the soup the extractor was stopped from producing.
+
+    THE MARKER IS NEVER INFERRED, per IFC-KK-CONCEPT-SEMINAL-MARKER. At weight 1
+    there is exactly one proposing Source and defaulting to it would look
+    helpful; it would also promote every single candidate automatically and make
+    the threshold meaningless. The caller must name it, and naming something
+    that is not a Source is an error rather than a silent skip.
+
+    ONE TRANSACTION. The node, the subsystem edge, the marker and the removal of
+    the queue rows either all land or none do — a half-applied promotion would
+    leave a Concept that the queue still offers for admission.
+    """
+    from graph.engine import add_edge, add_node
+    from graph.rules import ADMISSIBLE_WEIGHT
+
+    missing = [k for k in PROMOTION_REQUIRED_ATTRS
+               if attrs.get(k) in (None, "", [], {})]
+    if missing:
+        raise ValueError(
+            "A Concept needs every required attribute; missing or blank: "
+            + ", ".join(sorted(missing)))
+    if not admitted_by:
+        raise ValueError("A promotion must record who admitted it")
+
+    queued = conn.execute(
+        "SELECT COUNT(*) FROM concept_candidates WHERE normalised = ?", (normalised,)
+    ).fetchone()[0]
+    if not queued:
+        raise ValueError(f"No candidate queued under '{normalised}'")
+
+    weight = candidate_sources(conn, normalised)
+    if weight < ADMISSIBLE_WEIGHT:
+        if not seminal_source_id:
+            raise ValueError(
+                f"'{attrs['name']}' is proposed by {weight} source(s), below the "
+                f"admission threshold of {ADMISSIBLE_WEIGHT}. Admitting it "
+                "requires naming the Source that defined the concept "
+                "(INV-KK-CONCEPT-ADMISSION, IFC-KK-CONCEPT-SEMINAL-MARKER).")
+        row = conn.execute(
+            "SELECT kind FROM nodes WHERE id = ?", (seminal_source_id,)).fetchone()
+        if row is None or row[0] != "Source":
+            raise ValueError(
+                f"Seminal marker must name a Source; '{seminal_source_id}' is "
+                + (f"a {row[0]}" if row else "not in the graph"))
+
+    if normalise_concept_name(attrs["name"]) != normalised:
+        raise ValueError(
+            f"Name '{attrs['name']}' does not normalise to the queued "
+            f"candidate '{normalised}'")
+    # resolve_concept_names, not the extractor's find_concept_by_name: graph
+    # must not import from ingest, and this module already owns the mapping.
+    if normalised in resolve_concept_names(conn):
+        raise ValueError(f"A Concept named '{attrs['name']}' already exists")
+
+    concept_id = f"concept-{uuid4().hex[:12]}"
+    add_node(conn, concept_id, "Concept", {
+        **{k: attrs[k] for k in PROMOTION_REQUIRED_ATTRS},
+        "admitted_by": admitted_by,
+        "admitted_at": datetime.now(timezone.utc).date().isoformat(),
+    })
+    if subsystem_id:
+        add_edge(conn, "belongs-to", concept_id, subsystem_id)
+    if seminal_source_id:
+        add_edge(conn, "defined-by", concept_id, seminal_source_id)
+    conn.execute("DELETE FROM concept_candidates WHERE normalised = ?", (normalised,))
+    return concept_id
+
+
+def dismiss_candidate(conn: sqlite3.Connection, normalised: str) -> int:
+    """Drop a queued name a curator judged not to be a Concept.
+
+    Returns the number of rows removed. Dismissal is not a graph write: the
+    candidate never became a node, so there is nothing to retract. It is
+    deliberately not a tombstone — the extractor re-queues a name the next time
+    a paper proposes it, and a permanently suppressed name would hide a concept
+    that later earns admission on new evidence.
+    """
+    cur = conn.execute(
+        "DELETE FROM concept_candidates WHERE normalised = ?", (normalised,))
+    return cur.rowcount
+
 __all__ = [
-    "Candidate", "DEFAULT_MAX_DISTANCE", "build_vocabulary_context",
+    "Candidate", "DEFAULT_MAX_DISTANCE", "PROMOTION_REQUIRED_ATTRS",
+    "build_vocabulary_context", "candidate_sources", "dismiss_candidate",
+    "promote_candidate",
     "candidate_ranking", "fuzzy_match_concept", "levenshtein_distance",
     "normalise_concept_name", "record_candidate", "resolve_concept_names",
 ]

@@ -81,6 +81,8 @@ WEB_MUTATION_ALLOWLIST = (
     "/api/summary/",
     "/api/feed/send/",  # side-effecting shell-out, not a graph write
     "/api/link-confirm/",
+    "/api/concept-admit/",   # promote a queued candidate into the vocabulary
+    "/api/concept-dismiss/",  # drop a queued name that is not a concept
 )
 
 
@@ -364,6 +366,150 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 ).fetchone()[0],
             },
         )
+
+    @app.get("/concepts/candidates", response_class=HTMLResponse)
+    async def concept_candidates_page(
+        request: Request,
+        page: int = Query(1, ge=1),
+        per_page: int = Query(50, ge=10, le=200),
+    ):
+        """The admission queue (ALG-KK-WEB-CONCEPT-ADMIT, read half).
+
+        Names the extractor proposed that the vocabulary did not contain,
+        ordered by how many DISTINCT Sources reached for them independently —
+        candidate_ranking's order, which is the same weight test
+        INV-KK-CONCEPT-ADMISSION applies to an admitted Concept, asked before
+        the node exists.
+
+        Registered BEFORE /concepts/{node_id}: "candidates" is a literal path
+        segment and would otherwise be read as a node id and 404.
+        """
+        from graph.concept_vocabulary import candidate_ranking
+        from graph.rules import ADMISSIBLE_WEIGHT
+
+        conn = request.app.state.conn
+        ranked = candidate_ranking(conn, limit=per_page + 1)
+        has_next = len(ranked) > per_page
+        ranked = ranked[:per_page]
+
+        candidates = []
+        for cand in ranked:
+            # The papers that proposed it: the curator needs them to name a
+            # seminal Source, and at weight 1 there is exactly one to choose.
+            proposing = conn.execute(
+                "SELECT DISTINCT s.id, json_extract(s.attrs, '$.title') "
+                "FROM concept_candidates c "
+                "JOIN edges se ON se.source_id = c.evidence_id AND se.kind = 'sourced-from' "
+                "JOIN nodes s ON s.id = se.target_id AND s.kind = 'Source' "
+                "WHERE c.normalised = ? LIMIT 10",
+                (cand.normalised,),
+            ).fetchall()
+            candidates.append({
+                "normalised": cand.normalised,
+                "name": cand.name,
+                "sources": cand.sources,
+                "needs_marker": cand.sources < ADMISSIBLE_WEIGHT,
+                "papers": [{"id": r[0], "title": r[1] or r[0],
+                            "route": route_for_node("Source", r[0])}
+                           for r in proposing],
+            })
+
+        return templates.TemplateResponse(
+            request, "concept_candidates.html",
+            {
+                "candidates": candidates,
+                "threshold": ADMISSIBLE_WEIGHT,
+                "subsystems": [
+                    {"id": r[0], "name": r[1]} for r in conn.execute(
+                        "SELECT id, json_extract(attrs, '$.name') FROM nodes "
+                        "WHERE kind = 'Subsystem' ORDER BY 2").fetchall() if r[1]
+                ],
+                "page": page,
+                "per_page": per_page,
+                "has_next": has_next,
+            },
+        )
+
+    @app.post("/api/concept-admit/{normalised:path}")
+    async def api_concept_admit(request: Request, normalised: str):
+        """A human promotes a queued candidate into the vocabulary.
+
+        ALG-KK-WEB-CONCEPT-ADMIT. THE ONLY WRITER OF A Concept once the
+        extractor stopped minting, and the first writer of a defined-by edge in
+        this corpus.
+
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/concept-admit/ is on
+        WEB_MUTATION_ALLOWLIST.
+        INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION: the admitting curator is the
+        logged-in user. An admitted_by field in the body is ignored, so no
+        request can file an admission under someone else's name.
+        INV-KK-WEB-ADMIT-HONOURS-ADMISSION: the store refuses a below-threshold
+        promotion with no seminal marker. This route does not re-check the rule
+        — one implementation, in promote_candidate, which is testable without a
+        router.
+        """
+        from graph.concept_vocabulary import promote_candidate
+
+        identity = getattr(request.state, "user", None)
+        if identity is None:
+            # Defensive: the gate never lets an anonymous request this far.
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+        conn = request.app.state.conn
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        try:
+            concept_id = promote_candidate(
+                conn, normalised,
+                attrs={
+                    "name": (body.get("name") or "").strip(),
+                    "description": (body.get("description") or "").strip(),
+                    "artifact_class": (body.get("artifact_class") or "").strip(),
+                    "key_properties": body.get("key_properties") or [],
+                    "tradeoffs": body.get("tradeoffs") or [],
+                    "design_rationale": (body.get("design_rationale") or "").strip(),
+                },
+                admitted_by=identity["reviewer"],
+                seminal_source_id=(body.get("seminal_source_id") or "").strip(),
+                subsystem_id=(body.get("subsystem_id") or "").strip(),
+            )
+        except ValueError as exc:
+            status = 404 if "No candidate queued" in str(exc) else 422
+            return JSONResponse({"error": str(exc)}, status_code=status)
+
+        conn.commit()
+        return JSONResponse({
+            "concept_id": concept_id,
+            "normalised": normalised,
+            "admitted_by": identity["reviewer"],
+        })
+
+    @app.post("/api/concept-dismiss/{normalised:path}")
+    async def api_concept_dismiss(request: Request, normalised: str):
+        """Drop a queued name a curator judged not to be a Concept.
+
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/concept-dismiss/ is allowlisted.
+        Not a graph write — the candidate never became a node — and deliberately
+        not a tombstone: the extractor re-queues the name if another paper
+        proposes it, and permanent suppression would hide a concept that later
+        earns admission on new evidence.
+        """
+        from graph.concept_vocabulary import dismiss_candidate
+
+        identity = getattr(request.state, "user", None)
+        if identity is None:
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+        conn = request.app.state.conn
+        removed = dismiss_candidate(conn, normalised)
+        if not removed:
+            return JSONResponse({"error": f"No candidate queued under '{normalised}'"},
+                                status_code=404)
+        conn.commit()
+        return JSONResponse({"normalised": normalised, "rows_removed": removed})
 
     @app.get("/concepts/{concept_id}/papers", response_class=HTMLResponse)
     async def concept_papers(
