@@ -1411,10 +1411,6 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             request, "reviewers.html", {"reviewers": roster},
         )
 
-    @app.get("/viz", response_class=HTMLResponse)
-    async def viz(request: Request):
-        return templates.TemplateResponse(request, "graph_viz.html", {})
-
     @app.post("/api/reviewers")
     async def create_reviewer(request: Request):
         """Register a reviewer name (ALG-KK-WEB-REVIEWER-CREATE).

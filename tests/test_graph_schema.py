@@ -187,16 +187,20 @@ def test_schema_sql_is_reentrant(tmp_path):
 
 
 def test_every_declared_kind_is_honoured_by_every_consumer():
-    """INV-KK-SCHEMA-KIND-DECLARATION-HONOURED, all three surfaces in one assertion.
+    """INV-KK-SCHEMA-KIND-DECLARATION-HONOURED, both surviving surfaces in one assertion.
 
-    schema.py declares the legal kinds. Three separate places consume that
-    declaration, and each had drifted from it independently. Checking them together
-    is what stops a fourth consumer drifting unnoticed: a new consumer that forgets
-    a kind fails here, not in whichever feature happens to exercise it.
+    schema.py declares the legal kinds. Separate places consume that declaration,
+    and each had drifted from it independently. Checking them together is what stops
+    a new consumer drifting unnoticed: one that forgets a kind fails here, not in
+    whichever feature happens to exercise it.
+
+    A third surface — the /viz edgeColor palette in graph_viz.html — was asserted
+    here until 2026-09-22. The page was retired (ANN-KK-WEB-VIZ-RETIRED) and the
+    template deleted with it, so the consumer no longer exists and EDGE_KINDS now
+    has no rendering consumer at all. This is not a weakened guard: nothing failing
+    was suppressed. If a later page draws coloured edges, its palette re-enters
+    here as surface 3.
     """
-    import pathlib
-    import re
-
     from graph.engine import add_node
     from graph.rules import RULES_BY_KIND
 
@@ -210,12 +214,10 @@ def test_every_declared_kind_is_honoured_by_every_consumer():
         f"extra {sorted(set(RULES_BY_KIND) - set(NODE_KINDS))}"
     )
 
-    # Surface 3 — the /viz edge palette.
-    html = pathlib.Path("src/web/templates/graph_viz.html").read_text(encoding="utf-8")
-    block = html.split("const edgeColor = {")[1].split("};")[0]
-    coloured = set(re.findall(r"'([a-z-]+)':", block))
-    assert set(EDGE_KINDS) <= coloured, (
-        f"edgeColor drifted: missing {sorted(set(EDGE_KINDS) - coloured)}"
+    # Surface 3 was the /viz edge palette. It went with the page on 2026-09-22;
+    # no consumer of EDGE_KINDS renders, so there is nothing left to compare.
+    assert not pathlib.Path("src/web/templates/graph_viz.html").exists(), (
+        "graph_viz.html is back — restore the edgeColor assertion as surface 3"
     )
 
 

@@ -248,17 +248,6 @@ def test_web_detail_no_duplicate_h2_name(rich_client):
             f"{nid} still has a redundant <h2> name heading"
 
 
-def test_web_graph_viz_has_display_fields(client):
-    """INV-KK-WEB-VIZ-TOOLTIP: graph viz JS contains per-kind field resolution."""
-    response = client.get("/viz")
-    assert response.status_code == 200
-    text = response.text
-    assert "displayFields" in text
-    assert "KernelInvariant" in text
-    assert "'predicate'" in text
-    assert "'symptom'" in text
-
-
 def test_source_detail_renders_clickable_url(rich_client):
     """INV-KK-WEB-SOURCE-LINKED: Source detail page renders url as clickable <a> with target=_blank."""
     response = rich_client.get("/concepts/src-1")
@@ -429,48 +418,42 @@ def test_web_api_match_400_on_missing_param(rich_client):
     assert response.status_code == 400
 
 
-# --- ALG-KK-WEB-GRAPH-VIZ tests ---
+# --- the retired /viz page (ANN-KK-WEB-VIZ-RETIRED) ---
+#
+# Six tests lived here until 2026-09-22, asserting that /viz returned HTML, that
+# it fetched /graph, that it referenced d3, that its edgeColor map covered
+# EDGE_KINDS and that its legend was built from present data. Every one cited a
+# spec id — ALG-KK-WEB-GRAPH-VIZ, INV-KK-WEB-VIZ-TOOLTIP,
+# INV-KK-WEB-VIZ-EDGE-DISTINCT, INV-KK-WEB-GRAPH-LEGEND — and NOT ONE OF THOSE
+# IDS EXISTS IN spec.db; each returns RIL-ERR-QUERY-NOT-FOUND. They were never
+# caught because the cited-but-absent sweep in tests/test_repo_hygiene.py walks
+# src/ only (ANN-KK-SPEC-ID-SWEEP-SRC-ONLY). The page was retired because at
+# 15,640 nodes a force layout over the whole graph is a hairball rather than a
+# navigation mechanism; ALG-KK-WEB-CONCEPTS-LIST replaces it.
 
-def test_web_viz_route_returns_html(client):
-    response = client.get("/viz")
+
+def test_web_viz_route_is_gone(client):
+    """ANN-KK-WEB-VIZ-RETIRED: the graph page no longer answers."""
+    assert client.get("/viz").status_code == 404
+
+
+def test_web_graph_json_survives_the_viz_retirement(client):
+    """ANN-KK-WEB-VIZ-RETIRED: /graph is a separate governed endpoint.
+
+    graph_viz.html was its only in-app caller. Losing a caller does not make a
+    full-access export dead — INV-KK-WEB-FULL-ACCESS still holds and the
+    operator decided on 2026-09-22 to keep it.
+    """
+    response = client.get("/graph")
     assert response.status_code == 200
-    assert "text/html" in response.headers["content-type"]
+    body = response.json()
+    assert "nodes" in body and "edges" in body
 
 
-def test_web_viz_contains_graph_fetch(client):
-    response = client.get("/viz")
-    assert "/graph" in response.text
-
-
-def test_web_viz_contains_d3_reference(client):
-    response = client.get("/viz")
-    assert "d3" in response.text.lower()
-
-
-def test_web_viz_edge_color_covers_all_edge_kinds(client):
-    """INV-KK-WEB-VIZ-EDGE-DISTINCT: edgeColor map has entries for all 18 edge kinds."""
-    from graph.schema import EDGE_KINDS
-    response = client.get("/viz")
-    text = response.text
-    for kind in EDGE_KINDS:
-        assert f"'{kind}'" in text, f"edgeColor missing entry for '{kind}'"
-
-
-def test_web_viz_legend_code_present(client):
-    """INV-KK-WEB-GRAPH-LEGEND: legend generation code exists in graph viz."""
-    response = client.get("/viz")
-    text = response.text
-    assert "graph-legend" in text
-    assert "presentNodeKinds" in text
-    assert "presentEdgeKinds" in text
-
-
-def test_web_viz_legend_filters_to_present_kinds(client):
-    """INV-KK-WEB-GRAPH-LEGEND: legend is built from actually-present data, not hardcoded."""
-    response = client.get("/viz")
-    text = response.text
-    assert "new Set(data.nodes.map" in text
-    assert "new Set(links.map" in text
+def test_web_nav_no_longer_offers_the_graph_page(client):
+    """The nav entry went with the route; a dead link is worse than no link."""
+    text = client.get("/health").text
+    assert '/viz' not in text
 
 
 # --- ALG-KK-WEB-DISPLAY-NAME unit tests ---
