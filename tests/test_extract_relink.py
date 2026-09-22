@@ -468,3 +468,68 @@ def test_a_dry_run_leaves_the_database_untouched(monkeypatch, capsys, corpus):
     after = sqlite3.connect(corpus).execute(
         "SELECT COUNT(*) FROM edges").fetchone()[0]
     assert after == before
+
+
+def test_the_report_names_concepts_rejected(monkeypatch, capsys, corpus):
+    """The number that was computed and thrown away.
+
+    extract_concepts has carried concepts_rejected on ExtractionResult since
+    the matching path landed, and the unit test above asserts it. But main()
+    builds its per-result dict field by field and simply omitted this one, so
+    the 20-paper run of 2026-09-22 printed no rejection count at all while
+    writing 43 candidate rows. A report that is silently incomplete is worse
+    than one that is visibly wrong, and this is the number an operator reads
+    to judge whether the vocabulary covers the corpus.
+
+    This test runs the CLI for real — NOT --dry-run, because a dry run returns
+    before a client exists and would never reach the counting. client_for is
+    replaced, so no network call is made; a version of this test that reached
+    the network would be a defect in the test.
+    """
+    import sqlite3
+
+    from ingest import cli_extract
+
+    monkeypatch.setattr(cli_extract, "client_for", lambda provider: MockLLMClient())
+    before = sqlite3.connect(corpus).execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind='Concept'").fetchone()[0]
+
+    code, report = _run_cli(monkeypatch, capsys,
+                            "--db", corpus, "--all-relink", "--limit", "1")
+
+    assert code == 0
+    # The mock proposes Copy-on-Write; the corpus vocabulary holds only
+    # "Old r1"/"Old r2"/"Old r3", so it matches nothing and is queued.
+    assert report["results"][0]["concepts_rejected"] == 1
+    assert report["concepts_rejected"] == 1, "and it reaches the run totals"
+    assert report["concepts_created"] == 0, "a rejection is not a creation"
+
+    after = sqlite3.connect(corpus)
+    assert after.execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind='Concept'").fetchone()[0] == before
+    assert after.execute(
+        "SELECT COUNT(*) FROM concept_candidates").fetchone()[0] == 1, \
+        "the rejected name is queued for a human, not discarded"
+
+
+def test_every_counter_in_a_result_reaches_the_report(monkeypatch, capsys, corpus):
+    """The hand-built dict is the defect, so guard its shape and not one field.
+
+    main() maps ExtractionResult onto JSON field by field. concepts_rejected
+    was dropped that way and nothing noticed for a whole paid batch. Every
+    counter the report claims to total must be present in each per-result
+    dict, or the sum() over them raises KeyError rather than reporting zero.
+    """
+    monkeypatch.setattr(
+        __import__("ingest.cli_extract", fromlist=["x"]),
+        "client_for", lambda provider: MockLLMClient())
+    _, report = _run_cli(monkeypatch, capsys,
+                         "--db", corpus, "--all-relink", "--limit", "1")
+
+    totalled = {"concepts_created", "concepts_reused",
+                "concepts_rejected", "edges_superseded"}
+    for row in report["results"]:
+        missing = totalled - set(row)
+        assert not missing, f"per-result dict dropped {sorted(missing)}"
+        for k in totalled:
+            assert report[k] == sum(r[k] for r in report["results"])
