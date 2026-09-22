@@ -32,6 +32,7 @@ from graph.engine import (
     transitive_impact,
 )
 from graph.briefing import build_concept_brief
+from graph.rules import concept_weight
 from graph.scoring import research_score
 
 
@@ -166,6 +167,74 @@ def route_for_node(kind: str, node_id: str) -> str:
     return _ROUTE_FOR_KIND.get(kind, _DEFAULT_ROUTE) + node_id
 
 
+#: Papers behind a concept, in the order the admission rule counts them.
+#: INV-KK-CONCEPT-ADMISSION walks concept -extracted-from-> Evidence
+#: -sourced-from-> Source, so this is the same traversal concept_weight makes.
+#: DISTINCT on the Source: two Evidence nodes from one paper are one paper, and
+#: rendering it twice would overstate the evidence the badge is claiming.
+_CONCEPT_PAPERS_SQL = (
+    "SELECT DISTINCT s.id, s.attrs FROM edges e "
+    "JOIN edges se ON se.source_id = e.target_id AND se.kind = 'sourced-from' "
+    "JOIN nodes s ON s.id = se.target_id AND s.kind = 'Source' "
+    "WHERE e.kind = 'extracted-from' AND e.source_id = ? "
+    "ORDER BY s.id LIMIT ? OFFSET ?"
+)
+
+
+def _concept_papers(conn, concept_id: str, limit: int, offset: int = 0) -> list[dict]:
+    """One bounded page of the papers behind a concept.
+
+    ALG-KK-WEB-CONCEPT-PAPERS. Every row routes through route_for_node, so a
+    paper row goes to /paper/{id} and never back into /concepts/{id}
+    (INV-KK-WEB-SEARCH-RESULT-ROUTED). LIMIT is always passed by the caller;
+    there is no unbounded overload, because Scheduling Classes carries 440
+    papers and a default of "all" would be an unbounded render waiting to be
+    used by accident.
+    """
+    rows = conn.execute(_CONCEPT_PAPERS_SQL, (concept_id, limit, offset)).fetchall()
+    papers = []
+    for source_id, raw in rows:
+        attrs = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        papers.append({
+            "source_id": source_id,
+            "title": attrs.get("title") or source_id,
+            "venue": attrs.get("venue") or "",
+            "source_type": attrs.get("source_type") or "",
+            "url": attrs.get("url") or "",
+            "route": route_for_node("Source", source_id),
+        })
+    return papers
+
+
+
+def _concept_subsystem(conn, concept_id: str) -> str:
+    """The subsystem a concept belongs-to, or "" — one query, one row."""
+    row = conn.execute(
+        "SELECT json_extract(n.attrs, '$.name') FROM edges e "
+        "JOIN nodes n ON n.id = e.target_id AND n.kind = 'Subsystem' "
+        "WHERE e.kind = 'belongs-to' AND e.source_id = ? LIMIT 1",
+        (concept_id,),
+    ).fetchone()
+    return (row[0] if row else "") or ""
+
+
+def _concept_kernels(conn, concept_id: str) -> list[str]:
+    """The kernels a concept is implemented-in.
+
+    This is the signal that will let the vocabulary escape the Linux monopoly:
+    a concept present in two unrelated kernels is established by a different
+    argument than one present in 440 Linux papers. 94 implemented-in edges
+    exist over 65 concepts as of 2026-09-22, 25 of them in two or more kernels.
+    """
+    return [
+        r[0] for r in conn.execute(
+            "SELECT json_extract(n.attrs, '$.name') FROM edges e "
+            "JOIN nodes n ON n.id = e.target_id AND n.kind = 'Kernel' "
+            "WHERE e.kind = 'implemented-in' AND e.source_id = ? ORDER BY 1",
+            (concept_id,),
+        ).fetchall() if r[0]
+    ]
+
 def _batch_review_status(conn, source_ids: list[str]) -> dict[str, dict]:
     """Batch-query review status for multiple sources (ALG-KK-WEB-FEED-REVIEW-BADGE).
 
@@ -214,6 +283,132 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             request,
             "dashboard.html",
             {"counts": counts, "total": total, "edge_total": edge_total},
+        )
+
+    #: How many papers the concept detail page shows before linking out.
+    #: Small deliberately: the detail page is about the concept, and the full
+    #: list has its own paginated route.
+    CONCEPT_PAPERS_PREVIEW = 5
+
+    @app.get("/concepts", response_class=HTMLResponse)
+    async def concepts_list(
+        request: Request,
+        state: str | None = None,
+        q: str | None = None,
+        page: int = Query(1, ge=1),
+        per_page: int = Query(50, ge=10, le=200),
+    ):
+        """The vocabulary, paginated (ALG-KK-WEB-CONCEPTS-LIST).
+
+        THIS ROUTE IS THE REASON A CONCEPT CAN EXIST AT ALL. The extractor stopped
+        minting on 2026-09-22 (INV-KK-EXTRACT-CONCEPT-MATCHED) and store_rich_concept
+        became unreachable, so until this page and its admission path shipped the
+        vocabulary was frozen at 97 with no way in but hand-written SQL.
+
+        INV-KK-WEB-QUERY-BOUNDED: LIMIT per_page + 1 to detect a next page without a
+        second COUNT, the seminal set read ONCE for the whole page, and enrichment
+        strictly per row. check_concept_admission is deliberately NOT called here —
+        it sweeps every Concept, which is the unbounded per-render cost this
+        invariant exists to forbid. graph.rules.admission_state classifies one row,
+        and the sweep tallies that same function, so page and invariant cannot drift.
+        """
+        from graph.rules import admission_state, seminal_concepts
+
+        conn = request.app.state.conn
+        sql = "SELECT id, attrs FROM nodes WHERE kind = 'Concept'"
+        params: list = []
+        if q:
+            sql += " AND lower(json_extract(attrs, '$.name')) LIKE ?"
+            params.append(f"%{q.lower()}%")
+        sql += " ORDER BY json_extract(attrs, '$.name') LIMIT ? OFFSET ?"
+        params.extend([per_page + 1, (page - 1) * per_page])
+
+        rows = conn.execute(sql, params).fetchall()
+        has_next = len(rows) > per_page
+        rows = rows[:per_page]
+
+        seminal = seminal_concepts(conn)
+        concepts = []
+        for concept_id, raw in rows:
+            attrs = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            concepts.append({
+                "id": concept_id,
+                "name": attrs.get("name") or concept_id,
+                "description": attrs.get("description") or "",
+                "subsystem": _concept_subsystem(conn, concept_id),
+                "papers": concept_weight(conn, concept_id),
+                "kernels": _concept_kernels(conn, concept_id),
+                "state": admission_state(conn, concept_id, seminal),
+            })
+
+        # Filtering AFTER classification is deliberate and is a known limit: the
+        # state is not a column, so it cannot be a WHERE clause without either
+        # denormalising it or running the corpus sweep. The filter therefore
+        # narrows the current page rather than the corpus, and the template says
+        # so, because a filter that silently lied about completeness would be
+        # worse than no filter.
+        if state:
+            concepts = [c for c in concepts if c["state"] == state]
+
+        return templates.TemplateResponse(
+            request, "concepts_list.html",
+            {
+                "concepts": concepts,
+                "state_filter": state or "",
+                "q": q or "",
+                "page": page,
+                "per_page": per_page,
+                "has_next": has_next,
+                "candidate_count": conn.execute(
+                    "SELECT COUNT(DISTINCT normalised) FROM concept_candidates"
+                ).fetchone()[0],
+            },
+        )
+
+    @app.get("/concepts/{concept_id}/papers", response_class=HTMLResponse)
+    async def concept_papers(
+        request: Request,
+        concept_id: str,
+        page: int = Query(1, ge=1),
+        per_page: int = Query(50, ge=10, le=200),
+    ):
+        """Every paper behind one concept (ALG-KK-WEB-CONCEPT-PAPERS).
+
+        The same traversal concept_weight walks, so this page is the evidence for
+        the admission badge rather than a restatement of it — a reader who
+        distrusts the number can count the rows.
+
+        A DEDICATED ROUTE, not an inline section: Scheduling Classes has 440
+        papers and Linux Security Modules 358, and rendering those inside the
+        detail page is the unbounded render INV-KK-WEB-QUERY-BOUNDED forbids.
+        Same page/per_page bounds as the list, so one mechanism serves both.
+        """
+        from graph.rules import admission_state, seminal_concepts
+
+        conn = request.app.state.conn
+        row = conn.execute(
+            "SELECT attrs FROM nodes WHERE id = ? AND kind = 'Concept'", (concept_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Concept not found")
+        attrs = json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
+
+        papers = _concept_papers(conn, concept_id, per_page + 1, (page - 1) * per_page)
+        has_next = len(papers) > per_page
+        papers = papers[:per_page]
+
+        return templates.TemplateResponse(
+            request, "concept_papers.html",
+            {
+                "concept_id": concept_id,
+                "concept_name": attrs.get("name") or concept_id,
+                "papers": papers,
+                "total": concept_weight(conn, concept_id),
+                "state": admission_state(conn, concept_id, seminal_concepts(conn)),
+                "page": page,
+                "per_page": per_page,
+                "has_next": has_next,
+            },
         )
 
     @app.get("/concepts/{node_id}", response_class=HTMLResponse)
@@ -299,6 +494,20 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                             "examples": cr_attrs["code_examples"],
                         })
 
+        # The papers behind a Concept, bounded to a preview with a link to the
+        # full paginated route (ALG-KK-WEB-CONCEPT-PAPERS). Only for Concepts:
+        # this view renders every node kind, and the traversal is meaningless
+        # for the rest.
+        concept_papers_preview: list[dict] = []
+        concept_paper_total = 0
+        concept_state = ""
+        if node["kind"] == "Concept":
+            from graph.rules import admission_state, seminal_concepts
+            concept_papers_preview = _concept_papers(
+                conn, node_id, CONCEPT_PAPERS_PREVIEW)
+            concept_paper_total = concept_weight(conn, node_id)
+            concept_state = admission_state(conn, node_id, seminal_concepts(conn))
+
         return templates.TemplateResponse(
             request,
             "concept_detail.html",
@@ -308,6 +517,10 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "grouped_edges": grouped_edges,
                 "node_labels": node_labels,
                 "related_code": related_code,
+                "concept_papers": concept_papers_preview,
+                "concept_paper_total": concept_paper_total,
+                "concept_state": concept_state,
+                "papers_preview_size": CONCEPT_PAPERS_PREVIEW,
             },
         )
 

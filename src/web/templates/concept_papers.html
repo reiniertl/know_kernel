@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Papers: {{ concept_name }}</h1>
+<p>
+  <a href="/concepts/{{ concept_id }}">&larr; back to {{ concept_name }}</a>
+  &middot; <span class="badge badge-{{ state }}">{{ state }}</span>
+  &middot; {{ total }} paper{{ '' if total == 1 else 's' }}
+</p>
+<p class="muted">
+  These are the papers the admission rule counts: each one is a distinct Source
+  reached by <code>extracted-from</code> then <code>sourced-from</code>. The
+  count above is the concept's weight, so this page is the evidence for the
+  badge rather than a restatement of it.
+</p>
+
+<table>
+  <thead><tr><th>Paper</th><th>Venue</th><th>Type</th></tr></thead>
+  <tbody>
+    {% for p in papers %}
+    <tr>
+      <td><a href="{{ p.route }}">{{ p.title }}</a></td>
+      <td>{{ p.venue or '—' }}</td>
+      <td>{{ p.source_type or '—' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3">No papers are linked to this concept.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<p>
+  {% if page > 1 %}<a href="/concepts/{{ concept_id }}/papers?page={{ page - 1 }}&per_page={{ per_page }}">&larr; Previous</a>{% endif %}
+  <span class="muted">page {{ page }}</span>
+  {% if has_next %}<a href="/concepts/{{ concept_id }}/papers?page={{ page + 1 }}&per_page={{ per_page }}">Next &rarr;</a>{% endif %}
+</p>
+{% endblock %}

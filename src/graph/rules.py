@@ -609,6 +609,42 @@ def concept_weight(conn: sqlite3.Connection, concept_id: str) -> int:
     return row[0] if row else 0
 
 
+def seminal_concepts(conn: sqlite3.Connection) -> set[str]:
+    """Every Concept carrying a defined-by marker, in one query.
+
+    Read once per sweep or per page render, never once per row: the concept
+    browser paginates and INV-KK-WEB-QUERY-BOUNDED caps enrichment at the page
+    size, so a per-row membership query would be the thing it forbids.
+    """
+    return {
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT source_id FROM edges WHERE kind = 'defined-by'")
+    }
+
+
+def admission_state(
+    conn: sqlite3.Connection, concept_id: str, seminal: set[str]
+) -> str:
+    """Classify ONE Concept: seminal, admissible, thin or unlinked.
+
+    THE SINGLE IMPLEMENTATION OF THE ADMISSION THRESHOLD. check_concept_admission
+    tallies this function over the corpus and the concept browser renders it per
+    row, so the sweep and the page cannot disagree about which concepts are
+    admissible. Extracted 2026-09-22 with operator approval under CLAUDE.md rule
+    4; the alternative was a second copy of the weight test in the web layer, and
+    a page that contradicted the sweep would discredit both.
+
+    `seminal` is passed in rather than queried here so that a caller classifying
+    many concepts pays for one query and not one per concept.
+    """
+    if concept_id in seminal:
+        return "seminal"
+    weight = concept_weight(conn, concept_id)
+    if weight >= ADMISSIBLE_WEIGHT:
+        return "admissible"
+    return "unlinked" if weight == 0 else "thin"
+
+
 def check_concept_admission(conn: sqlite3.Connection) -> AdmissionSweep:
     """Sweep every Concept for INV-KK-CONCEPT-ADMISSION.
 
@@ -623,10 +659,7 @@ def check_concept_admission(conn: sqlite3.Connection) -> AdmissionSweep:
     Returns no violations today. That is not vacuity — it is the date scope
     doing its job, and the thin list is where the signal actually is.
     """
-    seminal = {
-        r[0] for r in conn.execute(
-            "SELECT DISTINCT source_id FROM edges WHERE kind = 'defined-by'")
-    }
+    seminal = seminal_concepts(conn)
     admissible = 0
     thin: list[str] = []
     unlinked: list[str] = []
@@ -635,13 +668,10 @@ def check_concept_admission(conn: sqlite3.Connection) -> AdmissionSweep:
     for (concept_id,) in conn.execute(
         "SELECT id FROM nodes WHERE kind = 'Concept' ORDER BY id"
     ).fetchall():
-        if concept_id in seminal:
+        state = admission_state(conn, concept_id, seminal)
+        if state in ("seminal", "admissible"):
             admissible += 1
-            continue
-        weight = concept_weight(conn, concept_id)
-        if weight >= ADMISSIBLE_WEIGHT:
-            admissible += 1
-        elif weight == 0:
+        elif state == "unlinked":
             unlinked.append(concept_id)
         else:
             thin.append(concept_id)

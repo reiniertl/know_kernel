@@ -33,6 +33,31 @@
   {% endif %}
 </div>
 
+{# The papers behind this concept: the same traversal the admission rule walks,
+   so the section shows WHY the badge says what it says. Bounded to a preview —
+   Scheduling Classes has 440 — with the full list on its own paginated route. #}
+<div class="attrs-section">
+  <h3>
+    Papers ({{ concept_paper_total }})
+    {% if concept_state %}<span class="badge badge-{{ concept_state }}">{{ concept_state }}</span>{% endif %}
+  </h3>
+  {% if concept_papers %}
+  <ul>
+    {% for p in concept_papers %}
+    <li><a href="{{ p.route }}">{{ p.title }}</a>{% if p.venue %} <span class="muted small">{{ p.venue }}</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% if concept_paper_total > papers_preview_size %}
+  <p><a href="/concepts/{{ node.id }}/papers">See all {{ concept_paper_total }} papers &rarr;</a></p>
+  {% endif %}
+  {% else %}
+  <p class="muted">
+    No papers are linked to this concept. That is what <code>unlinked</code>
+    means, and it is the weakest position a concept in the vocabulary can be in.
+  </p>
+  {% endif %}
+</div>
+
 {% elif node.kind == 'KernelInvariant' %}
 <div class="attrs-section">
   {% if attrs.get('predicate') %}
