@@ -4368,4 +4368,21 @@
     <link to="ALG-KK-EXTRACT-CLI"            relation="part-of"/>
   </associate>
 
+  <associate source="src/ingest/claim_extractor.py" kind="source-file" name="claim_extractor.py" scope="">
+    <link to="ALG-KK-CLAIM-EXTRACT" relation="part-of"/>
+  </associate>
+
+  <associate source="src/ingest/claim_extractor.py" kind="function" name="extract_claims" scope="">
+    <link to="ALG-KK-CLAIM-EXTRACT" relation="part-of"/>
+  </associate>
+
+  <associate source="src/ingest/claim_extractor.py" kind="function" name="fuzzy_match_concept" scope="">
+    <link to="ALG-KK-CLAIM-EXTRACT"     relation="part-of"/>
+    <link to="INV-KK-CONCEPT-ADMISSION" relation="enforces"/>
+  </associate>
+
+  <associate source="src/ingest/claim_extractor.py" kind="function" name="build_claim_extraction_context" scope="">
+    <link to="ALG-KK-CLAIM-EXTRACT" relation="part-of"/>
+  </associate>
+
 </artifact-associations>
