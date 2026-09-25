@@ -422,3 +422,160 @@ def select_doc_evidence(
     with_text = [r[0] for r in rows if r[1].strip()]
     skipped = [r[0] for r in rows if not r[1].strip()]
     return with_text, skipped
+
+
+# ---------------------------------------------------------------------------
+# Revert (INV-KK-HARVEST-BATCH-REVERTIBLE)
+#
+# THE SAFETY PROPERTY THAT REPLACES THE HUMAN GATE. The operator directed that
+# bulk harvest proceed without approval; what made approval safe was that
+# nothing entered the vocabulary unexamined. What replaces it is not review —
+# review is per-concept and arrives later — it is the ability to undo a whole
+# bad run in one move, before the vocabulary the PAPER extractor matches
+# against carries junk into paper links on the next extraction run.
+# ---------------------------------------------------------------------------
+
+#: A batch's Concept is skipped, entirely untouched, for one of these reasons.
+SKIP_REVIEWED = "human-reviewed"
+SKIP_RETIRED = "human-retired"
+SKIP_LINKED = "linked-outside-batch"
+
+
+@dataclass
+class RevertSkip:
+    concept_id: str
+    name: str
+    reason: str
+    detail: str = ""
+
+
+@dataclass
+class RevertReport:
+    batch_id: str
+    concepts_deleted: list[str] = field(default_factory=list)
+    edges_detached: int = 0
+    skipped: list[RevertSkip] = field(default_factory=list)
+    dry_run: bool = False
+
+    @property
+    def clean(self) -> bool:
+        """Whether the batch came out whole. The CLI exits non-zero when not."""
+        return not self.skipped
+
+
+def _batch_concepts(conn: sqlite3.Connection, batch_id: str) -> list[tuple[str, dict]]:
+    rows = conn.execute(
+        "SELECT id, attrs FROM nodes WHERE kind = 'Concept' "
+        "AND json_extract(attrs, '$.harvest_batch') = ? ORDER BY id", (batch_id,)
+    ).fetchall()
+    return [(r[0], json.loads(r[1]) if r[1] else {}) for r in rows]
+
+
+def _foreign_links(conn: sqlite3.Connection, concept_id: str, batch_id: str) -> int:
+    """extracted-from edges on this Concept that the batch did NOT write.
+
+    What a later paper run leaves behind when it matches a harvested name. It is
+    work this batch does not own, and deleting the Concept would destroy it.
+    """
+    rows = conn.execute(
+        "SELECT attrs FROM edges WHERE kind = 'extracted-from' AND source_id = ?",
+        (concept_id,),
+    ).fetchall()
+    foreign = 0
+    for (raw,) in rows:
+        attrs = json.loads(raw) if raw else {}
+        if attrs.get("harvest_batch") != batch_id:
+            foreign += 1
+    return foreign
+
+
+def revert_batch(
+    conn: sqlite3.Connection, batch_id: str, dry_run: bool = False
+) -> RevertReport:
+    """Undo one harvest batch, and nothing else.
+
+    PER-CONCEPT SKIP WITH A LOUD REPORT. Operator decision 2026-09-25. A
+    Concept is left entirely intact if a human has reviewed or retired it, or
+    if it has gained an extracted-from edge the batch did not write. Everything
+    untouched is removed.
+
+    REFUSING THE WHOLE BATCH WAS CONSIDERED AND REFUSED: one linked Concept out
+    of two hundred would block the revert entirely, which is precisely the
+    situation a revert exists for. CASCADING WAS ALSO REFUSED: it restores the
+    node count exactly and destroys a human's review and paper links a later
+    run computed and paid for — work that is not the batch's to delete.
+
+    Two passes, and the order matters. Attachments to PRE-EXISTING Concepts are
+    detached first: those edges carry the batch id while their source node does
+    not, so they must be found by the edge and never by the node, or reverting
+    would either miss them or delete a Concept belonging to the original 97.
+    """
+    report = RevertReport(batch_id=batch_id, dry_run=dry_run)
+    batch_ids = {cid for cid, _ in _batch_concepts(conn, batch_id)}
+
+    # Pass 1 — edges the batch wrote onto Concepts it did not create.
+    edge_rows = conn.execute(
+        "SELECT id, source_id, attrs FROM edges WHERE kind = 'extracted-from'"
+    ).fetchall()
+    detach: list[int] = []
+    for edge_id, source_id, raw in edge_rows:
+        attrs = json.loads(raw) if raw else {}
+        if attrs.get("harvest_batch") == batch_id and source_id not in batch_ids:
+            detach.append(edge_id)
+
+    # Pass 2 — the Concepts the batch created.
+    delete: list[str] = []
+    for concept_id, attrs in _batch_concepts(conn, batch_id):
+        state = attrs.get("curation_state") or "harvested"
+        name = attrs.get("name", "")
+        if state == "reviewed":
+            report.skipped.append(RevertSkip(
+                concept_id, name, SKIP_REVIEWED,
+                f"reviewed by {attrs.get('reviewed_by') or 'unknown'} "
+                f"on {attrs.get('reviewed_at') or 'unknown date'}"))
+            continue
+        if state == "retired":
+            report.skipped.append(RevertSkip(
+                concept_id, name, SKIP_RETIRED,
+                "a human judged this concept wrong; the judgement outlives the batch"))
+            continue
+        foreign = _foreign_links(conn, concept_id, batch_id)
+        if foreign:
+            report.skipped.append(RevertSkip(
+                concept_id, name, SKIP_LINKED,
+                f"{foreign} extracted-from edge(s) this batch did not write"))
+            continue
+        delete.append(concept_id)
+
+    report.edges_detached = len(detach)
+    report.concepts_deleted = delete
+
+    if dry_run:
+        return report
+
+    for edge_id in detach:
+        conn.execute("DELETE FROM edges WHERE id = ?", (edge_id,))
+    for concept_id in delete:
+        conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?",
+                     (concept_id, concept_id))
+        conn.execute("DELETE FROM nodes WHERE id = ?", (concept_id,))
+    conn.commit()
+    return report
+
+
+def format_revert_report(report: RevertReport) -> str:
+    """Loud rather than silent. The skipped list is the point of the report."""
+    head = "Revert" + (" (DRY RUN — nothing deleted)" if report.dry_run else "")
+    lines = [
+        f"{head} of batch {report.batch_id}",
+        f"  concepts deleted  {len(report.concepts_deleted)}",
+        f"  edges detached    {report.edges_detached}",
+    ]
+    if report.skipped:
+        lines.append(f"  SKIPPED           {len(report.skipped)} "
+                     "— these were NOT reverted:")
+        for s in report.skipped:
+            lines.append(f"    {s.concept_id}  {s.name}")
+            lines.append(f"      {s.reason}: {s.detail}")
+        lines.append("  This batch did NOT come out whole. Exit code 1.")
+    return "\n".join(lines)

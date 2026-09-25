@@ -20,11 +20,15 @@ from graph.rules import RULES_BY_KIND, admission_state, seminal_concepts
 from graph.schema import REQUIRED_ATTRS, init_db
 from ingest.doc_harvest import (
     MECHANISM_CLASS,
+    SKIP_LINKED,
+    SKIP_RETIRED,
+    SKIP_REVIEWED,
     build_subsystem_context,
     harvest_document,
     match_subsystem_name,
     new_batch_id,
     resolve_subsystem_names,
+    revert_batch,
     select_doc_evidence,
 )
 
@@ -347,3 +351,309 @@ def test_the_prompt_carries_the_vocabulary_and_the_document(conn):
     assert "UNIQUE DOCUMENT BODY" in user
     assert "RCU is NOT one concept" in client.calls[0]["system"]
     assert "max_pool_percent" in client.calls[0]["system"]
+
+
+# --- revert (INV-KK-HARVEST-BATCH-REVERTIBLE) -------------------------------
+
+
+def _counts(conn):
+    return (conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0])
+
+
+def test_harvest_then_revert_restores_the_graph_exactly(conn):
+    """THE TEST THAT MATTERS MOST. A batch that cannot be undone is a batch
+    that must not be run."""
+    _existing_concept(conn, "concept-zswap", "Zswap")
+    ev = _doc_source(conn, "zswap")
+    conn.commit()
+    before_nodes, before_edges = _counts(conn)
+    before_attrs = json.loads(conn.execute(
+        "SELECT attrs FROM nodes WHERE id = 'concept-zswap'").fetchone()[0])
+
+    batch = new_batch_id()
+    result = harvest_document(conn, ev, batch, client=MockLLMClient([
+        _reply([_mech("Zswap"), _mech("Compressed Swap Cache"),
+                _mech("Writeback Throttling")])]))
+    conn.commit()
+    assert len(result.concepts_created) == 2
+    assert len(result.concepts_attached) == 1
+    assert _counts(conn) != (before_nodes, before_edges)
+
+    report = revert_batch(conn, batch)
+    assert report.clean, report.skipped
+    assert len(report.concepts_deleted) == 2
+    assert report.edges_detached == 1
+    assert _counts(conn) == (before_nodes, before_edges)
+    after_attrs = json.loads(conn.execute(
+        "SELECT attrs FROM nodes WHERE id = 'concept-zswap'").fetchone()[0])
+    assert after_attrs == before_attrs, "a pre-existing Concept was modified"
+
+
+def test_revert_detaches_from_a_pre_existing_concept_without_deleting_it(conn):
+    """The edge carries the batch id while its source node does not, so it
+    must be found by the edge. Finding it by the node would either miss it or
+    delete a Concept belonging to the original 97."""
+    _existing_concept(conn, "concept-zswap", "Zswap")
+    ev = _doc_source(conn, "zswap")
+    batch = new_batch_id()
+    harvest_document(conn, ev, batch,
+                     client=MockLLMClient([_reply([_mech("Zswap")])]))
+    conn.commit()
+
+    revert_batch(conn, batch)
+    assert conn.execute(
+        "SELECT 1 FROM nodes WHERE id = 'concept-zswap'").fetchone()
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'extracted-from' "
+        "AND source_id = 'concept-zswap'").fetchone()[0] == 0
+
+
+def test_revert_skips_a_concept_a_human_reviewed_and_says_so(conn):
+    """Per-concept skip with a loud report. Refusing the whole batch was
+    considered and refused: one reviewed concept out of two hundred would block
+    the revert entirely, which is the situation a revert exists for."""
+    ev = _doc_source(conn, "a")
+    batch = new_batch_id()
+    result = harvest_document(conn, ev, batch, client=MockLLMClient([
+        _reply([_mech("Reviewed One"), _mech("Untouched One")])]))
+    conn.commit()
+    reviewed = result.concepts_created[0]
+    attrs = json.loads(conn.execute(
+        "SELECT attrs FROM nodes WHERE id = ?", (reviewed,)).fetchone()[0])
+    attrs.update({"curation_state": "reviewed", "reviewed_by": "curator@example.com",
+                  "reviewed_at": "2026-09-26"})
+    conn.execute("UPDATE nodes SET attrs = ? WHERE id = ?",
+                 (json.dumps(attrs), reviewed))
+    conn.commit()
+
+    report = revert_batch(conn, batch)
+    assert not report.clean
+    assert [s.concept_id for s in report.skipped] == [reviewed]
+    assert report.skipped[0].reason == SKIP_REVIEWED
+    assert "curator@example.com" in report.skipped[0].detail
+    assert conn.execute("SELECT 1 FROM nodes WHERE id = ?", (reviewed,)).fetchone()
+    assert len(report.concepts_deleted) == 1
+
+
+def test_revert_skips_a_retired_concept(conn):
+    """A human judged it wrong; the judgement outlives the batch."""
+    ev = _doc_source(conn, "a")
+    batch = new_batch_id()
+    result = harvest_document(conn, ev, batch,
+                              client=MockLLMClient([_reply([_mech("Wrong One")])]))
+    conn.commit()
+    cid = result.concepts_created[0]
+    attrs = json.loads(conn.execute(
+        "SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()[0])
+    attrs["curation_state"] = "retired"
+    conn.execute("UPDATE nodes SET attrs = ? WHERE id = ?", (json.dumps(attrs), cid))
+    conn.commit()
+
+    report = revert_batch(conn, batch)
+    assert [s.reason for s in report.skipped] == [SKIP_RETIRED]
+    assert conn.execute("SELECT 1 FROM nodes WHERE id = ?", (cid,)).fetchone()
+
+
+def test_revert_skips_a_concept_a_later_paper_run_linked(conn):
+    """Cascading was refused: it restores the node count exactly and destroys
+    paper links a later run computed and paid for."""
+    ev = _doc_source(conn, "a")
+    batch = new_batch_id()
+    result = harvest_document(conn, ev, batch, client=MockLLMClient([
+        _reply([_mech("Linked One"), _mech("Untouched One")])]))
+    conn.commit()
+    linked = result.concepts_created[0]
+
+    add_node(conn, "src-p", "Source", {
+        "url": "https://example.com/p", "source_type": "preprint",
+        "license": "MIT", "title": "A later paper"})
+    add_node(conn, "ev-p", "Evidence", {
+        "artifact_class": "A", "contamination_level": "L0", "text": "t"})
+    add_edge(conn, "sourced-from", "ev-p", "src-p")
+    add_edge(conn, "extracted-from", linked, "ev-p", {"basis": "evidence-text"})
+    conn.commit()
+
+    report = revert_batch(conn, batch)
+    assert [s.concept_id for s in report.skipped] == [linked]
+    assert report.skipped[0].reason == SKIP_LINKED
+    assert conn.execute("SELECT 1 FROM nodes WHERE id = ?", (linked,)).fetchone()
+    assert conn.execute(
+        "SELECT 1 FROM edges WHERE source_id = ? AND target_id = 'ev-p'",
+        (linked,)).fetchone(), "the later paper's link was destroyed"
+
+
+def test_revert_touches_no_other_batch(conn):
+    ev = _doc_source(conn, "a")
+    first = new_batch_id()
+    harvest_document(conn, ev, first,
+                     client=MockLLMClient([_reply([_mech("From First")])]))
+    conn.commit()
+    ev2 = _doc_source(conn, "b")
+    second = new_batch_id()
+    r2 = harvest_document(conn, ev2, second,
+                          client=MockLLMClient([_reply([_mech("From Second")])]))
+    conn.commit()
+
+    report = revert_batch(conn, first)
+    assert report.clean
+    assert conn.execute("SELECT 1 FROM nodes WHERE id = ?",
+                        (r2.concepts_created[0],)).fetchone()
+
+
+def test_a_revert_dry_run_reports_and_deletes_nothing(conn):
+    ev = _doc_source(conn, "a")
+    batch = new_batch_id()
+    harvest_document(conn, ev, batch,
+                     client=MockLLMClient([_reply([_mech("Work Stealing")])]))
+    conn.commit()
+    before = _counts(conn)
+    report = revert_batch(conn, batch, dry_run=True)
+    assert report.dry_run and len(report.concepts_deleted) == 1
+    assert _counts(conn) == before
+
+
+def test_reverting_an_unknown_batch_is_a_clean_no_op(conn):
+    _existing_concept(conn, "concept-1", "Zswap")
+    conn.commit()
+    before = _counts(conn)
+    report = revert_batch(conn, "harvest-2020-01-01-deadbeef")
+    assert report.clean and report.concepts_deleted == []
+    assert _counts(conn) == before
+
+
+# --- the CLI (ALG-KK-DOC-HARVEST-CLI) ---------------------------------------
+
+
+def _db_with_docs(tmp_path, n, text="real prose about a mechanism"):
+    path = tmp_path / "cli.db"
+    c = init_db(path)
+    add_node(c, "sub-mm", "Subsystem", {"name": "Memory Management"})
+    for i in range(n):
+        _doc_source(c, f"d{i}", text=text)
+    c.commit()
+    c.close()
+    return str(path)
+
+
+def test_cli_dry_run_constructs_no_client(tmp_path, monkeypatch, capsys):
+    """ALG-KK-EXTRACT-CLI's contract, followed rather than reinvented: each
+    adapter builds its SDK client in __init__ and that raises without a
+    credential, so sizing a batch has to work for someone who has none."""
+    from ingest import cli_harvest
+
+    def exploding_client_for(provider):
+        raise AssertionError("a dry run must construct no client")
+
+    monkeypatch.setattr(cli_harvest, "client_for", exploding_client_for)
+    db = _db_with_docs(tmp_path, 3)
+    cli_harvest.main(["--db", db, "--dry-run"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["dry_run"] is True
+    assert out["attempted"] == 3 and out["concepts_created"] == 0
+
+
+def test_cli_limit_bounds_what_is_actually_sent(tmp_path, monkeypatch, capsys):
+    """--limit 2 means two documents sent, not two considered."""
+    from ingest import cli_harvest
+
+    client = MockLLMClient([_reply([_mech(f"Mechanism {i}")]) for i in range(10)])
+    monkeypatch.setattr(cli_harvest, "client_for", lambda p: client)
+    db = _db_with_docs(tmp_path, 6)
+    cli_harvest.main(["--db", db, "--limit", "2"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["selected"] == 6
+    assert out["attempted"] == 2
+    assert len(client.calls) == 2
+
+
+def test_cli_limit_applies_after_the_empty_filter(tmp_path, monkeypatch, capsys):
+    from ingest import cli_harvest
+
+    client = MockLLMClient([_reply([_mech(f"M{i}")]) for i in range(10)])
+    monkeypatch.setattr(cli_harvest, "client_for", lambda p: client)
+    path = tmp_path / "cli.db"
+    c = init_db(path)
+    add_node(c, "sub-mm", "Subsystem", {"name": "Memory Management"})
+    for i in range(3):
+        _doc_source(c, f"empty{i}", text="")
+    for i in range(3):
+        _doc_source(c, f"full{i}", text="real prose about a mechanism")
+    c.commit()
+    c.close()
+
+    cli_harvest.main(["--db", str(path), "--limit", "2"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["skipped_empty"] == 3
+    assert out["attempted"] == 2 and len(client.calls) == 2
+
+
+def test_cli_report_names_every_rejection_category(tmp_path, monkeypatch, capsys):
+    """A single 'rejected' count cannot be acted on. Built from the dataclass
+    with asdict, so a field added later cannot be dropped by omission — which
+    is what ALG-KK-EXTRACT-CLI's hand-built dict did for a whole run."""
+    from ingest import cli_harvest
+
+    monkeypatch.setattr(cli_harvest, "client_for", lambda p: MockLLMClient([
+        _reply([_mech("Good One"),
+                _mech("a_tunable", artifact_class="tunable"),
+                _mech("Half One", tradeoffs=[])],
+               subsystem="Nonexistent Subsystem")]))
+    db = _db_with_docs(tmp_path, 1)
+    cli_harvest.main(["--db", db])
+    out = json.loads(capsys.readouterr().out)
+    assert out["concepts_created"] == 1
+    assert out["rejected_not_mechanism"] == 1
+    assert out["rejected_incomplete"] == 1
+    assert out["subsystems_unmatched"] == 1
+    assert out["batch_id"].startswith("harvest-")
+
+
+def test_cli_revert_exits_zero_when_clean(tmp_path, monkeypatch, capsys):
+    from ingest import cli_harvest
+    import sqlite3 as _sqlite3
+
+    monkeypatch.setattr(cli_harvest, "client_for", lambda p: MockLLMClient(
+        [_reply([_mech("Work Stealing")])]))
+    db = _db_with_docs(tmp_path, 1)
+    cli_harvest.main(["--db", db])
+    batch = json.loads(capsys.readouterr().out)["batch_id"]
+
+    with pytest.raises(SystemExit) as exc:
+        cli_harvest.main(["--db", db, "--revert", batch])
+    assert exc.value.code == 0
+    c = _sqlite3.connect(db)
+    assert c.execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind = 'Concept'").fetchone()[0] == 0
+    c.close()
+
+
+def test_cli_revert_exits_nonzero_when_anything_was_skipped(tmp_path, monkeypatch,
+                                                            capsys):
+    """So a partial revert can never be mistaken for a clean one by a script or
+    by a person reading a prompt."""
+    from ingest import cli_harvest
+    import sqlite3 as _sqlite3
+
+    monkeypatch.setattr(cli_harvest, "client_for", lambda p: MockLLMClient(
+        [_reply([_mech("Reviewed One")])]))
+    db = _db_with_docs(tmp_path, 1)
+    cli_harvest.main(["--db", db])
+    batch = json.loads(capsys.readouterr().out)["batch_id"]
+
+    c = _sqlite3.connect(db)
+    cid = c.execute("SELECT id FROM nodes WHERE kind = 'Concept'").fetchone()[0]
+    attrs = json.loads(c.execute(
+        "SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()[0])
+    attrs.update({"curation_state": "reviewed", "reviewed_by": "curator@example.com",
+                  "reviewed_at": "2026-09-26"})
+    c.execute("UPDATE nodes SET attrs = ? WHERE id = ?", (json.dumps(attrs), cid))
+    c.commit()
+    c.close()
+
+    with pytest.raises(SystemExit) as exc:
+        cli_harvest.main(["--db", db, "--revert", batch])
+    assert exc.value.code == 1
+    printed = capsys.readouterr().out
+    assert "SKIPPED" in printed and "curator@example.com" in printed
+    assert "did NOT come out whole" in printed
