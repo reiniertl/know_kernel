@@ -291,10 +291,16 @@ def test_the_link_mechanisms_parked_in_tmp_are_ignored():
 SPEC_ID = re.compile(r"\b(?:ALG|INV|IFC|ANN)-KK-[A-Z0-9-]+")
 
 #: Cited in src/ and absent from the graph. 92 of 221, measured 2026-09-22 —
-#: FORTY-TWO PERCENT. Thirteen modules cite a governing node that was never
+#: FORTY-TWO PERCENT. Thirteen modules cited a governing node that was never
 #: written: scoring.py, inference.py, briefing.py, feed.py, vuln_tracker.py,
 #: repo_tracker.py, validate_sources.py, scanner.py, classifier.py, gate.py,
 #: cli_feed.py, reviewer.py and claim_extractor.py.
+#:
+#: 86 OF 221 AS OF 2026-09-25: validate_sources.py is off that list. All six
+#: ids it cited were authored the day the prose backfill was built, because
+#: storing the fetched text changes what that path DOES and rule 3 does not
+#: allow a behaviour change against nodes that do not exist. Twelve modules
+#: remain.
 #:
 #: THE FIRST VERSION OF THIS SWEEP REPORTED FIVE, AND FIVE WAS NOT A
 #: MEASUREMENT. It batched fifty ids into one `node-info` call, and that
@@ -399,13 +405,6 @@ KNOWN_UNRESOLVED_SPEC_IDS = frozenset({
     "INV-KK-ALL-EVIDENCE-CLASS-A",
     "INV-KK-SCAN-DISCOURSE",
     "INV-KK-UNKNOWN-LICENSE-L4",
-    # src/ingest/validate_sources.py
-    "ALG-KK-CLASSIFY-SOURCE-CONTENT",
-    "ALG-KK-EXTRACT-KERNEL-DOC-REFS",
-    "ALG-KK-RESOLVE-DIRECTORY-SOURCE",
-    "ALG-KK-VALIDATE-SOURCE-CONTENT",
-    "INV-KK-SOURCE-CONTENT-SUFFICIENT",
-    "INV-KK-VALIDATE-RATE-LIMITED",
     # src/ingest/vuln_tracker.py
     "ALG-KK-VULN-TRACK",
     "INV-KK-VULN-CVE-DEDUP",
