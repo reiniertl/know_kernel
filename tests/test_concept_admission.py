@@ -260,3 +260,222 @@ def test_the_sweep_counts_multi_kernel_as_admissible(conn):
     s = check_concept_admission(conn)
     assert s.admissible == 1
     assert s.thin == [] and s.unlinked == []
+
+
+# --- the fourth route, 2026-09-25: canonical documentation ------------------
+#
+# Operator decision. A paper PROPOSES; canonical documentation DEFINES, and
+# only the second admits a Concept at weight 1. The evidence for the
+# distinction is the candidate queue: of 43 names papers proposed, roughly six
+# are established classes.
+
+
+def _doc(conn, n, source_type="kernel-doc"):
+    """A canonical-documentation Source and its Evidence."""
+    add_node(conn, f"src-doc{n}", "Source", {
+        "url": f"https://git.kernel.org/.../tree/Documentation/{n}.rst",
+        "source_type": source_type, "license": "GPL-2.0", "title": f"Doc {n}"})
+    add_node(conn, f"ev-doc{n}", "Evidence", {
+        "artifact_class": "A", "contamination_level": "L0", "text": "body"})
+    add_edge(conn, "sourced-from", f"ev-doc{n}", f"src-doc{n}")
+    return f"ev-doc{n}"
+
+
+def _curation(conn, cid, state, **extra):
+    import json as _json
+    row = conn.execute("SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()
+    attrs = {**_json.loads(row[0]), "curation_state": state, **extra}
+    conn.execute("UPDATE nodes SET attrs = ? WHERE id = ?",
+                 (_json.dumps(attrs), cid))
+
+
+def test_one_document_admits_a_concept_that_one_paper_would_not(conn):
+    """THE PAIR THAT CARRIES THE WHOLE REVERSAL. Identical weight, identical
+    shape, different kind of witness — and the states must differ or the
+    distinction means nothing."""
+    from graph.rules import admission_state, documented_concepts, seminal_concepts
+
+    documented_cid = _concept(conn, "c-doc")
+    _link(conn, documented_cid, _doc(conn, "workqueue"))
+    paper_cid = _concept(conn, "c-paper")
+    _link(conn, paper_cid, _paper(conn, "1"))
+    conn.commit()
+
+    assert concept_weight(conn, documented_cid) == 1
+    assert concept_weight(conn, paper_cid) == 1
+    seminal = seminal_concepts(conn)
+    docs = documented_concepts(conn)
+    assert admission_state(conn, documented_cid, seminal, docs) == "documented"
+    assert admission_state(conn, paper_cid, seminal, docs) == "thin"
+
+
+def test_two_documents_needed_no_new_route_at_all(conn):
+    """Checked BEFORE the fourth route was added. concept_weight counts
+    DISTINCT Sources with no source_type filter, so two docs already reached
+    weight 2. The fourth route exists solely for the one-document case."""
+    from graph.rules import admission_state, seminal_concepts
+
+    cid = _concept(conn, "c-1")
+    for name in ("workqueue", "cgroup-v2"):
+        _link(conn, cid, _doc(conn, name))
+    conn.commit()
+    assert concept_weight(conn, cid) == ADMISSIBLE_WEIGHT
+    assert admission_state(conn, cid, seminal_concepts(conn)) == "admissible"
+
+
+def test_a_documented_concept_at_weight_two_still_reads_admissible(conn):
+    """The routes are ordered so a Concept clearing an earlier bar keeps
+    reporting the earlier state. The census must stay comparable across every
+    amendment, or 'admissible: 69' means something different each week."""
+    from graph.rules import admission_state, seminal_concepts
+
+    cid = _concept(conn, "c-1")
+    _link(conn, cid, _doc(conn, "workqueue"))
+    _link(conn, cid, _paper(conn, "1"))
+    conn.commit()
+    assert admission_state(conn, cid, seminal_concepts(conn)) == "admissible"
+
+
+def test_only_the_declared_source_types_are_canonical_documentation(conn):
+    """IFC-KK-DOC-DEFINED-PROVENANCE. The set is small and closed: every type
+    in it is a witness granted the power to admit at weight 1."""
+    from graph.rules import DOC_SOURCE_TYPES, documented_concepts
+
+    assert DOC_SOURCE_TYPES == ("kernel-doc",)
+    for excluded in ("preprint", "conference-paper", "vulnerability-database",
+                     "article", "discourse"):
+        assert excluded not in DOC_SOURCE_TYPES
+
+    cid = _concept(conn, "c-cve")
+    _link(conn, cid, _doc(conn, "cve", source_type="vulnerability-database"))
+    conn.commit()
+    assert documented_concepts(conn) == set(), (
+        "a CVE record is authoritative about an instance and silent about "
+        "whether the mechanism it names is an established class")
+
+
+def test_documented_concepts_counts_concepts_and_not_every_node_kind(conn):
+    """THE TRAP THAT PRODUCED A WRONG NUMBER TWICE. Without the kind filter
+    this join returns 153 against a corpus of 97 — PerformanceProfile 50,
+    KernelInvariant 46, FailureMode 45, InteractionProtocol 12, all hanging off
+    the same doc Evidence."""
+    from graph.rules import documented_concepts
+
+    ev = _doc(conn, "workqueue")
+    add_node(conn, "pp-1", "PerformanceProfile", {
+        "metric": "latency", "complexity": "O(1)", "best_case": "a",
+        "worst_case": "b", "typical_case": "c", "conditions": "d",
+        "artifact_class": "abstracted-mechanism"})
+    add_edge(conn, "extracted-from", "pp-1", ev)
+    conn.commit()
+    assert documented_concepts(conn) == set()
+
+
+# --- retired: a state flip, never a delete ---------------------------------
+
+
+def test_a_retired_concept_is_admissible_under_no_route(conn):
+    """Operator decision 2026-09-25. Three papers is ample evidence; a human
+    judged the Concept wrong, which outranks all of it."""
+    from graph.rules import admission_state, seminal_concepts
+
+    cid = _concept(conn, "c-1")
+    for n in ("1", "2", "3"):
+        _link(conn, cid, _paper(conn, n))
+    _curation(conn, cid, "retired")
+    conn.commit()
+    assert concept_weight(conn, cid) == 3
+    assert admission_state(conn, cid, seminal_concepts(conn)) == "retired"
+
+
+def test_retirement_outranks_even_the_seminal_marker(conn):
+    cid = _concept(conn, "c-1")
+    _link(conn, cid, _paper(conn, "1"))
+    add_edge(conn, "defined-by", cid, "src-1")
+    _curation(conn, cid, "retired")
+    conn.commit()
+    from graph.rules import admission_state, seminal_concepts
+    assert admission_state(conn, cid, seminal_concepts(conn)) == "retired"
+
+
+def test_retiring_keeps_the_node_and_every_edge(conn):
+    """A state flip, never a delete. Papers already linked to the Concept keep
+    their links, which is the whole reason the decision went this way."""
+    cid = _concept(conn, "c-1")
+    _link(conn, cid, _paper(conn, "1"))
+    _curation(conn, cid, "retired")
+    conn.commit()
+    assert conn.execute("SELECT 1 FROM nodes WHERE id = ?", (cid,)).fetchone()
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'extracted-from' "
+        "AND source_id = ?", (cid,)).fetchone()[0] == 1
+
+
+# --- curation and admission are orthogonal axes ----------------------------
+
+
+def test_harvested_and_reviewed_reach_the_same_admission_state(conn):
+    """BOTH SIDES, WHICH IS THE POINT. Admission measures EVIDENCE; curation
+    measures HUMAN ATTENTION. A harvested Concept at weight 2 is as well
+    evidenced as a reviewed one at weight 2, and making admission depend on
+    review would turn the census into a review-progress bar that collapses to
+    near zero after any harvest and says nothing about the vocabulary."""
+    from graph.rules import admission_state, seminal_concepts
+
+    harvested = _concept(conn, "c-harvested")
+    reviewed = _concept(conn, "c-reviewed")
+    for cid, prefix in ((harvested, "h"), (reviewed, "r")):
+        for n in (f"{prefix}1", f"{prefix}2"):
+            _link(conn, cid, _paper(conn, n))
+    _curation(conn, harvested, "harvested", harvest_batch="batch-1")
+    _curation(conn, reviewed, "reviewed",
+              reviewed_by="curator@example.com", reviewed_at="2026-09-25")
+    conn.commit()
+
+    seminal = seminal_concepts(conn)
+    assert admission_state(conn, harvested, seminal) == "admissible"
+    assert admission_state(conn, reviewed, seminal) == "admissible"
+
+
+def test_the_sweep_counts_documented_inside_admissible_and_lists_it(conn):
+    """Counted inside admissible so the headline number stays one number, and
+    listed separately so the harvest's contribution stays attributable rather
+    than merged into a total that was already 69."""
+    doc_cid = _concept(conn, "c-doc")
+    _link(conn, doc_cid, _doc(conn, "workqueue"))
+    heavy = _concept(conn, "c-heavy")
+    for n in ("1", "2"):
+        _link(conn, heavy, _paper(conn, n))
+    thin_cid = _concept(conn, "c-thin")
+    _link(conn, thin_cid, _paper(conn, "3"))
+    gone = _concept(conn, "c-gone")
+    _curation(conn, gone, "retired")
+    conn.commit()
+
+    sweep = check_concept_admission(conn)
+    assert sweep.admissible == 2, "the documented one and the weight-2 one"
+    assert sweep.documented == ["c-doc"]
+    assert sweep.thin == ["c-thin"]
+    assert sweep.retired == ["c-gone"]
+    assert sweep.unlinked == []
+    assert sweep.total == 4
+
+
+def test_the_measured_census_of_the_live_corpus_does_not_move(conn):
+    """The zero is the point. Measured 2026-09-25 against data/master.db:
+    69 admissible, 11 thin, 17 unlinked, 0 seminal of 97 — and ZERO Concepts
+    reach a kernel-doc Source, so the fourth route changes nothing today. This
+    fixture reproduces that shape in miniature: adding the route must not move
+    a corpus that has no doc-linked Concepts in it."""
+    heavy = _concept(conn, "c-heavy")
+    for n in ("1", "2"):
+        _link(conn, heavy, _paper(conn, n))
+    thin_cid = _concept(conn, "c-thin")
+    _link(conn, thin_cid, _paper(conn, "3"))
+    _concept(conn, "c-orphan")
+    conn.commit()
+
+    sweep = check_concept_admission(conn)
+    assert (sweep.admissible, sweep.thin, sweep.unlinked) == (
+        1, ["c-thin"], ["c-orphan"])
+    assert sweep.documented == [] and sweep.retired == []

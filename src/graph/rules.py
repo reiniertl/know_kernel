@@ -592,10 +592,21 @@ class AdmissionSweep:
     unlinked: list[str]
     seminal: int
     violations: list[Violation]
+    #: Concepts admitted by the fourth route, 2026-09-25 — provenance in
+    #: canonical documentation. Counted INSIDE admissible, and listed here as
+    #: well so the harvest's contribution is attributable rather than merged
+    #: into a number that was already 69.
+    documented: list[str] = field(default_factory=list)
+    #: Retired Concepts, which are admissible under no route. Reported apart
+    #: from every other bucket: a retirement is a human judgement about the
+    #: concept, not a fact about the corpus like thin, and not a gap like
+    #: unlinked.
+    retired: list[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
-        return self.admissible + len(self.thin) + len(self.unlinked)
+        return (self.admissible + len(self.thin) + len(self.unlinked)
+                + len(self.retired))
 
 
 def concept_weight(conn: sqlite3.Connection, concept_id: str) -> int:
@@ -645,8 +656,65 @@ def kernel_breadth(conn: sqlite3.Connection, concept_id: str) -> int:
     return row[0] if row else 0
 
 
+#: IFC-KK-DOC-DEFINED-PROVENANCE. The source types that count as canonical
+#: documentation for INV-KK-CONCEPT-ADMISSION's fourth route, added 2026-09-25.
+#:
+#: SMALL AND CLOSED, DELIBERATELY. Every type added here is a new class of
+#: witness granted the power to admit a Concept at weight 1. preprint and
+#: conference-paper can never join it without repealing the paper ban;
+#: vulnerability-database is the near-miss and is out, because a CVE record is
+#: authoritative about an instance and silent about whether the mechanism it
+#: names is an established class. Other kernels' documentation trees are what
+#: would legitimately join it — see ANN-KK-KERNEL-CURATION-GAP.
+DOC_SOURCE_TYPES = ("kernel-doc",)
+
+
+def documented_concepts(conn: sqlite3.Connection) -> set[str]:
+    """Every Concept whose provenance reaches a canonical-documentation Source.
+
+    One query, for the reason seminal_concepts is one query: the concept
+    browser paginates and a per-row membership check is what
+    INV-KK-WEB-QUERY-BOUNDED forbids.
+
+    THE kind = 'Concept' FILTER IS LOAD-BEARING AND WAS GOT WRONG TWICE. The
+    same join without it counts every node kind hanging off doc Evidence and
+    returns 153 against a corpus of 97 Concepts — PerformanceProfile 50,
+    KernelInvariant 46, FailureMode 45, InteractionProtocol 12. The true
+    Concept count on 2026-09-25 is ZERO.
+    """
+    placeholders = ", ".join("?" for _ in DOC_SOURCE_TYPES)
+    rows = conn.execute(
+        "SELECT DISTINCT e.source_id FROM edges e "
+        "JOIN nodes n ON n.id = e.source_id AND n.kind = 'Concept' "
+        "JOIN edges s ON s.source_id = e.target_id AND s.kind = 'sourced-from' "
+        "JOIN nodes src ON src.id = s.target_id "
+        "WHERE e.kind = 'extracted-from' "
+        f"AND json_extract(src.attrs, '$.source_type') IN ({placeholders})",
+        DOC_SOURCE_TYPES,
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def retired_concepts(conn: sqlite3.Connection) -> set[str]:
+    """Every Concept a human has judged wrong, in one query.
+
+    Retirement is a STATE FLIP and never a delete (INV-KK-CONCEPT-CURATION-
+    VOCABULARY, operator decision 2026-09-25), so these nodes still exist and
+    still carry their edges — which is exactly why the sweep has to ask.
+    """
+    return {
+        r[0] for r in conn.execute(
+            "SELECT id FROM nodes WHERE kind = 'Concept' "
+            "AND json_extract(attrs, '$.curation_state') = 'retired'")
+    }
+
+
 def admission_state(
-    conn: sqlite3.Connection, concept_id: str, seminal: set[str]
+    conn: sqlite3.Connection,
+    concept_id: str,
+    seminal: set[str],
+    documented: set[str] | None = None,
+    retired: set[str] | None = None,
 ) -> str:
     """Classify ONE Concept: seminal, admissible, thin or unlinked.
 
@@ -660,6 +728,20 @@ def admission_state(
     `seminal` is passed in rather than queried here so that a caller classifying
     many concepts pays for one query and not one per concept.
     """
+    if documented is None:
+        documented = documented_concepts(conn)
+    if retired is None:
+        retired = retired_concepts(conn)
+
+    # FIRST, and ahead of every route. A retired Concept is admissible under
+    # none of them whatever its weight: a human has judged it wrong, which is a
+    # statement about the evidence and not about whether anyone has read it.
+    # Operator decision 2026-09-25. This is the ONLY point at which curation
+    # state and admission touch — the two are otherwise orthogonal axes, and
+    # making admission depend on review would turn the census into a
+    # review-progress bar that collapses after any harvest.
+    if concept_id in retired:
+        return "retired"
     if concept_id in seminal:
         return "seminal"
     weight = concept_weight(conn, concept_id)
@@ -670,6 +752,14 @@ def admission_state(
     # being relabelled — the states must stay comparable across the amendment.
     if kernel_breadth(conn, concept_id) >= ADMISSIBLE_KERNELS:
         return "multi-kernel"
+    # The fourth route, 2026-09-25, and last for the same reason the third is
+    # not first. A Concept defined in TWO documents already reached weight 2
+    # through the first disjunct — concept_weight has no source_type filter, so
+    # that case needed no new rule and was checked before this one was added.
+    # This exists for the ONE-document case, which the harvest will produce far
+    # more of.
+    if concept_id in documented:
+        return "documented"
     return "unlinked" if weight == 0 else "thin"
 
 
@@ -688,24 +778,34 @@ def check_concept_admission(conn: sqlite3.Connection) -> AdmissionSweep:
     doing its job, and the thin list is where the signal actually is.
     """
     seminal = seminal_concepts(conn)
+    documented_set = documented_concepts(conn)
+    retired_set = retired_concepts(conn)
     admissible = 0
     thin: list[str] = []
     unlinked: list[str] = []
+    documented: list[str] = []
+    retired: list[str] = []
     violations: list[Violation] = []
 
     for (concept_id,) in conn.execute(
         "SELECT id FROM nodes WHERE kind = 'Concept' ORDER BY id"
     ).fetchall():
-        state = admission_state(conn, concept_id, seminal)
-        if state in ("seminal", "admissible", "multi-kernel"):
+        state = admission_state(conn, concept_id, seminal,
+                                documented_set, retired_set)
+        if state == "retired":
+            retired.append(concept_id)
+        elif state in ("seminal", "admissible", "multi-kernel", "documented"):
             admissible += 1
+            if state == "documented":
+                documented.append(concept_id)
         elif state == "unlinked":
             unlinked.append(concept_id)
         else:
             thin.append(concept_id)
 
     return AdmissionSweep(admissible=admissible, thin=thin, unlinked=unlinked,
-                          seminal=len(seminal), violations=violations)
+                          seminal=len(seminal), violations=violations,
+                          documented=documented, retired=retired)
 
 
 _ISO_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
