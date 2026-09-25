@@ -98,8 +98,20 @@ def build_vocabulary_context(conn: sqlite3.Connection) -> str:
     and then no matcher can help. Mirrors
     claim_extractor.build_claim_extraction_context, which has always done this.
     """
+    # INV-KK-VOCABULARY-EXCLUDES-RETIRED. A WHERE clause and not a post-filter:
+    # this string goes into a prompt and the cost is tokens — measured
+    # 2026-09-25, the vocabulary block is 595 tokens across 3,325 papers, more
+    # than the paper text itself, and it grows with every harvest.
+    #
+    # THIS IS THE DIFFERENCE BETWEEN RETIRING A CONCEPT AND PRETENDING TO.
+    # Without it a curator could retire an entry and the next extraction run
+    # would put it straight back in front of the model under "choose concept
+    # names from this list", collect fresh links, and rise back through the
+    # admission census. COALESCE because absent is NOT retired: all 97 Concepts
+    # that predate the field stay in the vocabulary.
     rows = conn.execute(
-        "SELECT json_extract(attrs, '$.name') FROM nodes WHERE kind = 'Concept'"
+        "SELECT json_extract(attrs, '$.name') FROM nodes WHERE kind = 'Concept' "
+        "AND COALESCE(json_extract(attrs, '$.curation_state'), '') != 'retired'"
     ).fetchall()
     names = sorted({r[0] for r in rows if r[0]})
     if not names:
@@ -399,6 +411,47 @@ SIGNED_CURATION_STATES = ("reviewed",)
 #: rejects a Concept missing any required attribute, so a seventh requirement
 #: would make all 97 existing Concepts unwritable at a stroke.
 CURATION_ATTRS = ("curation_state", "harvest_batch", "reviewed_by", "reviewed_at")
+
+
+def colliding_concepts(
+    conn: sqlite3.Connection, max_distance: int = DEFAULT_MAX_DISTANCE
+) -> set[str]:
+    """Concept ids whose name matches another Concept under the real matcher.
+
+    IFC-KK-CONCEPT-REVIEW-PRIORITY's first sort key. It uses the SAME three
+    tiers fuzzy_match_concept uses — exact, prefix either way, Levenshtein —
+    because a queue that flagged collisions the matcher would not actually make
+    would be reporting a different program than the one that runs.
+
+    MEASURED 2026-09-25 AND THE PLAN'S PREMISE WAS WRONG. "Zero homonyms today"
+    is true of EXACT names and false of the matcher: there are FOUR collisions
+    among the 97. Three are io_uring against "io_uring Asynchronous I/O",
+    "io_uring Database Integration" and "io_uring Observability Tool" — real
+    near-duplicates a human should merge or distinguish. The fourth is Vmalloc
+    against Kmalloc, a FALSE POSITIVE at distance 1 between two different
+    allocators, and it is the more important of the four: see
+    ALG-KK-DOC-HARVEST for why it is a risk to the harvest specifically.
+
+    ONE QUERY, NOT ONE PER ROW. Read once per render like seminal_concepts, for
+    the reason INV-KK-WEB-QUERY-BOUNDED gives.
+    """
+    rows = [
+        (r[0], normalise_concept_name(r[1]))
+        for r in conn.execute(
+            "SELECT id, json_extract(attrs, '$.name') FROM nodes "
+            "WHERE kind = 'Concept'"
+        ).fetchall() if r[1]
+    ]
+    colliding: set[str] = set()
+    for i in range(len(rows)):
+        id_a, a = rows[i]
+        for j in range(i + 1, len(rows)):
+            id_b, b = rows[j]
+            if (a == b or a.startswith(b) or b.startswith(a)
+                    or levenshtein_distance(a, b) <= max_distance):
+                colliding.add(id_a)
+                colliding.add(id_b)
+    return colliding
 
 
 def curation_state(attrs: dict | None) -> str:

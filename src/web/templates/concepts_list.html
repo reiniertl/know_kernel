@@ -19,9 +19,25 @@
     <option value="{{ s }}" {% if state_filter == s %}selected{% endif %}>{{ s }}</option>
     {% endfor %}
   </select>
+  <select name="curation">
+    <option value="">any curation</option>
+    {% for s in curation_states %}
+    <option value="{{ s }}" {% if curation_filter == s %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
   <input type="hidden" name="per_page" value="{{ per_page }}">
   <button type="submit">Filter</button>
 </form>
+
+{% if curation_filter %}
+<p class="muted">
+  Showing <strong>{{ curation_filter }}</strong> concepts across the
+  <em>whole vocabulary</em>. Unlike the admission filter beside it,
+  curation state is stored rather than computed, so this is a real query and
+  page {{ page }} is page {{ page }} of the matches &mdash; which is what makes
+  <strong>harvested</strong> a usable review queue rather than a sample.
+</p>
+{% endif %}
 
 {% if state_filter %}
 <p class="muted">
@@ -34,13 +50,14 @@
 
 <table>
   <thead>
-    <tr><th>Concept</th><th>Subsystem</th><th>Papers</th><th>Kernels</th><th>Admission</th></tr>
+    <tr><th>Concept</th><th>Subsystem</th><th>Papers</th><th>Kernels</th><th>Admission</th><th>Curation</th></tr>
   </thead>
   <tbody>
     {% for c in concepts %}
     <tr>
       <td>
         <a href="/concepts/{{ c.id }}">{{ c.name }}</a>
+        {% if c.collides %}<span class="badge badge-thin" title="This name matches another concept under the extractor's own matcher — merge it, or record why the two are different. Until then both collect evidence separately.">name collides</span>{% endif %}
         {% if c.description %}<div class="muted small">{{ c.description[:140] }}{% if c.description|length > 140 %}&hellip;{% endif %}</div>{% endif %}
       </td>
       <td>{{ c.subsystem or '—' }}</td>
@@ -49,16 +66,17 @@
       </td>
       <td>{{ c.kernels | join(', ') if c.kernels else '—' }}</td>
       <td><span class="badge badge-{{ c.state }}">{{ c.state }}</span></td>
+      <td><span class="badge badge-{{ c.curation }}">{{ c.curation }}</span></td>
     </tr>
     {% else %}
-    <tr><td colspan="5">No concepts match.</td></tr>
+    <tr><td colspan="6">No concepts match.</td></tr>
     {% endfor %}
   </tbody>
 </table>
 
 <p>
-  {% if page > 1 %}<a href="/concepts?page={{ page - 1 }}&per_page={{ per_page }}&state={{ state_filter }}&q={{ q }}">&larr; Previous</a>{% endif %}
+  {% if page > 1 %}<a href="/concepts?page={{ page - 1 }}&per_page={{ per_page }}&state={{ state_filter }}&curation={{ curation_filter }}&q={{ q }}">&larr; Previous</a>{% endif %}
   <span class="muted">page {{ page }}</span>
-  {% if has_next %}<a href="/concepts?page={{ page + 1 }}&per_page={{ per_page }}&state={{ state_filter }}&q={{ q }}">Next &rarr;</a>{% endif %}
+  {% if has_next %}<a href="/concepts?page={{ page + 1 }}&per_page={{ per_page }}&state={{ state_filter }}&curation={{ curation_filter }}&q={{ q }}">Next &rarr;</a>{% endif %}
 </p>
 {% endblock %}

@@ -296,6 +296,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
     async def concepts_list(
         request: Request,
         state: str | None = None,
+        curation: str | None = None,
         q: str | None = None,
         page: int = Query(1, ge=1),
         per_page: int = Query(50, ge=10, le=200),
@@ -314,6 +315,12 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         invariant exists to forbid. graph.rules.admission_state classifies one row,
         and the sweep tallies that same function, so page and invariant cannot drift.
         """
+        from graph.concept_vocabulary import (
+            CURATION_STATES,
+            DEFAULT_CURATION_STATE,
+            colliding_concepts,
+            curation_state as read_curation_state,
+        )
         from graph.rules import admission_state, seminal_concepts
 
         conn = request.app.state.conn
@@ -322,6 +329,29 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         if q:
             sql += " AND lower(json_extract(attrs, '$.name')) LIKE ?"
             params.append(f"%{q.lower()}%")
+
+        # THE CURATION FILTER IS A WHERE CLAUSE AND THE ADMISSION FILTER BELOW
+        # IS NOT, and the difference is the whole point. Admission state is
+        # COMPUTED per row and is not a column, so ?state= can only narrow the
+        # rows already fetched. curation_state IS a stored attribute, so
+        # ?curation= filters the whole corpus and returns rows from beyond the
+        # first page. A review queue that inherited the admission filter's
+        # limitation would show a curator 50 of 3,000 harvested concepts and
+        # call it the backlog.
+        #
+        # ABSENT COUNTS AS 'harvested', matching concept_vocabulary.
+        # curation_state: absent asserts the same thing — nobody has reviewed
+        # this — and it is true of all 97 Concepts that predate the field. A
+        # queue that showed empty while 97 unreviewed concepts sat in the
+        # corpus would be wrong in the most misleading direction.
+        if curation in CURATION_STATES:
+            if curation == DEFAULT_CURATION_STATE:
+                sql += (" AND COALESCE(json_extract(attrs, '$.curation_state'), '')"
+                        " IN ('', ?)")
+            else:
+                sql += " AND json_extract(attrs, '$.curation_state') = ?"
+            params.append(curation)
+
         sql += " ORDER BY json_extract(attrs, '$.name') LIMIT ? OFFSET ?"
         params.extend([per_page + 1, (page - 1) * per_page])
 
@@ -329,7 +359,10 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         has_next = len(rows) > per_page
         rows = rows[:per_page]
 
+        # Both read ONCE for the whole page, never once per row —
+        # INV-KK-WEB-QUERY-BOUNDED.
         seminal = seminal_concepts(conn)
+        colliding = colliding_concepts(conn)
         concepts = []
         for concept_id, raw in rows:
             attrs = json.loads(raw) if isinstance(raw, str) else (raw or {})
@@ -341,6 +374,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "papers": concept_weight(conn, concept_id),
                 "kernels": _concept_kernels(conn, concept_id),
                 "state": admission_state(conn, concept_id, seminal),
+                "curation": read_curation_state(attrs),
+                "collides": concept_id in colliding,
             })
 
         # Filtering AFTER classification is deliberate and is a known limit: the
@@ -352,11 +387,21 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         if state:
             concepts = [c for c in concepts if c["state"] == state]
 
+        # IFC-KK-CONCEPT-REVIEW-PRIORITY: collisions first, then paper count
+        # descending, then name. A collision is rare, actionable and it
+        # COMPOUNDS — an unmerged duplicate splits all future evidence between
+        # two entries forever — while a wrong description on a concept 440
+        # papers point at misleads the most readers. Applied after the state
+        # filter so the order is the order of what is shown.
+        concepts.sort(key=lambda c: (not c["collides"], -c["papers"], c["name"]))
+
         return templates.TemplateResponse(
             request, "concepts_list.html",
             {
                 "concepts": concepts,
                 "state_filter": state or "",
+                "curation_filter": curation or "",
+                "curation_states": list(CURATION_STATES),
                 "q": q or "",
                 "page": page,
                 "per_page": per_page,
