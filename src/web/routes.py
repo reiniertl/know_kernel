@@ -83,6 +83,8 @@ WEB_MUTATION_ALLOWLIST = (
     "/api/link-confirm/",
     "/api/concept-admit/",   # promote a queued candidate into the vocabulary
     "/api/concept-dismiss/",  # drop a queued name that is not a concept
+    "/api/concept/",          # edit an existing Concept — the review mechanism
+    "/api/concept-retire/",   # a state flip, never a delete
 )
 
 
@@ -530,6 +532,102 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "concept_id": concept_id,
             "normalised": normalised,
             "admitted_by": identity["reviewer"],
+        })
+
+    @app.put("/api/concept/{concept_id}")
+    async def api_concept_edit(request: Request, concept_id: str):
+        """A human edits a Concept — the review mechanism (ALG-KK-WEB-CONCEPT-EDIT).
+
+        NOTHING HAS EVER BEEN ABLE TO DO THIS. Every other curated surface in
+        this file has an edit route; the vocabulary did not, and after
+        ALG-KK-DOC-HARVEST most Concepts are machine-written, which makes this
+        the difference between a curated vocabulary and an unedited dump.
+
+        EDITING IS REVIEWING. The six attributes and curation_state /
+        reviewed_by / reviewed_at are written in ONE operation, because a human
+        who fixed a description has read it and a second button would guarantee
+        the state is wrong for everyone who forgets.
+
+        INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION: the editor is
+        request.state.user["reviewer"]. A reviewed_by in the body is IGNORED,
+        not rejected, matching api_concept_admit — so no request can file a
+        review under someone else's name.
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/concept/ is on the allowlist.
+
+        The completeness rule is NOT re-checked here — one implementation, in
+        update_concept, testable without a router.
+        """
+        from graph.concept_vocabulary import update_concept
+
+        identity = getattr(request.state, "user", None)
+        if identity is None:
+            # Defensive: the gate never lets an anonymous request this far.
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+        conn = request.app.state.conn
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        try:
+            update_concept(
+                conn, concept_id,
+                attrs={
+                    "name": body.get("name"),
+                    "description": body.get("description"),
+                    "artifact_class": body.get("artifact_class"),
+                    "key_properties": body.get("key_properties"),
+                    "tradeoffs": body.get("tradeoffs"),
+                    "design_rationale": body.get("design_rationale"),
+                },
+                reviewed_by=identity["reviewer"],
+            )
+        except ValueError as exc:
+            status = 404 if str(exc).startswith("No Concept") else 422
+            return JSONResponse({"error": str(exc)}, status_code=status)
+
+        conn.commit()
+        return JSONResponse({
+            "concept_id": concept_id,
+            "curation_state": "reviewed",
+            "reviewed_by": identity["reviewer"],
+        })
+
+    @app.post("/api/concept-retire/{concept_id}")
+    async def api_concept_retire(request: Request, concept_id: str):
+        """A human judges a Concept wrong (ALG-KK-WEB-CONCEPT-RETIRE).
+
+        A STATE FLIP AND NEVER A DELETE. Every edge is kept: papers may already
+        link to it, and deleting the node destroys links that are not this
+        decision's to destroy. The Concept then vanishes from the vocabulary the
+        extractor is shown (INV-KK-VOCABULARY-EXCLUDES-RETIRED) and is
+        admissible under no route (INV-KK-CONCEPT-ADMISSION).
+
+        SEPARATE FROM THE EDIT ROUTE BECAUSE IT IS A DIFFERENT CLAIM. An edit
+        says "this is right, here is the correction"; a retirement says "this
+        should not be in the vocabulary at all". A seventh field on the edit
+        form would make the most consequential action the easiest to take by
+        accident. Un-retiring is the edit route, which returns it to 'reviewed'.
+        """
+        from graph.concept_vocabulary import retire_concept
+
+        identity = getattr(request.state, "user", None)
+        if identity is None:
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+        conn = request.app.state.conn
+        try:
+            retire_concept(conn, concept_id, reviewed_by=identity["reviewer"])
+        except ValueError as exc:
+            status = 404 if str(exc).startswith("No Concept") else 422
+            return JSONResponse({"error": str(exc)}, status_code=status)
+
+        conn.commit()
+        return JSONResponse({
+            "concept_id": concept_id,
+            "curation_state": "retired",
+            "reviewed_by": identity["reviewer"],
         })
 
     @app.post("/api/concept-dismiss/{normalised:path}")

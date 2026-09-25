@@ -33,6 +33,87 @@
   {% endif %}
 </div>
 
+{# THE REVIEW MECHANISM. Nothing could edit a Concept until 2026-09-25 — every
+   other curated surface in this application had an edit route and the
+   vocabulary did not. Editing IS reviewing: saving writes the six attributes
+   and the curation fields in one operation (ALG-KK-WEB-CONCEPT-EDIT). #}
+<div class="attrs-section">
+  <h3>
+    Review
+    <span class="badge badge-{{ attrs.get('curation_state') or 'harvested' }}">{{ attrs.get('curation_state') or 'harvested' }}</span>
+  </h3>
+  <p class="muted small">
+    {% if attrs.get('reviewed_by') %}
+      Last reviewed by {{ attrs.reviewed_by }}{% if attrs.get('reviewed_at') %} on {{ attrs.reviewed_at }}{% endif %}.
+    {% else %}
+      No human has reviewed this entry.
+    {% endif %}
+    {% if attrs.get('harvest_batch') %}
+      Harvested by batch <code>{{ attrs.harvest_batch }}</code>.
+    {% endif %}
+  </p>
+
+  <form id="concept-edit-form" onsubmit="return saveConcept(event)">
+    <p><label>Name<br><input name="name" value="{{ attrs.get('name') or '' }}" style="width:100%"></label></p>
+    <p><label>Description<br><textarea name="description" rows="4" style="width:100%">{{ attrs.get('description') or '' }}</textarea></label></p>
+    <p><label>Artifact class<br><input name="artifact_class" value="{{ attrs.get('artifact_class') or '' }}" style="width:100%"></label></p>
+    <p><label>Key properties, one per line<br><textarea name="key_properties" rows="3" style="width:100%">{{ (attrs.get('key_properties') or []) | join('\n') }}</textarea></label></p>
+    <p><label>Tradeoffs, one per line<br><textarea name="tradeoffs" rows="3" style="width:100%">{{ (attrs.get('tradeoffs') or []) | join('\n') }}</textarea></label></p>
+    <p><label>Design rationale<br><textarea name="design_rationale" rows="3" style="width:100%">{{ attrs.get('design_rationale') or '' }}</textarea></label></p>
+    <p>
+      <button type="submit">Save &mdash; this marks it reviewed</button>
+      {% if attrs.get('curation_state') != 'retired' %}
+      <button type="button" onclick="retireConcept()" style="margin-left:1rem;">Retire</button>
+      {% endif %}
+      <span id="concept-edit-status" class="muted small"></span>
+    </p>
+    <p class="muted small">
+      Saving marks this reviewed even if you changed nothing &mdash; pressing
+      save says you have read it and it is right as it stands. Retiring keeps
+      the entry and all its links but withdraws it from the vocabulary the
+      extractor is shown.
+    </p>
+  </form>
+</div>
+
+<script>
+function conceptLines(v) {
+  return v.split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
+}
+function conceptStatus(msg) {
+  document.getElementById("concept-edit-status").textContent = msg;
+}
+async function saveConcept(ev) {
+  ev.preventDefault();
+  var f = document.getElementById("concept-edit-form");
+  conceptStatus("saving\u2026");
+  var r = await fetch("/api/concept/{{ node.id }}", {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      name: f.name.value,
+      description: f.description.value,
+      artifact_class: f.artifact_class.value,
+      key_properties: conceptLines(f.key_properties.value),
+      tradeoffs: conceptLines(f.tradeoffs.value),
+      design_rationale: f.design_rationale.value
+    })
+  });
+  var body = await r.json();
+  if (r.ok) { location.reload(); }
+  else { conceptStatus(body.error || "save failed"); }
+  return false;
+}
+async function retireConcept() {
+  if (!confirm("Retire this concept? It keeps its links but is withdrawn from the vocabulary the extractor is shown.")) return;
+  conceptStatus("retiring\u2026");
+  var r = await fetch("/api/concept-retire/{{ node.id }}", {method: "POST"});
+  var body = await r.json();
+  if (r.ok) { location.reload(); }
+  else { conceptStatus(body.error || "retire failed"); }
+}
+</script>
+
 {# The papers behind this concept: the same traversal the admission rule walks,
    so the section shows WHY the badge says what it says. Bounded to a preview —
    Scheduling Classes has 440 — with the full list on its own paginated route. #}

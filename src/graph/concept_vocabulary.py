@@ -476,3 +476,128 @@ def curation_reviewed(attrs: dict | None) -> bool:
     entry is the one answer that is not.
     """
     return curation_state(attrs) in SIGNED_CURATION_STATES
+
+
+def update_concept(
+    conn: sqlite3.Connection,
+    concept_id: str,
+    attrs: dict,
+    reviewed_by: str,
+    reviewed_at: str = "",
+) -> None:
+    """A human edits a Concept, and that edit IS the review
+    (ALG-KK-WEB-CONCEPT-EDIT).
+
+    NOTHING HAS EVER BEEN ABLE TO DO THIS. Verified 2026-09-25 by sweeping
+    every @app.put and @app.post in src/web/routes.py: a human could edit a
+    summary, an abstract, a venue, a review, could confirm a link, could admit
+    or dismiss a CANDIDATE — and could not change one word of a Concept that
+    already existed. The vocabulary was the only curated surface in this
+    application with no edit route.
+
+    EDITING IS REVIEWING, IN ONE OPERATION. The six attributes and the three
+    curation fields are written together. A human who fixed a description has
+    read it, and making them press a second button to say so guarantees the
+    state is wrong for everyone who forgets — a review field that undercounts
+    is worse than none, because the queue then shows work already done.
+
+    A SAVE THAT CHANGES NOTHING STILL MARKS IT REVIEWED. Decision 2026-09-25.
+    Pressing save is an affirmative act: it says "I have read this and it is
+    right as it stands", which is exactly what reviewed means and is a useful
+    answer for a harvested concept the model got correct. Rendering the form is
+    not — a GET asserts nothing, and this function is never called by one.
+
+    THE SIX-ATTRIBUTE RULE IS NOT CIRCUMVENTABLE THROUGH THIS PATH.
+    graph.engine.update_node_attrs refuses a merge that would leave a required
+    attribute MISSING, but it cannot see a BLANK, which passes the schema and
+    says nothing. So the same non-emptiness check PROMOTION_REQUIRED_ATTRS
+    applies to the human promotion path is applied here: the two human routes
+    onto the vocabulary must not have different standards, or the laxer one
+    becomes the way in.
+
+    Lives here rather than in the route so the rule is testable without a
+    router, and so the route cannot grow a second copy of the check.
+    """
+    # Lazily, the way promote_candidate does: graph.engine imports from
+    # graph.schema and a module-level import here would be a cycle.
+    from graph.engine import get_node, update_node_attrs
+
+    node = get_node(conn, concept_id)
+    if node is None or node["kind"] != "Concept":
+        raise ValueError(f"No Concept '{concept_id}'")
+    if not reviewed_by:
+        raise ValueError("An edit must name the human who made it")
+
+    missing = [
+        a for a in PROMOTION_REQUIRED_ATTRS
+        if not _attr_supplied(attrs.get(a))
+    ]
+    if missing:
+        raise ValueError(
+            "A Concept must keep all six attributes; these arrived empty: "
+            + ", ".join(missing)
+        )
+
+    update_node_attrs(conn, concept_id, {
+        **{a: attrs[a] for a in PROMOTION_REQUIRED_ATTRS},
+        "curation_state": "reviewed",
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at or datetime.now(timezone.utc).date().isoformat(),
+    })
+
+
+def retire_concept(
+    conn: sqlite3.Connection,
+    concept_id: str,
+    reviewed_by: str,
+    reviewed_at: str = "",
+) -> None:
+    """A human judges a Concept wrong (ALG-KK-WEB-CONCEPT-RETIRE).
+
+    A STATE FLIP AND NEVER A DELETE, per INV-KK-CONCEPT-CURATION-VOCABULARY.
+    EVERY EDGE IS KEPT: papers may already link to the Concept, and deleting
+    the node orphans or silently destroys those links — the cleanup the
+    114-Concept revert had to do by hand. A state makes the rejection visible
+    to anyone reading the graph and is REVERSIBLE: a retirement taken in error
+    costs one edit rather than a re-harvest.
+
+    Two consequences, and the first is what makes it real. The Concept vanishes
+    from build_vocabulary_context (INV-KK-VOCABULARY-EXCLUDES-RETIRED), because
+    a retired Concept still offered to the model is a retirement that did not
+    happen. And it is admissible under no route whatever its weight, which
+    graph.rules.admission_state already applies as its first test.
+
+    UN-RETIRING IS update_concept AND NOT A THIRD FUNCTION. Saving the form
+    returns the state to 'reviewed', which is the honest state: a human looked
+    at it and decided it belongs after all.
+    """
+    # Lazily, the way promote_candidate does: graph.engine imports from
+    # graph.schema and a module-level import here would be a cycle.
+    from graph.engine import get_node, update_node_attrs
+
+    node = get_node(conn, concept_id)
+    if node is None or node["kind"] != "Concept":
+        raise ValueError(f"No Concept '{concept_id}'")
+    if not reviewed_by:
+        raise ValueError("A retirement must name the human who made it")
+
+    update_node_attrs(conn, concept_id, {
+        "curation_state": "retired",
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at or datetime.now(timezone.utc).date().isoformat(),
+    })
+
+
+def _attr_supplied(value) -> bool:
+    """Whether an edited attribute says anything.
+
+    A blank string satisfies REQUIRED_ATTRS and says nothing, which is exactly
+    the thin entry the admission rule exists to exclude. A list may legitimately
+    be empty — 78 of the 97 carry empty key_properties — so only strings are
+    checked for emptiness; None and a missing key are refused for every type.
+    """
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
