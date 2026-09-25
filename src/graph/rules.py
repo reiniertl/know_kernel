@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass, field
 
@@ -705,6 +706,73 @@ def check_concept_admission(conn: sqlite3.Connection) -> AdmissionSweep:
 
     return AdmissionSweep(admissible=admissible, thin=thin, unlinked=unlinked,
                           seminal=len(seminal), violations=violations)
+
+
+_ISO_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def check_concept_curation_state(conn: sqlite3.Connection) -> list[Violation]:
+    """Sweep every Concept for INV-KK-CONCEPT-CURATION-VOCABULARY.
+
+    Two things are checked and they fail for different reasons. A
+    curation_state outside the closed vocabulary makes the field unreadable —
+    nothing downstream can decide whether that Concept has been reviewed. A
+    state of 'reviewed' with no reviewed_by or no reviewed_at is readable and
+    false: it claims a human acted without naming which human or when, and an
+    unsigned review is the one thing this field exists to make impossible.
+
+    DELIBERATELY NOT IN RULES_BY_KIND, for the reason check_concept_admission
+    is not: those rules are per-node and run on every add_node, so a Concept
+    that predates this field would make writes with nothing to do with it fail.
+    All 97 Concepts as of 2026-09-25 carry no curation attribute at all.
+
+    Returns no violations against the corpus of 2026-09-25, and that is the
+    point rather than a weakness: absent is lawful, so the clean sweep is the
+    baseline the first harvest will be measured against.
+
+    Imported lazily to keep graph.rules free of a cycle with
+    graph.concept_vocabulary, which imports nothing from here.
+    """
+    from graph.concept_vocabulary import CURATION_STATES, SIGNED_CURATION_STATES
+
+    violations: list[Violation] = []
+    rows = conn.execute(
+        "SELECT id, attrs FROM nodes WHERE kind = 'Concept' ORDER BY id"
+    ).fetchall()
+
+    for concept_id, attrs_json in rows:
+        attrs = json.loads(attrs_json) if isinstance(attrs_json, str) else (attrs_json or {})
+        state = attrs.get("curation_state") or ""
+        if not state:
+            # Absent is lawful and means "nobody has reviewed this". It is not
+            # a fourth state and is not a violation.
+            continue
+        if state not in CURATION_STATES:
+            violations.append(Violation(
+                concept_id, "concept-curation-vocabulary",
+                f"Concept curation_state '{state}' is not one of: "
+                + ", ".join(CURATION_STATES),
+            ))
+            continue
+        if state in SIGNED_CURATION_STATES:
+            if not (attrs.get("reviewed_by") or ""):
+                violations.append(Violation(
+                    concept_id, "concept-curation-unsigned",
+                    f"Concept curation_state '{state}' must name reviewed_by",
+                ))
+            reviewed_at = attrs.get("reviewed_at") or ""
+            if not reviewed_at:
+                violations.append(Violation(
+                    concept_id, "concept-curation-unsigned",
+                    f"Concept curation_state '{state}' must carry reviewed_at",
+                ))
+            elif not _ISO_DATE_PREFIX_RE.match(reviewed_at):
+                violations.append(Violation(
+                    concept_id, "concept-curation-date",
+                    f"Concept reviewed_at '{reviewed_at}' is not an ISO-8601 date",
+                ))
+
+    return violations
 
 
 def check_link_confirmations(conn: sqlite3.Connection) -> list[Violation]:

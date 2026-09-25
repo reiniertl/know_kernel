@@ -368,3 +368,58 @@ __all__ = [
     "candidate_ranking", "fuzzy_match_concept", "levenshtein_distance",
     "normalise_concept_name", "record_candidate", "resolve_concept_names",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Curation state (IFC-KK-CONCEPT-CURATION-STATE)
+# ---------------------------------------------------------------------------
+
+#: The closed vocabulary for Concept.attrs["curation_state"], per
+#: INV-KK-CONCEPT-CURATION-VOCABULARY. Modelled on
+#: ingest.paper_summary.SUMMARY_STATES, which closes the PaperSummary state set
+#: for the same reason: a value outside the set is not cosmetic, it makes every
+#: question asked of the field unanswerable.
+#:
+#: A fourth value means amending the invariant and saying what it asserts about
+#: human attention, which is the only thing this field measures.
+CURATION_STATES = ("harvested", "reviewed", "retired")
+
+#: The state a Concept is in when nobody has read it. ABSENT MEANS THIS — it is
+#: not a fourth state. All 97 Concepts as of 2026-09-25 carry no curation
+#: attribute at all, and "no human has reviewed this" is true of every one of
+#: them, so reading absent as anything else would be reading it as false.
+DEFAULT_CURATION_STATE = "harvested"
+
+#: States that assert a human acted, and so must name which human and when.
+#: An unsigned review is not a review.
+SIGNED_CURATION_STATES = ("reviewed",)
+
+#: The four optional attributes IFC-KK-CONCEPT-CURATION-STATE defines. They are
+#: NOT added to schema.REQUIRED_ATTRS["Concept"] and must never be: add_node
+#: rejects a Concept missing any required attribute, so a seventh requirement
+#: would make all 97 existing Concepts unwritable at a stroke.
+CURATION_ATTRS = ("curation_state", "harvest_batch", "reviewed_by", "reviewed_at")
+
+
+def curation_state(attrs: dict | None) -> str:
+    """The curation state of a Concept, reading absent as 'harvested'.
+
+    The single definition of the default, so the sweep, the harvest and any
+    later review surface cannot disagree about what an unmarked Concept means.
+    A value outside CURATION_STATES is returned unchanged rather than corrected
+    — correcting it here would hide exactly what
+    check_concept_curation_state exists to report.
+    """
+    value = (attrs or {}).get("curation_state") or ""
+    return value if value else DEFAULT_CURATION_STATE
+
+
+def curation_reviewed(attrs: dict | None) -> bool:
+    """Whether a human has reviewed this Concept.
+
+    True only for a state in SIGNED_CURATION_STATES. 'retired' is deliberately
+    excluded: a human did look at it, but the question every caller asks of
+    this predicate is "is this entry trustworthy vocabulary", and a retired
+    entry is the one answer that is not.
+    """
+    return curation_state(attrs) in SIGNED_CURATION_STATES
