@@ -92,18 +92,34 @@ def test_the_rule_does_not_swallow_the_databases_themselves():
 PROVENANCE_EDGE_KIND = "extracted-from"
 
 #: The only files permitted to create a provenance edge, or to call something
-#: that does. The first two write the edges; the other three are sanctioned as
+#: that does. The first three write the edges; the rest are sanctioned as
 #: CALLERS ONLY and contain no edge-creating line themselves.
+#:
+#: A THIRD WRITER FROM 2026-09-25: src/ingest/doc_harvest.py. It is the
+#: document path — ALG-KK-DOC-HARVEST — and it is legitimate for the same
+#: reason claim_extractor.py was found legitimate on 2026-09-21: it is the
+#: mechanism for a class of source the others do not handle, and it writes the
+#: same build_evidence_attrs verdict onto every edge, so the structural claim
+#: that no sanctioned edge can be bare still holds. This test caught it the
+#: moment the file became git-tracked and not before, which is the sweep
+#: working: an untracked file is not yet part of the repository.
 SANCTIONED_WRITERS = (
     "src/ingest/extractor.py",
     "src/ingest/claim_extractor.py",
+    "src/ingest/doc_harvest.py",
 )
 SANCTIONED_CALLERS = (
     "src/ingest/cli_extract.py",
     "src/ingest/cli_feed.py",
+    "src/ingest/cli_harvest.py",
     "src/ingest/__init__.py",
 )
-INDIRECT_WRITE_IMPORTS = ("extract_concepts", "extract_claims")
+# harvest_document joined these on 2026-09-25, and adding it STRENGTHENS the
+# sweep rather than accommodating the new path: without it, anything could
+# import the harvest and write provenance edges one stack frame away, which is
+# exactly the hole data/run_extraction.py went through and exactly what the
+# indirect half below exists to close.
+INDIRECT_WRITE_IMPORTS = ("extract_concepts", "extract_claims", "harvest_document")
 
 
 def _tracked_python_files() -> list[str]:
@@ -173,6 +189,14 @@ def test_the_sanctioned_files_all_exist_and_still_write_the_edges():
     # and calls build_evidence_attrs like the rest, so the structural claim
     # that no extractor-written edge can be bare holds across all eight.
     assert extractor.count(f'add_edge(\n        conn, "{PROVENANCE_EDGE_KIND}"') == 8
+
+    # The ninth writer, 2026-09-25, and it lives in the other module. Two
+    # branches: _create mints the Concept and writes its edge, _attach writes
+    # an edge onto a Concept that already exists. Both carry harvest_batch,
+    # which is what INV-KK-HARVEST-BATCH-REVERTIBLE turns on.
+    harvest = (REPO / "src" / "ingest" / "doc_harvest.py").read_text(encoding="utf-8")
+    assert harvest.count(f'"{PROVENANCE_EDGE_KIND}"') >= 2
+    assert "harvest_batch" in harvest
 
     claims = (REPO / "src" / "ingest" / "claim_extractor.py").read_text(encoding="utf-8")
     assert claims.count(f'add_edge(conn, "{PROVENANCE_EDGE_KIND}"') == 6, (
