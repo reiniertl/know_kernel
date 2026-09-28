@@ -669,6 +669,54 @@ def kernel_breadth(conn: sqlite3.Connection, concept_id: str) -> int:
 DOC_SOURCE_TYPES = ("kernel-doc",)
 
 
+#: IFC-KK-DOC-DEFINED-PROVENANCE, the path half. Added 2026-09-28, because the
+#: source TYPE is only half the question: Documentation/process/ is kernel-doc
+#: too, and without this rule seeding it would make "Code of Conduct" an
+#: admissible Concept at weight 1 through the fourth admission route.
+#:
+#: INV-KK-HARVEST-NAME-IS-A-CLASS CANNOT COVER THIS. It reads the shape of a
+#: name — it catches "struct sk_buff" and passes "Patch Submission", which is a
+#: well-formed name for a thing that is not a kernel mechanism. The only
+#: defence against a bad source is not harvesting it.
+#:
+#: MEASURED over batch harvest-2026-09-25-b06835db: scheduler/ produced 3
+#: concepts and 3 were clean; filesystems/ 5, 4 clean; networking/ 3, one of
+#: them a section heading; admin-guide/ 7, which produced THREE of the four
+#: collision pairs and BOTH sweep violations. Design trees define;
+#: admin-guide configures, so it names mechanisms loosely and repeatedly and
+#: manufactures near-duplicates of entries the vocabulary already holds.
+#:
+#: Every addition is a decision with evidence, not a configuration change.
+DOC_PATH_PREFIXES = (
+    "Documentation/RCU/",
+    "Documentation/core-api/",
+    "Documentation/filesystems/",
+    "Documentation/locking/",
+    "Documentation/mm/",
+    "Documentation/scheduler/",
+)
+
+
+def path_is_definitional(url: str) -> bool:
+    """Whether a documentation URL sits in a subtree that DEFINES.
+
+    INV-KK-SEED-PATH-DEFINITIONAL. Matched on the path after the git ref, so
+    both the /tree/ and /plain/ forms of the same document answer alike — the
+    stored url is /tree/ and the fetched one is /plain/, and a rule that
+    disagreed between them would refuse exactly the documents it had just
+    fetched.
+    """
+    if not url:
+        return False
+    for marker in ("/tree/", "/plain/"):
+        if marker in url:
+            path = url.split(marker, 1)[1]
+            break
+    else:
+        path = url
+    return path.startswith(DOC_PATH_PREFIXES)
+
+
 def documented_concepts(conn: sqlite3.Connection) -> set[str]:
     """Every Concept whose provenance reaches a canonical-documentation Source.
 
