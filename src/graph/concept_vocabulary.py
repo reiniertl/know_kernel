@@ -22,6 +22,7 @@ paraphrase.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -88,6 +89,126 @@ def fuzzy_match_concept(
         if d <= max_distance and d < best:
             best, best_id = d, cid
     return best_id
+
+
+_PAREN_RE = re.compile(r"\(([^)]+)\)")
+
+
+def squash_concept_name(name: str) -> str:
+    """The name with every non-alphanumeric character removed.
+
+    "Kernel Samepage Merging" and "Kernel Same-page Merging" both squash to
+    "kernelsamepagemerging". MEASURED 2026-09-25: the first doc harvest created
+    the former beside the existing latter, because Levenshtein 2 cannot reach
+    across a hyphen plus a space. This tier is EXACT after normalisation, so it
+    carries no false-positive risk — two names that squash equal differ only in
+    punctuation and spacing.
+    """
+    return "".join(ch for ch in normalise_concept_name(name) if ch.isalnum())
+
+
+def parenthetical_of(name: str) -> str:
+    """The abbreviation or alias a name carries in brackets, normalised.
+
+    "Dentry Cache (dcache)" -> "dcache". This vocabulary uses the bracketed
+    suffix as an alias, so two names sharing one are the same class — it is a
+    deliberate second name, not an accident of spelling. MEASURED 2026-09-25:
+    "Directory Entry Cache (dcache)" was created beside "Dentry Cache
+    (dcache)", which no character-distance tier could have caught.
+    """
+    m = _PAREN_RE.search(name or "")
+    return normalise_concept_name(m.group(1)) if m else ""
+
+
+def strict_match_concept(query: str, name_to_id: dict[str, str]) -> str | None:
+    """Match on identity after normalisation, never on proximity.
+
+    THE TIERS THE HARVEST NEEDED AND THE THREE-TIER MATCHER DID NOT HAVE.
+    Measured 2026-09-25 over 18 documents: fuzzy_match_concept made ZERO false
+    attachments — the Vmalloc/Kmalloc risk recorded in ALG-KK-DOC-HARVEST never
+    fired — and MISSED six duplicates of Concepts that already existed. The
+    tier that worried us was too loose while the ones that mattered were far
+    too tight.
+
+    Both tiers here are exact after a normalisation, so neither can attach two
+    genuinely different mechanisms. Token containment is deliberately NOT here:
+    "Huge Pages" is contained in "Transparent Huge Pages" and they are
+    different, while "Transparent Huge Page Support" is contained the same way
+    and is the same — nothing in the shape separates them, so containment
+    surfaces in the review queue instead of acting.
+
+    Returns None on a tie, for the reason find_concept_by_name does: attaching
+    to a coin flip is worse than creating.
+    """
+    forms = _match_forms(query)
+    if not forms:
+        return None
+    hits = {cid for name, cid in name_to_id.items() if forms & _match_forms(name)}
+    # None on a tie, for the reason find_concept_by_name gives: attaching to a
+    # coin flip is worse than creating.
+    return hits.pop() if len(hits) == 1 else None
+
+
+#: Declaration keywords stripped before matching. "struct sk_buff" is the same
+#: thing as "Socket Buffer (sk_buff)" and must reach it.
+_DECLARATION_RE = re.compile(r"^(struct|union|enum|class)\s+", re.IGNORECASE)
+
+
+def _match_forms(name: str) -> set[str]:
+    """Every squashed form a name can legitimately be known by.
+
+    The whole name, the name with any bracketed alias removed, and the alias on
+    its own. Two names match when any form coincides, which is what carries
+    "Kernel Samepage Merging" to "KSM (Kernel Same-page Merging)": the query
+    squashes to the same string as the existing name's PARENTHETICAL, not as
+    the existing name itself.
+    """
+    bare = _DECLARATION_RE.sub("", (name or "").strip())
+    forms = set()
+    whole = squash_concept_name(bare)
+    if whole:
+        forms.add(whole)
+        # A trailing plural is punctuation-level, not semantic: "Grace Periods"
+        # and "Grace Period" are the same class with certainty, and a plural is
+        # the most obvious duplicate a harvest can produce. Guarded so "Access"
+        # does not become "Acces".
+        if len(whole) > 4 and whole.endswith("s") and not whole.endswith("ss"):
+            forms.add(whole[:-1])
+    outside = squash_concept_name(_PAREN_RE.sub(" ", bare))
+    if outside:
+        forms.add(outside)
+    inside = squash_concept_name(parenthetical_of(bare))
+    if inside:
+        forms.add(inside)
+    # A bare form of two characters or fewer is an initialism collision waiting
+    # to happen and is not worth matching on.
+    return {f for f in forms if len(f) > 2}
+
+
+def contained_in(a: str, b: str) -> bool:
+    """Whether a's significant words are a subset of b's.
+
+    SURFACES A PAIR FOR REVIEW; NEVER ATTACHES ONE. See
+    IFC-KK-CONCEPT-REVIEW-PRIORITY. Singularises a trailing 's' and drops
+    bracketed aliases and stopwords, so "NUMA Memory Policy" is contained in
+    "NUMA Topology and Memory Policy". Requires at least two significant words,
+    because a single shared head noun says nothing.
+    """
+    ta, tb = _significant_tokens(a), _significant_tokens(b)
+    return len(ta) >= 2 and ta < tb
+
+
+_STOPWORDS = frozenset({"and", "of", "the", "a", "an", "for", "in", "to"})
+
+
+def _significant_tokens(name: str) -> set[str]:
+    bare = _PAREN_RE.sub(" ", name or "")
+    out = set()
+    for tok in normalise_concept_name(bare).replace("-", " ").split():
+        if tok in _STOPWORDS:
+            continue
+        out.add(tok[:-1] if len(tok) > 3 and tok.endswith("s") else tok)
+    return out
 
 
 def build_vocabulary_context(conn: sqlite3.Connection) -> str:
@@ -447,8 +568,14 @@ def colliding_concepts(
         id_a, a = rows[i]
         for j in range(i + 1, len(rows)):
             id_b, b = rows[j]
+            # Containment joined this test 2026-09-25 — see
+            # IFC-KK-CONCEPT-REVIEW-PRIORITY. It surfaces the pair and never
+            # acts on it: "Huge Pages" in "Transparent Huge Pages" is a
+            # DIFFERENT mechanism, "Transparent Huge Page Support" in the same
+            # is the SAME one, and nothing in their shape tells them apart.
             if (a == b or a.startswith(b) or b.startswith(a)
-                    or levenshtein_distance(a, b) <= max_distance):
+                    or levenshtein_distance(a, b) <= max_distance
+                    or contained_in(a, b) or contained_in(b, a)):
                 colliding.add(id_a)
                 colliding.add(id_b)
     return colliding

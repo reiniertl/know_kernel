@@ -657,3 +657,140 @@ def test_cli_revert_exits_nonzero_when_anything_was_skipped(tmp_path, monkeypatc
     printed = capsys.readouterr().out
     assert "SKIPPED" in printed and "curator@example.com" in printed
     assert "did NOT come out whole" in printed
+
+
+# ---------------------------------------------------------------------------
+# What the first real batch taught, 2026-09-25 (INV-KK-HARVEST-NAME-IS-A-CLASS)
+#
+# 18 documents, gpt-4o-mini, 24 created, 7 attached, ZERO rejected in either
+# category — and roughly ten of the 24 were wrong. Every case below is a name
+# that batch actually produced. It was reverted; these tests are what stops it
+# happening again.
+# ---------------------------------------------------------------------------
+
+from graph.concept_vocabulary import (  # noqa: E402
+    contained_in,
+    normalise_concept_name,
+    strict_match_concept,
+)
+from ingest.doc_harvest import name_is_a_class  # noqa: E402
+
+
+@pytest.mark.parametrize("bad", [
+    "struct sk_buff",   # the system prompt's OWN example of what not to create
+    "skb_clone",        # a function name
+    "shared sk_buff",   # a phrase, not a name
+    "kmalloc()",
+    "__free_pages",
+])
+def test_code_shaped_names_are_not_classes(bad):
+    assert name_is_a_class(bad) is False
+
+
+@pytest.mark.parametrize("good", [
+    "Transparent Huge Page Support", "Whiteouts", "Metadata-only Copy Up",
+    "RAID", "Constant Bandwidth Server (CBS)", "ext4", "Zswap",
+])
+def test_real_class_names_survive(good):
+    assert name_is_a_class(good) is True
+
+
+def test_the_filter_cannot_tell_io_uring_from_skb_clone_and_says_so():
+    """A KNOWN AND ACCEPTED LIMITATION, pinned rather than hidden.
+
+    "io_uring" and "skb_clone" are the same shape — lowercase, underscored —
+    and one is an established mechanism while the other is a function. Nothing
+    structural separates them, so the filter refuses both. The cost is a
+    legitimately-underscored NEW mechanism being rejected; that rejection is
+    visible in rejected_not_a_class and recoverable by admitting the name once
+    by hand, after which matching carries it forever. The alternative is
+    admitting every function name in the kernel, which is what the batch of
+    2026-09-25 actually did.
+    """
+    assert name_is_a_class("io_uring") is False
+    assert name_is_a_class("skb_clone") is False
+
+
+def test_a_name_that_is_already_a_subsystem_is_refused(conn):
+    """The batch produced a Concept called "Virtual Memory" while a Subsystem
+    of that name exists — every belongs-to edge becomes ambiguous to a reader."""
+    subs = resolve_subsystem_names(conn)
+    assert name_is_a_class("Memory Management", subs) is False
+    assert name_is_a_class("Memory Reclaim", subs) is True
+
+
+def test_the_filter_runs_after_matching_so_io_uring_still_attaches(conn):
+    """io_uring is a bare lowercase identifier AND an established Concept. A
+    name already admitted has been judged by a human once; only an unmatched
+    name reaches the shape test."""
+    _existing_concept(conn, "concept-io", "io_uring")
+    ev = _doc_source(conn, "io")
+    result = harvest_document(conn, ev, new_batch_id(),
+                              client=MockLLMClient([_reply([_mech("io_uring")])]))
+    conn.commit()
+    assert result.concepts_attached == ["concept-io"]
+    assert result.rejected_not_a_class == 0
+
+
+def test_a_code_shaped_proposal_is_rejected_and_counted(conn):
+    """rejected_not_mechanism was ZERO across 18 documents because
+    artifact_class reads what the MODEL CLAIMS. These proposals all claim
+    'abstracted-mechanism' and are refused on the shape of the name."""
+    ev = _doc_source(conn, "skbuff")
+    result = harvest_document(conn, ev, new_batch_id(), client=MockLLMClient([
+        _reply([_mech("struct sk_buff"), _mech("skb_clone"),
+                _mech("shared sk_buff"), _mech("Socket Buffer Cloning")])]))
+    conn.commit()
+    assert len(result.concepts_created) == 1
+    assert result.rejected_not_a_class == 3
+    assert result.rejected_not_mechanism == 0, (
+        "the artifact_class check is a formality; the name check is the filter")
+
+
+# --- the six duplicates the fuzzy matcher missed ---------------------------
+
+
+@pytest.mark.parametrize("proposed,existing", [
+    ("Kernel Samepage Merging", "KSM (Kernel Same-page Merging)"),
+    ("Directory Entry Cache (dcache)", "Dentry Cache (dcache)"),
+    ("struct sk_buff", "Socket Buffer (sk_buff)"),
+    ("Grace Periods", "Grace Period"),
+    ("Transparent Huge Page", "Transparent Huge Pages"),
+])
+def test_the_strict_matcher_catches_what_levenshtein_could_not(proposed, existing):
+    """Levenshtein 2 cannot reach across a whole word. Every pair here is one
+    the 2026-09-25 batch duplicated."""
+    table = {normalise_concept_name(existing): "concept-x"}
+    assert strict_match_concept(proposed, table) == "concept-x"
+
+
+@pytest.mark.parametrize("proposed,existing", [
+    ("Kmalloc", "Vmalloc"),                      # the Levenshtein-1 false positive
+    ("Huge Pages", "Transparent Huge Pages"),    # genuinely different mechanisms
+    ("Memory Reclaim", "Memory Ballooning"),
+])
+def test_the_strict_matcher_refuses_proximity(proposed, existing):
+    """Identity after normalisation, never proximity. On this path a false
+    match SUPPRESSES a legitimate concept rather than writing a wrong link."""
+    table = {normalise_concept_name(existing): "concept-x"}
+    assert strict_match_concept(proposed, table) is None
+
+
+def test_a_tie_attaches_to_nothing():
+    table = {normalise_concept_name("Grace Period"): "concept-a",
+             normalise_concept_name("Grace Periods"): "concept-b"}
+    assert strict_match_concept("grace period", table) is None
+
+
+def test_containment_surfaces_the_pair_it_must_not_merge():
+    """"Huge Pages" in "Transparent Huge Pages" is a DIFFERENT mechanism;
+    "Transparent Huge Page Support" is contained the same way and is the SAME
+    one. Nothing in their shape separates them, so containment feeds the review
+    queue and never the matcher."""
+    assert contained_in("huge page", "transparent huge pages") is True
+    assert strict_match_concept(
+        "Huge Pages",
+        {normalise_concept_name("Transparent Huge Pages"): "c"}) is None
+    assert contained_in("numa memory policy",
+                        "numa topology and memory policy") is True
+    assert contained_in("memory reclaim", "memory ballooning") is False

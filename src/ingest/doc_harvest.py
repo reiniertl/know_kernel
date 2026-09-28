@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
@@ -28,9 +29,9 @@ from typing import Any, Callable
 
 from graph.concept_vocabulary import (
     PROMOTION_REQUIRED_ATTRS,
-    fuzzy_match_concept,
     normalise_concept_name,
     resolve_concept_names,
+    strict_match_concept,
 )
 from graph.engine import add_edge, add_node
 from graph.rules import DOC_SOURCE_TYPES
@@ -166,6 +167,53 @@ def build_harvest_prompt(
     )
 
 
+#: INV-KK-HARVEST-NAME-IS-A-CLASS. A declaration is not a class.
+_DECLARATION_RE = re.compile(r"\b(struct|union|enum)\s", re.IGNORECASE)
+
+#: A bare C identifier: skb_clone, __free_pages. Not a class either.
+_IDENTIFIER_RE = re.compile(r"^_*[a-z][a-z0-9]*(_[a-z0-9]+)+$")
+
+
+def name_is_a_class(name: str, subsystems: dict[str, str] | None = None) -> bool:
+    """Whether a proposed name has the SHAPE of a class.
+
+    THE CHECK THAT REPLACED A VACUOUS ONE. INV-KK-HARVEST-CONCEPT-COMPLETE
+    compared the model's self-declared artifact_class against a constant, which
+    tests whether the model will assert the string the prompt asked for — it
+    always will. Measured 2026-09-25 over 18 documents: rejected_not_mechanism
+    was ZERO while the batch created "struct sk_buff", "skb_clone" and
+    "shared sk_buff". The system prompt names struct sk_buff as its literal
+    example of what must never become a Concept.
+
+    The NAME is the part a model cannot assert its way past: a C identifier
+    looks like a C identifier whatever label is attached to it.
+
+    IT RUNS AFTER MATCHING AND NEVER BEFORE. io_uring is a bare lowercase
+    identifier with an underscore AND an established Concept here. A name that
+    matches something already admitted has been judged by a human once and
+    attaches; only an unmatched name reaches this test.
+    """
+    raw = (name or "").strip()
+    if not raw:
+        return False
+    if _DECLARATION_RE.search(raw):
+        return False
+    if "(" in raw and ")" in raw and "()" in raw.replace(" ", ""):
+        return False
+    if _IDENTIFIER_RE.match(normalise_concept_name(raw).replace(" ", "")):
+        return False
+    # "shared sk_buff" — a phrase starting mid-sentence is a description, not a
+    # name. A SINGLE lowercase word is allowed, because io_uring and ext4 are
+    # legitimately spelled that way.
+    if len(raw.split()) > 1 and not raw[0].isupper():
+        return False
+    # A Concept sharing a Subsystem's name makes every belongs-to edge
+    # ambiguous to a reader. The batch produced "Virtual Memory".
+    if subsystems and normalise_concept_name(raw) in subsystems:
+        return False
+    return True
+
+
 @dataclass
 class DocHarvestResult:
     """What one document yielded."""
@@ -175,6 +223,7 @@ class DocHarvestResult:
     concepts_attached: list[str] = field(default_factory=list)
     rejected_not_mechanism: int = 0
     rejected_incomplete: int = 0
+    rejected_not_a_class: int = 0
     subsystem_id: str = ""
     subsystem_unmatched: str = ""
     dry_run: bool = False
@@ -318,13 +367,22 @@ def harvest_document(
             result.rejected_not_mechanism += 1
             continue
 
-        # MATCH FIRST, CREATE SECOND — the whole dedup strategy. The shared
-        # three-tier matcher, not a second implementation.
-        existing = fuzzy_match_concept(name, known)
+        # MATCH FIRST, CREATE SECOND — the whole dedup strategy. Identity after
+        # normalisation, never proximity: measured 2026-09-25, the fuzzy
+        # matcher made zero false attachments over 18 documents and MISSED six
+        # real duplicates. On this path a false match SUPPRESSES a legitimate
+        # concept, so the Levenshtein tier is not used here. The paper path
+        # keeps it unchanged.
+        existing = strict_match_concept(name, known)
         if existing:
             _attach(conn, existing, evidence_id, batch_id, document_text, model,
                     item.get("description", ""))
             result.concepts_attached.append(existing)
+            continue
+
+        # INV-KK-HARVEST-NAME-IS-A-CLASS, AFTER matching and never before.
+        if not name_is_a_class(name, subsystems):
+            result.rejected_not_a_class += 1
             continue
 
         if not _proposal_is_complete(item):

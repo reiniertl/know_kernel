@@ -144,6 +144,7 @@ def main(argv: list[str] | None = None) -> None:
         "concepts_attached": sum(len(r["concepts_attached"]) for r in results),
         "rejected_not_mechanism": sum(r["rejected_not_mechanism"] for r in results),
         "rejected_incomplete": sum(r["rejected_incomplete"] for r in results),
+        "rejected_not_a_class": sum(r["rejected_not_a_class"] for r in results),
         "subsystems_unmatched": sum(1 for r in results if r["subsystem_unmatched"]),
         "results": results,
         "error_details": errors,
