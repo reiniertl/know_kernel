@@ -293,11 +293,33 @@ def build_extraction_prompt(
     return head + "Extract abstract concepts from metadata only -- no source text available."
 
 
-def get_system_prompt(source_type: str | None = None) -> str:
-    """Return the appropriate system prompt based on source type."""
+def get_system_prompt(
+    source_type: str | None = None, vocabulary: str = "", kernels: str = "",
+) -> str:
+    """The system prompt, and since 2026-09-28 the vocabulary travels with it.
+
+    INV-KK-LLM-CACHE-STABLE-PREFIX. The vocabulary used to be prepended to the
+    USER prompt, which put a ~765-token constant in front of every one of 3,315
+    paper calls — 2.54M tokens per run against 1.66M tokens of paper text, so
+    60% of input was the same bytes re-sent, rising to 98% at 3,000 Concepts.
+    Here it is part of the prefix that is identical across a run and can be
+    cached once.
+
+    IT MUST SHARE A BLOCK WITH THE SYSTEM PROMPT, not sit in one of its own.
+    The minimum cacheable prefix is model-dependent — 1,024 tokens on
+    claude-sonnet-5 — and falling under it does not error, it silently caches
+    nothing. The vocabulary alone is ~765 tokens and would never cache; joined
+    to the ~1,540-token system prompt it is ~2,418 and clears every current
+    model's minimum.
+
+    Both arguments default to empty so every existing caller and test is
+    unaffected, the same convention build_extraction_prompt uses.
+    """
+    base = EXTRACTION_SYSTEM_PROMPT
     if source_type == "discourse":
-        return EXTRACTION_SYSTEM_PROMPT + DISCOURSE_EXTRACTION_ADDENDUM
-    return EXTRACTION_SYSTEM_PROMPT
+        base += DISCOURSE_EXTRACTION_ADDENDUM
+    tail = "\n\n".join(part for part in (vocabulary, kernels) if part)
+    return f"{base}\n\n{tail}" if tail else base
 
 
 def validate_excerpt_grounding(excerpt: str, document_text: str) -> list[str]:
@@ -1071,11 +1093,13 @@ def extract_concepts(
             st_attrs = json.loads(src_type_row[0])
             source_type = st_attrs.get("source_type")
 
-    system_prompt = get_system_prompt(source_type)
+    # The vocabularies go in the SYSTEM prompt so the prefix is stable across
+    # the run and cacheable (INV-KK-LLM-CACHE-STABLE-PREFIX); the user prompt
+    # carries only this paper's text.
     vocabulary = build_vocabulary_context(conn)
     kernels = build_kernel_context(conn)
-    user_prompt = build_extraction_prompt(
-        evidence_text, source_type, vocabulary, kernels)
+    system_prompt = get_system_prompt(source_type, vocabulary, kernels)
+    user_prompt = build_extraction_prompt(evidence_text, source_type)
 
     if dry_run:
         return ExtractionResult(

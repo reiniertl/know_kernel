@@ -340,17 +340,38 @@ def test_a_dry_run_constructs_no_client_and_writes_nothing(conn):
     assert conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == before
 
 
-def test_the_prompt_carries_the_vocabulary_and_the_document(conn):
+def test_the_vocabularies_are_in_the_system_prompt_and_the_document_alone_in_the_user(conn):
+    """INV-KK-LLM-CACHE-STABLE-PREFIX. Both vocabularies are constant across a
+    batch, so they belong in the prefix that can be cached; only the document
+    varies. This is the placement assertion — the content assertion is that
+    nothing the model sees has changed."""
     _existing_concept(conn, "concept-1", "Grace Period")
     ev = _doc_source(conn, "a", text="UNIQUE DOCUMENT BODY")
     client = MockLLMClient([_reply([])])
     harvest_document(conn, ev, new_batch_id(), client=client)
-    user = client.calls[0]["user"]
-    assert "Grace Period" in user
-    assert "Memory Management" in user
+    system, user = client.calls[0]["system"], client.calls[0]["user"]
+
+    for constant in ("Grace Period", "Memory Management",
+                     "RCU is NOT one concept", "max_pool_percent"):
+        assert constant in system, f"{constant} left the cacheable prefix"
+        assert constant not in user, f"{constant} is still re-sent per document"
+
     assert "UNIQUE DOCUMENT BODY" in user
-    assert "RCU is NOT one concept" in client.calls[0]["system"]
-    assert "max_pool_percent" in client.calls[0]["system"]
+    assert "UNIQUE DOCUMENT BODY" not in system, "the document polluted the prefix"
+
+
+def test_the_harvest_prefix_is_byte_identical_across_documents(conn):
+    """The whole point: if the prefix differs by one byte the cache misses and
+    nothing says so."""
+    _existing_concept(conn, "concept-1", "Grace Period")
+    first = _doc_source(conn, "a", text="FIRST DOCUMENT")
+    second = _doc_source(conn, "b", text="SECOND DOCUMENT")
+    client = MockLLMClient([_reply([]), _reply([])])
+    batch = new_batch_id()
+    harvest_document(conn, first, batch, client=client)
+    harvest_document(conn, second, batch, client=client)
+    assert client.calls[0]["system"] == client.calls[1]["system"]
+    assert client.calls[0]["user"] != client.calls[1]["user"]
 
 
 # --- revert (INV-KK-HARVEST-BATCH-REVERTIBLE) -------------------------------

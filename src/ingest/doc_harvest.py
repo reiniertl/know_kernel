@@ -153,18 +153,25 @@ def match_subsystem_name(subsystems: dict[str, str], name: str) -> str | None:
     return subsystems.get(key)
 
 
-def build_harvest_prompt(
-    document_text: str, vocabulary: str = "", subsystems: str = ""
-) -> str:
-    """The user prompt: three vocabularies, then the document."""
-    head = ""
-    if vocabulary:
-        head += f"{vocabulary}\n\n"
-    if subsystems:
-        head += f"{subsystems}\n\n"
-    return (
-        f"{head}Name the mechanisms THIS DOCUMENT DEFINES:\n\n{document_text}"
-    )
+def build_harvest_system_prompt(vocabulary: str = "", subsystems: str = "") -> str:
+    """The system prompt, carrying the vocabularies (INV-KK-LLM-CACHE-STABLE-PREFIX).
+
+    Both vocabularies are constant across a batch and were being re-sent with
+    every document. Here they are part of the prefix that is identical across
+    the run and can be cached once. Both default to empty so existing callers
+    and tests are unaffected.
+    """
+    tail = "\n\n".join(part for part in (vocabulary, subsystems) if part)
+    return f"{HARVEST_SYSTEM_PROMPT}\n\n{tail}" if tail else HARVEST_SYSTEM_PROMPT
+
+
+def build_harvest_prompt(document_text: str) -> str:
+    """The user prompt: the document, and nothing else.
+
+    The vocabularies moved to build_harvest_system_prompt on 2026-09-28 so the
+    prefix stays byte-identical across a batch.
+    """
+    return f"Name the mechanisms THIS DOCUMENT DEFINES:\n\n{document_text}"
 
 
 #: INV-KK-HARVEST-NAME-IS-A-CLASS. A declaration is not a class.
@@ -326,8 +333,9 @@ def harvest_document(
     if subsystems is None:
         subsystems = resolve_subsystem_names(conn)
 
-    user_prompt = build_harvest_prompt(document_text, vocabulary, subsystem_context)
-    result.prompt_chars = len(user_prompt)
+    system_prompt = build_harvest_system_prompt(vocabulary, subsystem_context)
+    user_prompt = build_harvest_prompt(document_text)
+    result.prompt_chars = len(system_prompt) + len(user_prompt)
 
     # BEFORE any client work. A dry run must size the batch for someone
     # deciding whether to pay for the real one.
@@ -339,7 +347,7 @@ def harvest_document(
 
     response = client.create_message(
         model=model or default_model_for(DEFAULT_PROVIDER),
-        system=HARVEST_SYSTEM_PROMPT,
+        system=system_prompt,
         user=user_prompt,
         max_tokens=4096,
     )

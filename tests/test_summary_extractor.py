@@ -441,12 +441,16 @@ def _openai_adapter(response):
     return adapter
 
 
-def test_openai_adapter_normalises_onto_the_three_protocol_keys():
+def test_openai_adapter_normalises_onto_the_protocol_keys():
     adapter = _openai_adapter(_StubOpenAIResponse(GOOD, prompt=31, completion=57))
 
     out = adapter.create_message(model="gpt-4o-mini", system="SYS", user="USR", max_tokens=1024)
 
-    assert set(out) == {"text", "prompt_tokens", "response_tokens"}
+    # Five since 2026-09-28: cached_tokens and cache_written_tokens joined the
+    # port under INV-KK-LLM-CACHE-REPORTED, because a saving nobody can see is
+    # a saving nobody can defend when it stops happening.
+    assert set(out) == {"text", "prompt_tokens", "response_tokens",
+                        "cached_tokens", "cache_written_tokens"}
     assert out["text"] == GOOD
     assert out["prompt_tokens"] == 31
     assert out["response_tokens"] == 57

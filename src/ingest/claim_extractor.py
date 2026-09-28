@@ -125,8 +125,28 @@ def build_claim_extraction_context(conn: sqlite3.Connection) -> str:
     return "Known kernel concepts: " + ", ".join(names)
 
 
-def build_claim_user_prompt(source_text: str, concept_context: str) -> str:
-    parts = [concept_context, "", "Extract claims from this discourse source:", "", source_text]
+def build_claim_system_prompt(concept_context: str = "") -> str:
+    """The system prompt, carrying the vocabulary (INV-KK-LLM-CACHE-STABLE-PREFIX).
+
+    INV-KK-CLAIM-CONCEPT-CONTEXT is the rule this serves, and it was authored
+    on 2026-09-28 — cited from build_claim_extraction_context since this file
+    was written and absent from the graph until then. The vocabulary moved from
+    the user prompt to here the same day so the prefix stays byte-identical
+    across a run; nothing about what the model is shown changed.
+    """
+    if not concept_context:
+        return CLAIM_EXTRACTION_PROMPT
+    return f"{CLAIM_EXTRACTION_PROMPT}\n\n{concept_context}"
+
+
+def build_claim_user_prompt(source_text: str, concept_context: str = "") -> str:
+    """The user prompt: the discourse text.
+
+    concept_context is still accepted and still honoured when passed, because
+    callers and tests predate the move; extract_claims no longer passes it.
+    """
+    head = [concept_context, ""] if concept_context else []
+    parts = [*head, "Extract claims from this discourse source:", "", source_text]
     return "\n".join(parts)
 
 
@@ -334,13 +354,14 @@ def extract_claims(
         source_text = attrs.get("text", "")
 
     concept_context = build_claim_extraction_context(conn)
-    user_prompt = build_claim_user_prompt(source_text or "", concept_context)
+    system_prompt = build_claim_system_prompt(concept_context)
+    user_prompt = build_claim_user_prompt(source_text or "")
 
     if dry_run:
         return ClaimExtractionResult(
             evidence_id=evidence_id,
             extraction_model=model,
-            prompt_tokens=len(CLAIM_EXTRACTION_PROMPT.split()) + len(user_prompt.split()),
+            prompt_tokens=len(system_prompt.split()) + len(user_prompt.split()),
         )
 
     if client is None:
@@ -351,7 +372,7 @@ def extract_claims(
 
     response = client.create_message(
         model=model,
-        system=CLAIM_EXTRACTION_PROMPT,
+        system=system_prompt,
         user=user_prompt,
         max_tokens=4096,
     )

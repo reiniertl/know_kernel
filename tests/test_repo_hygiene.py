@@ -326,6 +326,12 @@ SPEC_ID = re.compile(r"\b(?:ALG|INV|IFC|ANN)-KK-[A-Z0-9-]+")
 #: allow a behaviour change against nodes that do not exist. Twelve modules
 #: remain.
 #:
+#: 85 AS OF 2026-09-28: INV-KK-CLAIM-CONCEPT-CONTEXT is authored. Same reason
+#: as the six before it — moving the discourse vocabulary into the system
+#: prompt changes the mechanism that node names, and rule 3 does not allow
+#: that against a node nobody wrote. claim_extractor.py has cited it from
+#: line 118 since the file existed.
+#:
 #: THE FIRST VERSION OF THIS SWEEP REPORTED FIVE, AND FIVE WAS NOT A
 #: MEASUREMENT. It batched fifty ids into one `node-info` call, and that
 #: command ABORTS THE WHOLE BLOCK on the first id it cannot find — so the sweep
@@ -394,7 +400,6 @@ KNOWN_UNRESOLVED_SPEC_IDS = frozenset({
     "INV-KK-VULN-PROP-NO-SELF",
     "INV-KK-VULN-PROP-PREREQ",
     # src/ingest/claim_extractor.py
-    "INV-KK-CLAIM-CONCEPT-CONTEXT",
     "INV-KK-CLAIM-EDGE-VALID",
     "INV-KK-CLAIM-SOURCE-DATE",
     # src/ingest/classifier.py

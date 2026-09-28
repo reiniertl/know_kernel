@@ -553,7 +553,10 @@ class KernelMockClient:
         self.calls: list[dict] = []
 
     def create_message(self, model, system, user, max_tokens):
-        self.calls.append({"model": model, "user": user})
+        # system is recorded since 2026-09-28: the vocabularies live there now
+        # (INV-KK-LLM-CACHE-STABLE-PREFIX), so a double that discarded it could
+        # not see what the model was actually shown.
+        self.calls.append({"model": model, "system": system, "user": user})
         return {"text": json.dumps({"concepts": self.concepts, "kernel": self.kernel}),
                 "prompt_tokens": 100, "response_tokens": 50}
 
@@ -623,8 +626,14 @@ def test_the_kernel_vocabulary_reaches_the_prompt(conn):
     client = KernelMockClient("none")
     extract_concepts(conn, eid, SessionGate(), client=client)
     prompt = client.calls[0]["user"]
-    assert "Linux Mainline" in prompt and "PREEMPT_RT" in prompt
-    assert '"none"' in prompt, "the none option must be visible in the prompt"
+    # Moved into the system prompt 2026-09-28 (INV-KK-LLM-CACHE-STABLE-PREFIX):
+    # the kernel names are constant across a run and belong in the cached
+    # prefix, not re-sent with every paper. Asserted against what the client
+    # actually received rather than a reconstruction of it.
+    system = client.calls[0]["system"]
+    assert "Linux Mainline" in system and "PREEMPT_RT" in system
+    assert "Linux Mainline" not in prompt, "still re-sent per paper"
+    assert '"none"' in system, "the none option must still be visible"
 
 
 def test_matching_is_exact_and_does_not_fuzz_like_the_concept_matcher(conn):
