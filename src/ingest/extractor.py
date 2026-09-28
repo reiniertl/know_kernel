@@ -1094,6 +1094,7 @@ def extract_concepts(
     client: LLMClient | None = None,
     source_type: str | None = None,
     relink: bool = False,
+    record_candidates: bool = True,
 ) -> ExtractionResult:
     """Extract abstract Concepts from an Evidence node via LLM.
 
@@ -1256,7 +1257,21 @@ def extract_concepts(
             # Not a failure. A name two distinct Sources reach for on their own
             # is the weight-2 evidence INV-KK-CONCEPT-ADMISSION asks for, and
             # this records it BEFORE a node exists rather than after 114 do.
-            record_candidate(conn, validated["name"], evidence_id, today)
+            #
+            # THE QUEUE IS OPT-OUT FROM 2026-09-28, AND THE COUNT NEVER IS.
+            # IFC-KK-CONCEPT-CANDIDATE reads a proposal as "a name worth
+            # considering for the vocabulary", which is true of a kernel paper
+            # and false of the re-link population: measured across 40 papers,
+            # the proposals were RowHammer Vulnerability, LeakyHammer Attack,
+            # Dynamic Information Leak Fuzzing and NIFuzz, because the papers
+            # are about IoT intrusion detection and DRAM side channels rather
+            # than about kernels. Queuing ~3,000 of those into a 43-row
+            # hand-reviewed queue would destroy the queue to record something
+            # already known. concepts_rejected is ALWAYS counted, because it is
+            # what INV-KK-EXTRACT-NEGATIVE-VERDICT reads to tell an answer from
+            # a crash — suppressing the rows may never suppress the verdict.
+            if record_candidates:
+                record_candidate(conn, validated["name"], evidence_id, today)
             concepts_rejected += 1
             continue
         concept_id = attach_existing_concept(

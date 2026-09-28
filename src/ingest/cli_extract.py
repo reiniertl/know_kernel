@@ -122,6 +122,12 @@ def main() -> None:
              "naming a model does NOT change the provider.",
     )
     parser.add_argument(
+        "--no-candidates", action="store_true",
+        help="Count unmatched names but do not queue them "
+             "(IFC-KK-CONCEPT-CANDIDATE). For a population whose proposals are "
+             "evidence of being off-topic rather than vocabulary suggestions",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Build and print prompts without calling the LLM API",
     )
@@ -180,6 +186,7 @@ def main() -> None:
         try:
             result = extract_concepts(
                 conn, eid, gate, model=model, dry_run=args.dry_run,
+                record_candidates=not args.no_candidates,
                 relink=args.all_relink, client=client,
             )
             results.append({

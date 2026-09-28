@@ -864,3 +864,45 @@ def test_cached_tokens_reaches_the_result(conn):
     assert r.cached_tokens == 2048
     assert r.cache_written_tokens == 0
     assert r.prompt_tokens == 3400
+
+
+# --- the candidate queue is opt-out, the count never is ---------------------
+
+
+def test_no_candidates_suppresses_the_rows_and_never_the_count(conn):
+    """MEASURED ACROSS 40 PAPERS: the re-link population proposes RowHammer
+    Vulnerability, LeakyHammer Attack and NIFuzz, because the papers are about
+    DRAM side channels rather than kernels. Queuing ~3,000 of those into a
+    43-row hand-reviewed queue destroys the queue to record something already
+    known. concepts_rejected must survive it: INV-KK-EXTRACT-NEGATIVE-VERDICT
+    reads that counter to tell an answer from a crash, so suppressing the rows
+    may never suppress the verdict."""
+    from graph.concept_vocabulary import candidate_ranking
+
+    eid = _paper(conn, "1", "A study of IoT intrusion detection with SMOTE.")
+    cid = _concept(conn, "concept-lsm", "Linux Security Modules")
+    _legacy_link(conn, cid, eid)
+
+    r = extract_concepts(conn, eid, SessionGate(), client=NoMatchClient(),
+                         relink=True, record_candidates=False)
+    conn.commit()
+
+    assert candidate_ranking(conn) == []
+    assert r.concepts_rejected == 1
+    assert r.edges_superseded == 1
+    assert _verdict(conn, eid)["result"] == "no-match"
+    assert eid not in select_for_relink(conn)
+
+
+def test_the_queue_is_written_by_default(conn):
+    """The flag is an opt-OUT. A kernel paper proposing a genuinely new name is
+    the case IFC-KK-CONCEPT-CANDIDATE exists for, and it stays the default."""
+    from graph.concept_vocabulary import candidate_ranking
+
+    eid = _paper(conn, "1", "A study of IoT intrusion detection with SMOTE.")
+    _legacy_link(conn, _concept(conn, "concept-lsm", "Linux Security Modules"), eid)
+
+    extract_concepts(conn, eid, SessionGate(), client=NoMatchClient(), relink=True)
+    conn.commit()
+
+    assert {c.name for c in candidate_ranking(conn)} == {"RowHammer Vulnerability"}
