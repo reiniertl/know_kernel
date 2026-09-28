@@ -937,6 +937,79 @@ def edge_carries_a_current_verdict(attrs: dict | None) -> bool:
     return attrs.get("basis") in VALID_EVIDENCE_BASES
 
 
+def evidence_has_a_current_answer(
+    conn: sqlite3.Connection, evidence_id: str, edges: list | None = None
+) -> bool:
+    """Whether this paper has already been answered, by a link or by a verdict.
+
+    ONE DEFINITION USED IN TWO PLACES, deliberately, because that is what makes
+    a failed run resume rather than skip: --all-relink's selection and
+    extract_concepts' own relink guard must agree about what "already done"
+    means or the selection offers papers the function returns early on.
+
+    IT GAINED THE SECOND CLAUSE ON 2026-09-28 (INV-KK-EXTRACT-NEGATIVE-VERDICT).
+    Until then "answered" meant "carries a current edge", which cannot express
+    the answer the majority of this corpus actually has: the model read the
+    paper and it is about NONE of the known concepts. Such a paper ends with no
+    concept link at all, so there is no edge left to carry the verdict and it is
+    recorded on the Evidence instead. Without it the relink queue never shrinks
+    on these papers — measured 1,322 before a paid 20-paper batch and 1,322
+    after — and every future run pays again to reach the same conclusion.
+    """
+    if edges is None:
+        edges = conn.execute(
+            "SELECT source_id, attrs FROM edges "
+            "WHERE kind = 'extracted-from' AND target_id = ?", (evidence_id,),
+        ).fetchall()
+    for _, raw in edges:
+        try:
+            attrs = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            attrs = {}
+        if edge_carries_a_current_verdict(attrs):
+            return True
+    return evidence_carries_a_no_match_verdict(conn, evidence_id)
+
+
+def evidence_carries_a_no_match_verdict(
+    conn: sqlite3.Connection, evidence_id: str
+) -> bool:
+    """Whether a run already concluded this paper matches nothing.
+
+    Re-opening the question is a DELIBERATE act, not an accident of the next
+    run: a vocabulary that gains 200 networking concepts tomorrow makes some of
+    these verdicts stale, and clearing the attribute is what makes that re-run
+    selectable without re-examining the whole corpus.
+    """
+    row = conn.execute(
+        "SELECT json_extract(attrs, '$.concept_verdict.result') FROM nodes "
+        "WHERE id = ?", (evidence_id,),
+    ).fetchone()
+    return bool(row) and row[0] == "no-match"
+
+
+def record_no_match_verdict(
+    conn: sqlite3.Connection, evidence_id: str, model: str, at: str = ""
+) -> None:
+    """Write the answer "this paper is about none of them" onto the Evidence.
+
+    IT NAMES THE MODEL AND THE DATE so a later reader can ask which run reached
+    it. The honest state of "Improving IoT Intrusion Detection Through
+    SMOTE-Based Oversampling" is a paper with NO concept link; a graph that says
+    nothing about a paper is correct where one saying it is about Linux Security
+    Modules is not.
+    """
+    from graph.engine import update_node_attrs
+
+    update_node_attrs(conn, evidence_id, {
+        "concept_verdict": {
+            "result": "no-match",
+            "model": model,
+            "at": at or date.today().isoformat(),
+        },
+    })
+
+
 def mark_edges_superseded(
     conn: sqlite3.Connection, evidence_id: str, source_ids: list[str]
 ) -> int:
@@ -986,6 +1059,13 @@ class ExtractionResult:
     extraction_model: str = ""
     prompt_tokens: int = 0
     response_tokens: int = 0
+    #: INV-KK-LLM-CACHE-REPORTED. The adapters have returned these since the
+    #: prompt-caching change and they reached nothing: the one number saying
+    #: whether the cached prefix is being hit was unobservable on the path that
+    #: spends the most money. A ZERO here means the prefix is being invalidated,
+    #: and every cause of that is silent.
+    cached_tokens: int = 0
+    cache_written_tokens: int = 0
     #: Re-link mode only. concepts_reused counts links made to a Concept that
     #: already existed; edges_superseded counts old links retired, and is zero
     #: whenever concepts_created and concepts_reused are both zero.
@@ -1055,7 +1135,7 @@ def extract_concepts(
                     (source_id, json.loads(raw) if raw else {}))
             except json.JSONDecodeError:
                 parsed_existing.append((source_id, {}))
-        if any(edge_carries_a_current_verdict(a) for _, a in parsed_existing):
+        if evidence_has_a_current_answer(conn, evidence_id, existing):
             return ExtractionResult(
                 evidence_id=evidence_id,
                 concept_ids=[sid for sid, _ in parsed_existing],
@@ -1289,6 +1369,21 @@ def extract_concepts(
         edges_superseded = mark_edges_superseded(
             conn, evidence_id,
             [sid for sid in superseding_candidates if sid not in concept_ids])
+    elif relink and concepts_rejected:
+        # INV-KK-EXTRACT-NEGATIVE-VERDICT. The model READ the paper and proposed
+        # names; none of them is in the vocabulary. That is an ANSWER and it is
+        # the right one — measured 2026-09-28, 19 of 20 papers in the relink
+        # queue are about IoT intrusion detection, VR keystroke inference or
+        # RowHammer, and their legacy links are substring matches on the title
+        # ("Blockchain" -> Block Device Layer). The false links go, no link
+        # replaces them, and the paper stops being asked.
+        #
+        # concepts_rejected == 0 IS THE OTHER CASE AND IT IS UNCHANGED: nothing
+        # parseable came back, nothing is touched, and the next run retries —
+        # ev-arxiv-027e07c3 on 2026-09-21, which succeeded on its retry.
+        edges_superseded = mark_edges_superseded(
+            conn, evidence_id, superseding_candidates)
+        record_no_match_verdict(conn, evidence_id, model, today)
 
     # IFC-KK-PAPER-KERNEL: associate the PAPER, not the Evidence, and only with
     # a Kernel that already exists (INV-KK-PAPER-KERNEL-MATCHED). A name the
@@ -1334,4 +1429,6 @@ def extract_concepts(
         extraction_model=model,
         prompt_tokens=response.get("prompt_tokens", 0),
         response_tokens=response.get("response_tokens", 0),
+        cached_tokens=response.get("cached_tokens", 0),
+        cache_written_tokens=response.get("cache_written_tokens", 0),
     )

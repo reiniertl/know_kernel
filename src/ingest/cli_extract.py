@@ -8,7 +8,11 @@ import sys
 from pathlib import Path
 
 from graph.schema import init_db
-from ingest.extractor import edge_carries_a_current_verdict, extract_concepts
+from ingest.extractor import (
+    edge_carries_a_current_verdict,
+    evidence_carries_a_no_match_verdict,
+    extract_concepts,
+)
 from ingest.llm_provider import DEFAULT_PROVIDER, PROVIDERS, client_for, default_model_for
 from ingest.gate import SessionGate
 
@@ -48,7 +52,17 @@ def select_for_relink(conn) -> list[str]:
             attrs = {}
         current = edge_carries_a_current_verdict(attrs)
         by_evidence[target_id] = by_evidence.get(target_id, False) or current
-    return sorted(eid for eid, has_current in by_evidence.items() if not has_current)
+    # INV-KK-EXTRACT-NEGATIVE-VERDICT joined this test on 2026-09-28. A paper a
+    # run already concluded matches NOTHING has no edge left to carry that
+    # answer, so the verdict lives on the Evidence — and without reading it here
+    # the selection would offer papers extract_concepts returns early on, which
+    # is precisely the drift the shared current() test exists to prevent.
+    # Measured before it: the queue stood at 1,322 before a paid 20-paper batch
+    # and 1,322 after.
+    return sorted(
+        eid for eid, has_current in by_evidence.items()
+        if not has_current and not evidence_carries_a_no_match_verdict(conn, eid)
+    )
 
 
 def drop_evidence_with_no_input(conn, evidence_ids: list[str]) -> tuple[list[str], list[str]]:
@@ -182,6 +196,8 @@ def main() -> None:
                 "extraction_model": result.extraction_model,
                 "prompt_tokens": result.prompt_tokens,
                 "response_tokens": result.response_tokens,
+                "cached_tokens": result.cached_tokens,
+                "cache_written_tokens": result.cache_written_tokens,
             })
         except ValueError as exc:
             print(f"Error extracting {eid}: {exc}", file=sys.stderr)

@@ -327,8 +327,16 @@ def test_relink_queues_a_candidate_when_no_concept_of_that_name_exists(conn):
     assert result.concepts_rejected == 1
     assert conn.execute(
         "SELECT COUNT(*) FROM nodes WHERE kind='Concept'").fetchone()[0] == before
-    # And nothing was superseded, because nothing replaced it.
-    assert result.edges_superseded == 0
+    # THE OLD LINK IS NOW RETIRED, AND THE ASSERTION BELOW WAS INVERTED ON
+    # 2026-09-28. This test said "nothing was superseded, because nothing
+    # replaced it", which is exactly the behaviour a paid 20-paper batch showed
+    # to be non-terminating: the model READ the paper, proposed a name the
+    # vocabulary does not hold, and the false title-derived link survived to be
+    # re-examined by every future run. concepts_rejected > 0 is the proof an
+    # answer was given, and INV-KK-EXTRACT-NEGATIVE-VERDICT records it. Nothing
+    # REPLACES the link because nothing should: the honest state of a paper
+    # about none of our concepts is no concept link at all.
+    assert result.edges_superseded == 1
     queued = {c.name for c in candidate_ranking(conn)}
     assert "Copy-on-Write" in queued
 
@@ -686,3 +694,173 @@ def test_the_cli_reports_the_kernel_counters(monkeypatch, capsys, corpus):
     assert report["kernels_associated"] == 1
     assert report["kernels_rejected"] == 0
     assert report["results"][0]["kernel_id"] == "k-linux-mainline"
+
+
+# --- the negative verdict (INV-KK-EXTRACT-NEGATIVE-VERDICT) -----------------
+#
+# FOUND BY A PAID BATCH ON 2026-09-28. Twenty papers from the relink queue:
+# concepts_reused 0, concepts_rejected 57, edges_superseded 0, queue 1,322
+# before and 1,322 after. The model read every paper and correctly concluded
+# each was about none of 296 kernel concepts, and the machinery could not tell
+# that answer from a crash — so the false link survived and the paper stayed in
+# the queue to be paid for again. The legacy linker was substring-matching
+# titles: "A Task Equalization Algorithm Incorporating BLOCKCHAIN" was linked
+# to Block Device Layer, and "Improving IoT Intrusion Detection" to Linux
+# Security Modules. Two concepts hold 798 of the 2,022 legacy links.
+
+class NoMatchClient:
+    """Proposes names, none of which the vocabulary contains — the measured
+    majority case, not a corner."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def create_message(self, model, system, user, max_tokens):
+        self.calls.append({"model": model, "user": user})
+        return {"text": json.dumps({"concepts": [{
+            "name": "RowHammer Vulnerability",
+            "description": "Repeated DRAM row access flipping adjacent bits.",
+            "key_properties": ["row-granular"], "tradeoffs": ["refresh cost"],
+            "design_rationale": "n/a", "subsystem": "Memory",
+            "relationships": [], "invariants": [],
+        }]}), "prompt_tokens": 3400, "response_tokens": 200,
+            "cached_tokens": 2048, "cache_written_tokens": 0}
+
+
+class UnparseableClient:
+    """Returns nothing usable — the TRANSIENT failure, which must still retry.
+    ev-arxiv-027e07c3 on 2026-09-21 was this shape and succeeded on its retry."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def create_message(self, model, system, user, max_tokens):
+        self.calls.append({"model": model, "user": user})
+        return {"text": "not json at all", "prompt_tokens": 3400,
+                "response_tokens": 5}
+
+
+def _verdict(conn, eid):
+    row = conn.execute(
+        "SELECT json_extract(attrs, '$.concept_verdict') FROM nodes WHERE id = ?",
+        (eid,)).fetchone()
+    return json.loads(row[0]) if row and row[0] else None
+
+
+def test_a_paper_about_nothing_we_know_has_its_false_link_retired(conn):
+    """The answer "none of these" is an ANSWER. The honest state of an IoT
+    intrusion-detection paper is NO concept link, not a link to Linux Security
+    Modules."""
+    eid = _paper(conn, "1", "A study of IoT intrusion detection with SMOTE.")
+    cid = _concept(conn, "concept-lsm", "Linux Security Modules")
+    _legacy_link(conn, cid, eid)
+
+    r = extract_concepts(conn, eid, SessionGate(), client=NoMatchClient(),
+                         relink=True)
+
+    assert r.concepts_reused == 0
+    assert r.concepts_created == 0
+    assert r.concepts_rejected == 1
+    assert r.edges_superseded == 1
+    assert _edge_attrs(conn, cid, eid)["superseded"] is True
+    assert _verdict(conn, eid)["result"] == "no-match"
+
+
+def test_the_answered_paper_leaves_the_relink_queue(conn):
+    """THE NUMBER THAT MADE THIS A DEFECT: the queue stood at 1,322 before a
+    paid batch and 1,322 after. Selection and the in-function guard read one
+    predicate, so a paper the selection skips is one the function would have
+    returned early on."""
+    eid = _paper(conn, "1", "A study of IoT intrusion detection with SMOTE.")
+    cid = _concept(conn, "concept-lsm", "Linux Security Modules")
+    _legacy_link(conn, cid, eid)
+    assert eid in select_for_relink(conn)
+
+    extract_concepts(conn, eid, SessionGate(), client=NoMatchClient(),
+                     relink=True)
+    conn.commit()
+
+    assert eid not in select_for_relink(conn)
+
+
+def test_a_second_run_on_an_answered_paper_calls_no_model(conn):
+    """Convergence, for the negative case: the second run does no work at all."""
+    eid = _paper(conn, "1", "A study of IoT intrusion detection with SMOTE.")
+    _legacy_link(conn, _concept(conn, "concept-lsm", "Linux Security Modules"), eid)
+    extract_concepts(conn, eid, SessionGate(), client=NoMatchClient(), relink=True)
+    conn.commit()
+
+    second = NoMatchClient()
+    r = extract_concepts(conn, eid, SessionGate(), client=second, relink=True)
+
+    assert second.calls == []
+    assert r.concepts_created == 0
+    assert r.edges_superseded == 0
+
+
+def test_an_unparseable_answer_is_still_retried_and_touches_nothing(conn):
+    """THE CASE THE OLD FAILURE PATH WAS WRITTEN FOR, and it is unchanged.
+    concepts_rejected == 0 is what tells it apart: the model proposed no names
+    at all, so nothing was read and nothing was concluded."""
+    eid = _paper(conn, "1")
+    cid = _concept(conn, "concept-cow", "Copy-on-Write")
+    _legacy_link(conn, cid, eid)
+
+    r = extract_concepts(conn, eid, SessionGate(), client=UnparseableClient(),
+                         relink=True)
+    conn.commit()
+
+    assert r.concepts_rejected == 0
+    assert r.edges_superseded == 0
+    assert _edge_attrs(conn, cid, eid)["superseded"] is False
+    assert _verdict(conn, eid) is None
+    assert eid in select_for_relink(conn), "a crashed run must be retried"
+
+
+def test_a_match_still_supersedes_and_writes_no_verdict(conn):
+    """The positive path is untouched: a replacement exists, so the old link is
+    retired and no no-match verdict is written."""
+    eid = _paper(conn, "1")
+    old = _concept(conn, "concept-lsm", "Linux Security Modules")
+    _concept(conn, "concept-cow", "Copy-on-Write")
+    _legacy_link(conn, old, eid)
+
+    r = extract_concepts(conn, eid, SessionGate(), client=MockLLMClient(),
+                         relink=True)
+    conn.commit()
+
+    assert r.concepts_reused == 1
+    assert r.edges_superseded == 1
+    assert _verdict(conn, eid) is None
+    assert eid not in select_for_relink(conn)
+
+
+def test_the_verdict_is_not_written_outside_relink_mode(conn):
+    """A first extraction that matches nothing has no false link to retire, and
+    inventing a verdict there would withdraw a paper from --all-unextracted
+    that was never mis-linked in the first place."""
+    eid = _paper(conn, "1", "A study of IoT intrusion detection with SMOTE.")
+
+    r = extract_concepts(conn, eid, SessionGate(), client=NoMatchClient())
+    conn.commit()
+
+    assert r.concepts_rejected == 1
+    assert r.edges_superseded == 0
+    assert _verdict(conn, eid) is None
+
+
+def test_cached_tokens_reaches_the_result(conn):
+    """INV-KK-LLM-CACHE-REPORTED. The adapters have returned it since the
+    prompt-caching change and it reached nothing — the one number saying whether
+    the cached prefix is being hit was unobservable on the path that spends the
+    most money. A ZERO means the prefix is being invalidated, and every cause of
+    that is silent."""
+    eid = _paper(conn, "1", "A study of IoT intrusion detection with SMOTE.")
+    _legacy_link(conn, _concept(conn, "concept-lsm", "Linux Security Modules"), eid)
+
+    r = extract_concepts(conn, eid, SessionGate(), client=NoMatchClient(),
+                         relink=True)
+
+    assert r.cached_tokens == 2048
+    assert r.cache_written_tokens == 0
+    assert r.prompt_tokens == 3400
