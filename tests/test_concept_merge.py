@@ -414,3 +414,163 @@ def test_a_merged_away_concept_still_collides_until_the_queue_filters_it(conn):
     conn.commit()
     merge_concepts(conn, lose, win, reviewed_by="reinier")
     assert len(colliding_pairs(conn)) == 1
+
+
+# --- through the real router (ALG-KK-WEB-CONCEPT-MERGE) ---------------------
+
+
+import json as _json
+
+from fastapi.testclient import TestClient
+
+from web.app import create_app
+from web.routes import WEB_MUTATION_ALLOWLIST
+
+
+@pytest.fixture
+def merge_db(tmp_path):
+    path = tmp_path / "web-merge.db"
+    c = init_db(path)
+    _concept(c, "concept-win", "NUMA Topology and Memory Policy")
+    _concept(c, "concept-lose", "NUMA Memory Policy")
+    _concept(c, "concept-far", "Grace Period")
+    _subsystem(c, "sub-mm", "mm")
+    _paper(c, "1", "concept-win")
+    _paper(c, "2", "concept-lose")
+    add_edge(c, "belongs-to", "concept-lose", "sub-mm")
+    _discussion(c, "disc-1", "concept-lose")
+    c.commit()
+    c.close()
+    return str(path)
+
+
+@pytest.fixture
+def curator_client(merge_db):
+    """An AUTHENTICATED but non-admin curator — the bar this route sets."""
+    app = create_app(merge_db)
+
+    @app.middleware("http")
+    async def _as_curator(request, call_next):
+        request.state.user = {"username": "kate", "role": "reviewer",
+                              "reviewer": "reviewer-kate"}
+        return await call_next(request)
+
+    with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture
+def anon_client(merge_db):
+    """No middleware, so request.state.user is absent."""
+    with TestClient(create_app(merge_db)) as c:
+        yield c
+
+
+def _db_attrs(client, cid):
+    return _json.loads(client.app.state.conn.execute(
+        "SELECT attrs FROM nodes WHERE id = ?", (cid,)).fetchone()[0])
+
+
+def test_the_prefix_is_on_the_mutation_allowlist(merge_db):
+    """INV-KK-WEB-MUTATION-ALLOWLISTED."""
+    assert "/api/concept-merge/" in WEB_MUTATION_ALLOWLIST
+
+
+def test_a_curator_merges_and_the_response_says_what_moved(curator_client):
+    r = curator_client.post("/api/concept-merge/concept-lose/concept-win")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["moved"] == 3          # extracted-from, belongs-to, discusses
+    assert body["dropped"] == 0
+    assert body["weight_before"] == 1
+    assert body["weight_after"] == 2
+    assert body["winner_name"] == "NUMA Topology and Memory Policy"
+    assert body["loser_name"] == "NUMA Memory Policy"
+
+
+def test_the_editor_comes_from_the_session_and_a_body_field_is_ignored(curator_client):
+    """INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION. This route reads no body at all,
+    so a reviewer field cannot even be offered."""
+    r = curator_client.post("/api/concept-merge/concept-lose/concept-win",
+                            json={"reviewer": "somebody-else"})
+    assert r.status_code == 200, r.text
+    assert _db_attrs(curator_client, "concept-lose")["reviewed_by"] == "reviewer-kate"
+
+
+def test_a_non_admin_curator_is_enough(curator_client):
+    """THE VENUE PRECEDENT IS DELIBERATELY NOT FOLLOWED. An admin gate would
+    make page one of the review queue unactionable by the person it was built
+    for. The fixture's role is 'reviewer', not 'admin'."""
+    r = curator_client.post("/api/concept-merge/concept-lose/concept-win")
+    assert r.status_code == 200, r.text
+
+
+def test_an_anonymous_caller_is_refused_and_writes_nothing(anon_client):
+    r = anon_client.post("/api/concept-merge/concept-lose/concept-win")
+    assert r.status_code == 401
+    assert _db_attrs(anon_client, "concept-lose").get("curation_state") != "retired"
+    assert concept_weight(anon_client.app.state.conn, "concept-lose") == 1
+
+
+def test_an_unknown_concept_is_404(curator_client):
+    r = curator_client.post("/api/concept-merge/concept-nope/concept-win")
+    assert r.status_code == 404
+    assert "No Concept" in r.json()["error"]
+
+
+def test_a_self_merge_is_422(curator_client):
+    r = curator_client.post("/api/concept-merge/concept-win/concept-win")
+    assert r.status_code == 422
+    assert "itself" in r.json()["error"]
+
+
+def test_a_second_call_through_the_route_is_a_no_op(curator_client):
+    first = curator_client.post("/api/concept-merge/concept-lose/concept-win")
+    second = curator_client.post("/api/concept-merge/concept-lose/concept-win")
+    assert first.json()["moved"] == 3
+    assert second.status_code == 200
+    assert second.json()["moved"] == 0 and second.json()["dropped"] == 0
+
+
+def test_the_merged_concept_leaves_the_vocabulary_the_extractor_is_shown(curator_client):
+    """The one that matters most, asserted through the real route."""
+    curator_client.post("/api/concept-merge/concept-lose/concept-win")
+    ctx = build_vocabulary_context(curator_client.app.state.conn)
+    assert "NUMA Topology and Memory Policy" in ctx
+    assert "NUMA Memory Policy" not in ctx.replace(
+        "NUMA Topology and Memory Policy", "")
+
+
+# --- the affordance names the counterpart ----------------------------------
+
+
+def test_the_detail_page_offers_the_named_counterpart_both_ways(curator_client):
+    """A curator retyping the name will mistype it, so the page presses a
+    button naming the specific other entry — and offers both directions,
+    because which one wins is the curator's judgement."""
+    page = curator_client.get("/concepts/concept-lose").text
+    assert "This name collides" in page
+    assert "NUMA Topology and Memory Policy" in page
+    assert "mergeConcept('concept-lose', 'concept-win'" in page
+    assert "mergeConcept('concept-win', 'concept-lose'" in page
+
+
+def test_a_concept_that_collides_with_nothing_gets_no_merge_control(curator_client):
+    page = curator_client.get("/concepts/concept-far").text
+    assert "This name collides" not in page
+
+
+def test_an_already_merged_counterpart_is_not_offered_again(curator_client):
+    """A retired counterpart is not a merge a curator should be offered twice."""
+    curator_client.post("/api/concept-merge/concept-lose/concept-win")
+    page = curator_client.get("/concepts/concept-win").text
+    assert "This name collides" not in page
+
+
+def test_the_list_names_what_each_row_collides_with(curator_client):
+    """The badge said "name collides" and not what WITH, which is why the only
+    affordance it could have offered was a text field."""
+    page = curator_client.get("/concepts").text
+    assert "collides with" in page
+    assert 'href="/concepts/concept-win"' in page
+    assert 'href="/concepts/concept-lose"' in page

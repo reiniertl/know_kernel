@@ -85,6 +85,7 @@ WEB_MUTATION_ALLOWLIST = (
     "/api/concept-dismiss/",  # drop a queued name that is not a concept
     "/api/concept/",          # edit an existing Concept — the review mechanism
     "/api/concept-retire/",   # a state flip, never a delete
+    "/api/concept-merge/",    # collapse a duplicate; the evidence moves
 )
 
 
@@ -320,7 +321,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         from graph.concept_vocabulary import (
             CURATION_STATES,
             DEFAULT_CURATION_STATE,
-            colliding_concepts,
+            colliding_pairs,
             curation_state as read_curation_state,
         )
         from graph.rules import admission_state, seminal_concepts
@@ -364,7 +365,20 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         # Both read ONCE for the whole page, never once per row —
         # INV-KK-WEB-QUERY-BOUNDED.
         seminal = seminal_concepts(conn)
-        colliding = colliding_concepts(conn)
+        # The PAIRS and not just the flag, from 2026-09-28. The badge could say
+        # "name collides" and not what it collided WITH, so the only merge
+        # affordance the page could offer was a text field — and a curator
+        # retyping "NUMA Topology and Memory Policy" will mistype it. ONE sweep
+        # still, per INV-KK-WEB-QUERY-BOUNDED; the map is built from its result.
+        collides_with: dict[str, list[str]] = {}
+        for id_a, id_b in colliding_pairs(conn):
+            collides_with.setdefault(id_a, []).append(id_b)
+            collides_with.setdefault(id_b, []).append(id_a)
+        # Names for the counterparts in ONE query, not one per counterpart:
+        # a counterpart may sit on any page, so it cannot come from `rows`.
+        counterpart_names = dict(conn.execute(
+            "SELECT id, json_extract(attrs, '$.name') FROM nodes "
+            "WHERE kind = 'Concept'").fetchall()) if collides_with else {}
         concepts = []
         for concept_id, raw in rows:
             attrs = json.loads(raw) if isinstance(raw, str) else (raw or {})
@@ -377,7 +391,11 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "kernels": _concept_kernels(conn, concept_id),
                 "state": admission_state(conn, concept_id, seminal),
                 "curation": read_curation_state(attrs),
-                "collides": concept_id in colliding,
+                "collides": concept_id in collides_with,
+                "collides_with": [
+                    {"id": other, "name": counterpart_names.get(other) or other}
+                    for other in collides_with.get(concept_id, [])
+                ],
             })
 
         # Filtering AFTER classification is deliberate and is a known limit: the
@@ -630,6 +648,56 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "reviewed_by": identity["reviewer"],
         })
 
+    @app.post("/api/concept-merge/{loser_id}/{winner_id}")
+    async def api_concept_merge(request: Request, loser_id: str, winner_id: str):
+        """A human collapses one Concept into another (ALG-KK-WEB-CONCEPT-MERGE).
+
+        THE VERB THE REVIEW SURFACE WAS MISSING. Editing corrects a Concept and
+        retiring withdraws one; neither resolves a duplicate, because retiring
+        the smaller of a pair leaves its papers attached to an entry no page
+        will ever surface again. Measured 2026-09-28, twenty of the 25 colliding
+        pairs carry papers on BOTH sides.
+
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/concept-merge/ is on
+        WEB_MUTATION_ALLOWLIST.
+
+        INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION: reviewed_by comes from the
+        gate-resolved identity. This route reads no body at all, so a reviewer
+        field cannot even be offered.
+
+        AUTHENTICATED AND NOT ADMIN, AND THE VENUE PRECEDENT IS DELIBERATELY NOT
+        FOLLOWED. Operator decision 2026-09-28. INV-KK-VENUE-MUTATION-AUTHORISED
+        gates POST /api/venue/merge on admin because one call repoints up to 897
+        Sources. A concept merge moves at most ~72 papers plus inbound edges and
+        it sits INSIDE the review queue: IFC-KK-CONCEPT-REVIEW-PRIORITY sorts
+        collisions to page one precisely so a curator resolves them, and an admin
+        gate would make page one's whole signal unactionable by the person it was
+        built for. It matches /api/concept/ and /api/concept-retire/, which is
+        the surface it belongs to. The blast-radius principle is honoured by
+        measuring the radius, not by copying the answer.
+
+        The loser comes FIRST in the path because that is the order the sentence
+        reads on the page — merge this into that — and mixing them up is the one
+        mistake a curator cannot undo from the UI.
+        """
+        from graph.concept_vocabulary import merge_concepts
+        import dataclasses
+
+        identity = getattr(request.state, "user", None)
+        if identity is None:
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+        conn = request.app.state.conn
+        try:
+            result = merge_concepts(
+                conn, loser_id, winner_id, reviewed_by=identity["reviewer"])
+        except ValueError as exc:
+            status = 404 if str(exc).startswith("No Concept") else 422
+            return JSONResponse({"error": str(exc)}, status_code=status)
+
+        conn.commit()
+        return JSONResponse(dataclasses.asdict(result))
+
     @app.post("/api/concept-dismiss/{normalised:path}")
     async def api_concept_dismiss(request: Request, normalised: str):
         """Drop a queued name a curator judged not to be a Concept.
@@ -790,12 +858,38 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         concept_papers_preview: list[dict] = []
         concept_paper_total = 0
         concept_state = ""
+        concept_collides_with: list[dict] = []
         if node["kind"] == "Concept":
+            from graph.concept_vocabulary import colliding_pairs
             from graph.rules import admission_state, seminal_concepts
             concept_papers_preview = _concept_papers(
                 conn, node_id, CONCEPT_PAPERS_PREVIEW)
             concept_paper_total = concept_weight(conn, node_id)
             concept_state = admission_state(conn, node_id, seminal_concepts(conn))
+            # THE MERGE AFFORDANCE NAMES THE COUNTERPART AND NEVER ASKS FOR A
+            # TYPED NAME (ALG-KK-WEB-CONCEPT-MERGE). A curator retyping "NUMA
+            # Topology and Memory Policy" will mistype it, and a mistyped merge
+            # is a 404 at best and the wrong merge at worst. Both directions are
+            # offered because which of a pair is the winner is the curator's
+            # judgement and not the queue's — the 72-paper entry is usually
+            # right, and "Huge Pages" against "Transparent Huge Pages" is not a
+            # merge at all.
+            for id_a, id_b in colliding_pairs(conn):
+                other = (id_b if id_a == node_id
+                         else id_a if id_b == node_id else None)
+                if other is None:
+                    continue
+                row = conn.execute(
+                    "SELECT json_extract(attrs, '$.name'), "
+                    "json_extract(attrs, '$.curation_state') FROM nodes "
+                    "WHERE id = ?", (other,)).fetchone()
+                if row is None or row[1] == "retired":
+                    # A counterpart already retired or merged away is not a
+                    # merge a curator should be offered twice.
+                    continue
+                concept_collides_with.append({
+                    "id": other, "name": row[0] or other,
+                    "papers": concept_weight(conn, other)})
 
         return templates.TemplateResponse(
             request,
@@ -809,6 +903,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "concept_papers": concept_papers_preview,
                 "concept_paper_total": concept_paper_total,
                 "concept_state": concept_state,
+                "concept_collides_with": concept_collides_with,
                 "papers_preview_size": CONCEPT_PAPERS_PREVIEW,
             },
         )

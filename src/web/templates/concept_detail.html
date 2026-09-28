@@ -74,6 +74,47 @@
       extractor is shown.
     </p>
   </form>
+
+  {% if concept_collides_with and attrs.get('curation_state') != 'retired' %}
+  {# ALG-KK-WEB-CONCEPT-MERGE. The counterpart is NAMED and pressed, never
+     typed: a curator retyping "NUMA Topology and Memory Policy" will mistype
+     it. Both directions are offered on each row because which of a pair is the
+     winner is the curator's judgement — several of the 25 measured pairs are
+     not merges at all. #}
+  <h4>This name collides</h4>
+  <p class="muted small">
+    Until one of these is resolved both entries collect evidence separately, and
+    the split is permanent. Merging moves every paper and every link onto the
+    entry you keep and retires the other &mdash; it keeps its name and gains a
+    <code>supersedes</code> edge saying which entry replaced it. Where the two
+    already share a link the survivor&rsquo;s is kept and the duplicate is
+    dropped, so the paper count afterwards is the union and not the sum.
+    <strong>Some collisions are not merges</strong>: Huge Pages and Transparent
+    Huge Pages are different mechanisms.
+  </p>
+  <table>
+    <thead><tr><th>Collides with</th><th>Papers</th><th>Merge</th></tr></thead>
+    <tbody>
+      {% for other in concept_collides_with %}
+      <tr>
+        <td><a href="/concepts/{{ other.id }}">{{ other.name }}</a></td>
+        <td>{{ other.papers }}</td>
+        <td>
+          <button type="button"
+                  onclick="mergeConcept('{{ node.id }}', '{{ other.id }}', {{ other.name | tojson }})">
+            Merge this into it
+          </button>
+          <button type="button"
+                  onclick="mergeConcept('{{ other.id }}', '{{ node.id }}', {{ (attrs.get('name') or node.id) | tojson }})">
+            Merge it into this
+          </button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small" id="concept-merge-status"></p>
+  {% endif %}
 </div>
 
 <script>
@@ -103,6 +144,22 @@ async function saveConcept(ev) {
   if (r.ok) { location.reload(); }
   else { conceptStatus(body.error || "save failed"); }
   return false;
+}
+async function mergeConcept(loser, winner, winnerName) {
+  if (!confirm("Merge into \u201c" + winnerName + "\u201d? Every paper and link moves to it, and the other entry is retired. This cannot be undone from this page."))
+    return;
+  var el = document.getElementById("concept-merge-status");
+  el.textContent = "merging\u2026";
+  var r = await fetch("/api/concept-merge/" + encodeURIComponent(loser) + "/" + encodeURIComponent(winner), {method: "POST"});
+  var body = await r.json();
+  if (r.ok) {
+    el.textContent = body.moved + " links moved, " + body.dropped +
+      " already shared and dropped; papers " + body.weight_before +
+      " \u2192 " + body.weight_after + ".";
+    setTimeout(function () { location.href = "/concepts/" + winner; }, 1500);
+  } else {
+    el.textContent = body.error || "merge failed";
+  }
 }
 async function retireConcept() {
   if (!confirm("Retire this concept? It keeps its links but is withdrawn from the vocabulary the extractor is shown.")) return;
