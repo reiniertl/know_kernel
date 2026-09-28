@@ -569,10 +569,17 @@ SIGNED_CURATION_STATES = ("reviewed",)
 CURATION_ATTRS = ("curation_state", "harvest_batch", "reviewed_by", "reviewed_at")
 
 
-def colliding_concepts(
+def colliding_pairs(
     conn: sqlite3.Connection, max_distance: int = DEFAULT_MAX_DISTANCE
-) -> set[str]:
-    """Concept ids whose name matches another Concept under the real matcher.
+) -> list[tuple[str, str]]:
+    """Every pair of Concept ids whose names collide under the review signal.
+
+    THE PAIR AND NOT JUST THE FLAG, FROM 2026-09-28. The queue has flagged
+    colliding rows since 2026-09-25 and could not say what each one collided
+    WITH, so the only merge affordance it could offer was a text field — and a
+    curator retyping "NUMA Topology and Memory Policy" will mistype it. Naming
+    the counterpart is what makes ALG-KK-WEB-CONCEPT-MERGE pressable rather
+    than typeable. colliding_concepts is now a flattening of this.
 
     IFC-KK-CONCEPT-REVIEW-PRIORITY's first sort key. It uses the SAME three
     tiers fuzzy_match_concept uses — exact, prefix either way, Levenshtein —
@@ -598,7 +605,7 @@ def colliding_concepts(
             "WHERE kind = 'Concept'"
         ).fetchall() if r[1]
     ]
-    colliding: set[str] = set()
+    pairs: list[tuple[str, str]] = []
     for i in range(len(rows)):
         id_a, a = rows[i]
         for j in range(i + 1, len(rows)):
@@ -624,9 +631,26 @@ def colliding_concepts(
             # attaches a paper, and they need not agree.
             if (a == b or a.startswith(b) or b.startswith(a)
                     or contained_in(a, b) or contained_in(b, a)):
-                colliding.add(id_a)
-                colliding.add(id_b)
-    return colliding
+                pairs.append((id_a, id_b))
+    return pairs
+
+
+def colliding_concepts(
+    conn: sqlite3.Connection, max_distance: int = DEFAULT_MAX_DISTANCE
+) -> set[str]:
+    """The ids that appear in at least one colliding pair.
+
+    A FLATTENING OF colliding_pairs AND NEVER A SECOND IMPLEMENTATION. The two
+    answer different questions the review surface asks — "does this row need a
+    badge" and "which specific concept does it collide with" — and a queue whose
+    badge and whose merge button disagreed about what a collision is would be
+    worse than either alone.
+    """
+    ids: set[str] = set()
+    for id_a, id_b in colliding_pairs(conn, max_distance):
+        ids.add(id_a)
+        ids.add(id_b)
+    return ids
 
 
 def curation_state(attrs: dict | None) -> str:
@@ -776,3 +800,179 @@ def _attr_supplied(value) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
     return True
+
+
+@dataclass
+class MergeResult:
+    """What a merge moved, and what it could not move because it was already there."""
+    ok: bool
+    winner_id: str
+    loser_id: str
+    winner_name: str
+    loser_name: str
+    moved: int
+    dropped: int
+    weight_before: int
+    weight_after: int
+
+
+def merge_concepts(
+    conn: sqlite3.Connection,
+    loser_id: str,
+    winner_id: str,
+    reviewed_by: str,
+    reviewed_at: str = "",
+) -> MergeResult:
+    """A human collapses one Concept into another and the evidence MOVES
+    (ALG-KK-GRAPH-CONCEPT-MERGE).
+
+    NOTHING HAS EVER BEEN ABLE TO DO THIS. update_concept can correct a Concept
+    and retire_concept can withdraw one, and neither resolves a duplicate:
+    retiring the smaller of a pair leaves its papers attached to something no
+    page will ever surface again. Measured 2026-09-28, 41 Concepts collide in 25
+    pairs and TWENTY of those pairs carry papers on both sides — "NUMA Memory
+    Policy" with 1 paper sits beside "NUMA Topology and Memory Policy" with 72.
+    Retiring the small one strands its paper. The evidence has to move.
+
+    THE REPOINT IS BY NODE ID AND IN BOTH DIRECTIONS, NOT BY A LIST OF KINDS.
+    A Concept carries EIGHT outbound edge kinds (extracted-from 2,246,
+    belongs-to 233, implemented-in 94, suited-for 56, prerequisite 48,
+    contributes-to 40, refines 17, alternative-to 6) and is the TARGET of
+    SIXTEEN more (discusses 148, observes 122, governed-by 74, profiled-by 71,
+    and twelve others). An outbound-only merge strands 148 Discussion edges
+    pointing at a Concept the curator believes they just eliminated. Repointing
+    by id covers an edge kind added tomorrow by construction, where a list would
+    silently start stranding it — and it is SAFE because both endpoints are
+    Concepts: any (kind, source, target) pair graph.schema accepts for the loser
+    it accepts for the winner, so no repoint can produce an invalid edge.
+
+    THE UNIQUE CONSTRAINT FIRES ON MOST PAIRS, NOT AS AN EDGE CASE. edges
+    carries UNIQUE (kind, source_id, target_id), and SIXTEEN of the 25 colliding
+    pairs already share at least one neighbour — 23 shared edges — so a plain
+    UPDATE raises IntegrityError on 64% of the merges a curator would want. The
+    check-then-act shape attach_existing_concept uses is copied: where the
+    winner already holds the same (kind, other endpoint), the loser's edge is
+    DELETED and counted as dropped, and THE WINNER'S ATTRS SURVIVE UNTOUCHED.
+    Operator decision 2026-09-28: the winner is canonical by the curator's
+    choice, and the loser's verdict describes a name being withdrawn. Preferring
+    the newer basis was refused because it lets a machine-written evidence-text
+    verdict overwrite a human-curated edge on the survivor.
+
+    A SELF-LOOP IS DROPPED AND NEVER CREATED. prerequisite, refines and
+    alternative-to run Concept to Concept, so a loser pointing at its own winner
+    would repoint into a loop. Zero pairs are in that position today — measured,
+    all 25 — which is exactly why it is handled before the first one appears.
+
+    THE LOSER IS RETIRED AND NEVER DELETED, AND ONE EDGE SAYS WHICH KIND OF
+    RETIREMENT IT WAS. supersedes(winner, loser) is added last. It is the reason
+    'retired' can mean two shapes without a fourth state word: a retired Concept
+    with an inbound supersedes edge was merged away, one without it was judged
+    wrong, and that is a query rather than a convention. See the 2026-09-28
+    amendment to INV-KK-CONCEPT-CURATION-VOCABULARY. ALG-KK-WEB-VENUE-MERGE
+    deletes its loser outright and the record that the name existed goes with
+    it; "why is there no Robust Futexes any more" has an answer here and none
+    under a delete.
+
+    IDEMPOTENCE COMES FROM THAT EDGE, NOT FROM THE LOSER VANISHING. merge_venues
+    is idempotent because its second call finds no source Venue; the loser here
+    survives, so the no-op test is the presence of supersedes(winner, loser) and
+    a repeat call reports moved=0, dropped=0 rather than raising.
+    """
+    # Lazily, the way update_concept does: graph.engine imports from
+    # graph.schema and a module-level import here would be a cycle.
+    from graph.engine import add_edge, get_node, update_node_attrs
+    from graph.rules import concept_weight
+
+    if loser_id == winner_id:
+        raise ValueError("Cannot merge a concept into itself")
+    if not reviewed_by:
+        raise ValueError("A merge must name the human who made it")
+
+    for cid in (loser_id, winner_id):
+        node = get_node(conn, cid)
+        if node is None or node["kind"] != "Concept":
+            raise ValueError(f"No Concept '{cid}'")
+
+    loser = get_node(conn, loser_id)
+    winner = get_node(conn, winner_id)
+    loser_name = loser["attrs"].get("name") or loser_id
+    winner_name = winner["attrs"].get("name") or winner_id
+    weight_before = concept_weight(conn, winner_id)
+
+    already = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'supersedes' "
+        "AND source_id = ? AND target_id = ?", (winner_id, loser_id),
+    ).fetchone()
+    if already is not None:
+        return MergeResult(
+            ok=True, winner_id=winner_id, loser_id=loser_id,
+            winner_name=winner_name, loser_name=loser_name,
+            moved=0, dropped=0,
+            weight_before=weight_before, weight_after=weight_before,
+        )
+
+    moved = dropped = 0
+
+    # Outbound: loser -kind-> other.
+    for kind, other in conn.execute(
+        "SELECT kind, target_id FROM edges WHERE source_id = ?", (loser_id,)
+    ).fetchall():
+        if other == winner_id or _edge_exists(conn, kind, winner_id, other):
+            conn.execute(
+                "DELETE FROM edges WHERE kind = ? AND source_id = ? AND target_id = ?",
+                (kind, loser_id, other))
+            dropped += 1
+            continue
+        conn.execute(
+            "UPDATE edges SET source_id = ? WHERE kind = ? AND source_id = ? "
+            "AND target_id = ?", (winner_id, kind, loser_id, other))
+        moved += 1
+
+    # Inbound: other -kind-> loser. The half the request did not name and the
+    # half that carries discusses, observes and governed-by.
+    for kind, other in conn.execute(
+        "SELECT kind, source_id FROM edges WHERE target_id = ?", (loser_id,)
+    ).fetchall():
+        if other == winner_id or _edge_exists(conn, kind, other, winner_id):
+            conn.execute(
+                "DELETE FROM edges WHERE kind = ? AND source_id = ? AND target_id = ?",
+                (kind, other, loser_id))
+            dropped += 1
+            continue
+        conn.execute(
+            "UPDATE edges SET target_id = ? WHERE kind = ? AND source_id = ? "
+            "AND target_id = ?", (winner_id, kind, other, loser_id))
+        moved += 1
+
+    update_node_attrs(conn, loser_id, {
+        "curation_state": "retired",
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at or datetime.now(timezone.utc).date().isoformat(),
+    })
+
+    # Last, so the inbound sweep above never sees it and repoints it into a loop.
+    add_edge(conn, "supersedes", winner_id, loser_id)
+
+    return MergeResult(
+        ok=True, winner_id=winner_id, loser_id=loser_id,
+        winner_name=winner_name, loser_name=loser_name,
+        moved=moved, dropped=dropped,
+        weight_before=weight_before,
+        weight_after=concept_weight(conn, winner_id),
+    )
+
+
+def _edge_exists(
+    conn: sqlite3.Connection, kind: str, source_id: str, target_id: str
+) -> bool:
+    """Whether the winner already holds the edge the loser is bringing.
+
+    The UNIQUE (kind, source_id, target_id) test, asked BEFORE the UPDATE rather
+    than caught after it: an IntegrityError arrives part way through a merge,
+    with some edges moved and some not and no transaction boundary the caller
+    asked for.
+    """
+    return conn.execute(
+        "SELECT 1 FROM edges WHERE kind = ? AND source_id = ? AND target_id = ?",
+        (kind, source_id, target_id),
+    ).fetchone() is not None
