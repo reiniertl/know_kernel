@@ -906,3 +906,94 @@ def test_the_queue_is_written_by_default(conn):
     conn.commit()
 
     assert {c.name for c in candidate_ranking(conn)} == {"RowHammer Vulnerability"}
+
+
+# --- only concept edges are a re-link's to retire --------------------------
+#
+# MEASURED 2026-09-28 ON COMMITTED DATA, and it is why a 1,302-paper run was
+# killed 253 papers in. extracted-from carries THIRTEEN valid source kinds and
+# a re-link re-derives exactly one of them, but superseding_candidates was
+# built from every edge into the Evidence. Of 25 edges superseded across 40
+# papers, FIVE belonged to other writers: 2 FailureMode, 1 PerformanceProfile,
+# 1 Observation, 1 KernelInvariant. At full scale that is ~325 edges retired by
+# a verdict that was never about them. The kind='Concept' filter is the trap
+# this codebase has now fallen into four times.
+
+
+def _other_writer(conn, node_id, kind, eid, attrs):
+    """An edge from one of the OTHER six provenance writers into the same
+    Evidence (INV-KK-EXTRACT-PROVENANCE)."""
+    add_node(conn, node_id, kind, attrs)
+    add_edge(conn, "extracted-from", node_id, eid, {
+        "basis": LEGACY_UNVERIFIED_BASIS, "superseded": False})
+    conn.commit()
+    return node_id
+
+
+FAILURE_MODE = {"symptom": "stall", "blast_radius": "task",
+                "recoverability": "automatic",
+                "artifact_class": "abstracted-mechanism"}
+OBSERVATION = {"claim": "latency rose", "confidence": "medium",
+               "source_date": "2026-01-01", "artifact_class": "discourse"}
+
+
+def test_a_no_match_verdict_leaves_other_writers_edges_alone(conn):
+    """A verdict about CONCEPTS may not retire a FailureMode's provenance."""
+    eid = _paper(conn, "1", "A study of IoT intrusion detection with SMOTE.")
+    cid = _concept(conn, "concept-lsm", "Linux Security Modules")
+    _legacy_link(conn, cid, eid)
+    fm = _other_writer(conn, "fm-1", "FailureMode", eid, FAILURE_MODE)
+    ob = _other_writer(conn, "obs-1", "Observation", eid, OBSERVATION)
+
+    r = extract_concepts(conn, eid, SessionGate(), client=NoMatchClient(),
+                         relink=True, record_candidates=False)
+    conn.commit()
+
+    assert r.edges_superseded == 1, "only the Concept edge is this run's to retire"
+    assert _edge_attrs(conn, cid, eid)["superseded"] is True
+    assert _edge_attrs(conn, fm, eid)["superseded"] is False
+    assert _edge_attrs(conn, ob, eid)["superseded"] is False
+
+
+def test_a_successful_relink_leaves_other_writers_edges_alone(conn):
+    """The positive path had the same defect and it is fixed in one place."""
+    eid = _paper(conn, "1")
+    old = _concept(conn, "concept-lsm", "Linux Security Modules")
+    _concept(conn, "concept-cow", "Copy-on-Write")
+    _legacy_link(conn, old, eid)
+    fm = _other_writer(conn, "fm-1", "FailureMode", eid, FAILURE_MODE)
+
+    r = extract_concepts(conn, eid, SessionGate(), client=MockLLMClient(),
+                         relink=True)
+    conn.commit()
+
+    assert r.concepts_reused == 1
+    assert r.edges_superseded == 1
+    assert _edge_attrs(conn, old, eid)["superseded"] is True
+    assert _edge_attrs(conn, fm, eid)["superseded"] is False
+
+
+def test_another_writers_edge_does_not_make_a_paper_look_answered(conn):
+    """The mirror of the same trap on the SELECTION side. A paper whose only
+    current edge belongs to a FailureMode still needs its concept link
+    re-derived — and edge_carries_a_current_verdict reads every kind."""
+    eid = _paper(conn, "1")
+    cid = _concept(conn, "concept-lsm", "Linux Security Modules")
+    _legacy_link(conn, cid, eid)
+    add_node(conn, "fm-1", "FailureMode", FAILURE_MODE)
+    add_edge(conn, "extracted-from", "fm-1", eid, {
+        "basis": BASIS_EVIDENCE_TEXT, "checked_at": "2026-09-28"})
+    conn.commit()
+
+    # RECORDED, NOT FIXED HERE. select_for_relink reads every extracted-from
+    # edge, so a current FailureMode edge masks a legacy Concept link. It is
+    # measured at ZERO on the live corpus — all 1,433 legacy-linked Evidence are
+    # selected — so closing it would be a change with no instance to justify it.
+    # This test pins the behaviour so the day it stops being zero is loud.
+    assert eid not in select_for_relink(conn)
+    masked = conn.execute(
+        "SELECT COUNT(*) FROM edges e JOIN nodes n ON e.source_id = n.id "
+        "WHERE e.kind = 'extracted-from' AND e.target_id = ? AND n.kind = 'Concept' "
+        "AND json_extract(e.attrs, '$.basis') = ?", (eid, LEGACY_UNVERIFIED_BASIS),
+    ).fetchone()[0]
+    assert masked == 1, "the legacy concept link is still there, unre-derived"

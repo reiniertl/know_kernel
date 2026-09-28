@@ -937,6 +937,18 @@ def edge_carries_a_current_verdict(attrs: dict | None) -> bool:
     return attrs.get("basis") in VALID_EVIDENCE_BASES
 
 
+def _is_concept(conn: sqlite3.Connection, node_id: str) -> bool:
+    """Whether this edge's source is a Concept and not one of the other twelve.
+
+    THE FILTER THIS CODEBASE KEEPS FORGETTING. extracted-from runs from thirteen
+    node kinds into Evidence, so any query or sweep that reasons about "the
+    concept links on this paper" and omits the kind test is reasoning about all
+    thirteen. It has produced a wrong answer four separate times.
+    """
+    row = conn.execute("SELECT kind FROM nodes WHERE id = ?", (node_id,)).fetchone()
+    return bool(row) and row[0] == "Concept"
+
+
 def evidence_has_a_current_answer(
     conn: sqlite3.Connection, evidence_id: str, edges: list | None = None
 ) -> bool:
@@ -1144,7 +1156,19 @@ def extract_concepts(
                 concepts_skipped=len(parsed_existing),
                 extraction_model=model,
             )
-    superseding_candidates = [r[0] for r in existing] if relink else []
+    # ONLY CONCEPT EDGES ARE THIS RUN'S TO RETIRE, AND THE FILTER IS LOAD-BEARING.
+    # extracted-from carries THIRTEEN valid source kinds (graph.schema) and this
+    # function re-derives exactly one of them. Without the filter a re-link
+    # retires the provenance of the other six writers named by
+    # INV-KK-EXTRACT-PROVENANCE — measured 2026-09-28 across 40 papers, 5 of 25
+    # superseded edges were a FailureMode, a PerformanceProfile, an Observation
+    # and a KernelInvariant, none of which this run made any claim about. At
+    # 1,302 papers that is roughly 325 edges retired by a verdict that was never
+    # about them.
+    superseding_candidates = [
+        r[0] for r in existing
+        if relink and _is_concept(conn, r[0])
+    ] if relink else []
 
     source_row = conn.execute(
         "SELECT target_id FROM edges WHERE kind = 'sourced-from' AND source_id = ?",
