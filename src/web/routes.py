@@ -32,7 +32,7 @@ from graph.engine import (
     transitive_impact,
 )
 from graph.briefing import build_concept_brief
-from graph.rules import concept_weight
+from graph.rules import concept_weight, not_superseded
 from graph.scoring import research_score
 
 
@@ -182,6 +182,10 @@ _CONCEPT_PAPERS_SQL = (
     "JOIN edges se ON se.source_id = e.target_id AND se.kind = 'sourced-from' "
     "JOIN nodes s ON s.id = se.target_id AND s.kind = 'Source' "
     "WHERE e.kind = 'extracted-from' AND e.source_id = ? "
+    # A RETIRED LINK IS NOT EVIDENCE AND MUST NOT BE LISTED HERE. This page is
+    # the evidence for the badge concept_weight computes, so the two share
+    # graph.rules.not_superseded rather than each carrying the clause.
+    + not_superseded("e") + " "
     "ORDER BY s.id LIMIT ? OFFSET ?"
 )
 

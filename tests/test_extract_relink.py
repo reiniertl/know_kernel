@@ -997,3 +997,69 @@ def test_another_writers_edge_does_not_make_a_paper_look_answered(conn):
         "AND json_extract(e.attrs, '$.basis') = ?", (eid, LEGACY_UNVERIFIED_BASIS),
     ).fetchone()[0]
     assert masked == 1, "the legacy concept link is still there, unre-derived"
+
+
+# --- a retired link is not evidence ----------------------------------------
+#
+# 'superseded' appeared NOWHERE in graph.rules until 2026-09-28, so marking a
+# false link retired changed no weight, no admission state and no position in
+# the review queue. That made the whole re-derivation unobservable: the point
+# of retiring the legacy links is to correct the weights they inflated, and the
+# rule reading those weights was not looking. Measured on the live corpus, the
+# title-regex links account for Scheduling Classes 435 of 440, Linux Security
+# Modules 347 of 358, and ALL of Adaptive CXL Memory Tiering, NUMA Topology,
+# eBPF and KVM.
+
+
+def test_a_superseded_link_stops_counting_toward_weight(conn):
+    from graph.rules import concept_weight
+
+    cid = _concept(conn, "concept-lsm", "Linux Security Modules")
+    for n in ("a", "b", "c"):
+        eid = _paper(conn, n)
+        _legacy_link(conn, cid, eid)
+    assert concept_weight(conn, cid) == 3
+
+    conn.execute(
+        "UPDATE edges SET attrs = json_set(attrs, '$.superseded', json('true')) "
+        "WHERE kind = 'extracted-from' AND source_id = ? AND target_id = ?",
+        (cid, "ev-a"))
+    conn.commit()
+
+    assert concept_weight(conn, cid) == 2
+
+
+def test_the_negative_verdict_lowers_the_weight_it_should(conn):
+    """End to end: the run retires the false link AND the number a curator
+    reads goes down. Either half alone is worthless."""
+    from graph.rules import concept_weight
+
+    eid = _paper(conn, "1", "A study of IoT intrusion detection with SMOTE.")
+    cid = _concept(conn, "concept-lsm", "Linux Security Modules")
+    _legacy_link(conn, cid, eid)
+    assert concept_weight(conn, cid) == 1
+
+    extract_concepts(conn, eid, SessionGate(), client=NoMatchClient(),
+                     relink=True, record_candidates=False)
+    conn.commit()
+
+    assert concept_weight(conn, cid) == 0
+
+
+def test_the_papers_page_and_the_badge_cannot_disagree(conn):
+    """A page listing papers the badge no longer counts is worse than either
+    being wrong alone, so both read graph.rules.not_superseded."""
+    from graph.rules import concept_weight
+    from web.routes import _CONCEPT_PAPERS_SQL
+
+    cid = _concept(conn, "concept-lsm", "Linux Security Modules")
+    for n in ("a", "b"):
+        _legacy_link(conn, cid, _paper(conn, n))
+    conn.execute(
+        "UPDATE edges SET attrs = json_set(attrs, '$.superseded', json('true')) "
+        "WHERE kind = 'extracted-from' AND source_id = ? AND target_id = ?",
+        (cid, "ev-a"))
+    conn.commit()
+
+    listed = conn.execute(_CONCEPT_PAPERS_SQL, (cid, 50, 0)).fetchall()
+    assert len(listed) == concept_weight(conn, cid) == 1

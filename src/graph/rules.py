@@ -609,14 +609,43 @@ class AdmissionSweep:
                 + len(self.retired))
 
 
+def not_superseded(alias: str = "e") -> str:
+    """The SQL clause that excludes a retired link, for the one traversal that
+    has three call sites.
+
+    ONE STRING AND NOT THREE COPIES. concept_weight, the concept-papers page
+    and the evidence_diversity scorer all walk
+    concept -extracted-from-> Evidence -sourced-from-> Source, and a page
+    listing papers a badge no longer counts is worse than either being wrong
+    alone. The alias varies; the predicate must not.
+    """
+    return f"AND COALESCE(json_extract({alias}.attrs, '$.superseded'), 0) != 1"
+
+
 def concept_weight(conn: sqlite3.Connection, concept_id: str) -> int:
     """Distinct Sources reachable concept -extracted-from-> Evidence
     -sourced-from-> Source. This is the weight INV-KK-CONCEPT-ADMISSION means.
+
+    A RETIRED LINK IS NOT EVIDENCE, AND UNTIL 2026-09-28 THIS COUNTED IT.
+    'superseded' appeared nowhere in this module, so marking a false link
+    retired changed no weight, no admission state and no position in the review
+    queue. That made the whole re-derivation unobservable: the point of
+    retiring the legacy links is to correct the weights they inflated, and the
+    rule that reads those weights was not looking.
+
+    THE CORRECTION IS LARGE BECAUSE THE INFLATION WAS. Measured 2026-09-28
+    against the live corpus, the legacy title-regex links account for
+    Scheduling Classes 435 of 440, Linux Security Modules 347 of 358, and ALL
+    of Adaptive CXL Memory Tiering (113), NUMA Topology and Memory Policy (72),
+    eBPF (60) and KVM (55). Those numbers were never evidence; they were a
+    substring match on a paper title. The 199 documented concepts are
+    untouched, because documentation admits them and weight does not.
     """
     row = conn.execute(
         "SELECT COUNT(DISTINCT s.target_id) FROM edges e "
         "JOIN edges s ON s.source_id = e.target_id AND s.kind = 'sourced-from' "
-        "WHERE e.kind = 'extracted-from' AND e.source_id = ?", (concept_id,)
+        "WHERE e.kind = 'extracted-from' AND e.source_id = ? "
+        + not_superseded("e"), (concept_id,)
     ).fetchone()
     return row[0] if row else 0
 

@@ -11,6 +11,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Any
 
+from graph.rules import not_superseded
 from graph.engine import (
     evidence_count_for_concept,
     list_nodes,
@@ -280,6 +281,9 @@ def research_score(
         "JOIN edges e2 ON e2.source_id = e1.target_id AND e2.kind = 'sourced-from' "
         "JOIN nodes src ON src.id = e2.target_id AND src.kind = 'Source' "
         "WHERE e1.kind = 'extracted-from' AND e1.source_id = ? "
+        # The third walker of this traversal, and it agrees with the other two
+        # from 2026-09-28: a retired link is not diversity either.
+        + not_superseded("e1") + " "
         "AND json_extract(src.attrs, '$.url') IS NOT NULL",
         (concept_id,),
     ).fetchone()
