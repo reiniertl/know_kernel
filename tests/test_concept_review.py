@@ -96,26 +96,37 @@ def test_absent_curation_state_stays_in_the_vocabulary(conn):
 # --- the collision signal ---------------------------------------------------
 
 
-def test_collisions_use_the_matcher_that_actually_runs(conn):
-    """A queue flagging collisions the matcher would not make would be
-    reporting a different program than the one that runs. All three tiers."""
+def test_collisions_use_the_tiers_that_earn_their_place(conn):
+    """The signal exists to direct a human minute, so it carries only the
+    tiers with measured precision.
+
+    LEVENSHTEIN LEFT ON 2026-09-28. It produced 10 of 35 pairs on the live
+    corpus and every one was a different mechanism — Vmalloc~Kmalloc,
+    kref~kset, Slab Cache~Swap Cache. Vmalloc and Kmalloc are kept in this
+    fixture precisely to assert they NO LONGER collide; matching keeps the
+    tier, the signal does not (IFC-KK-CONCEPT-REVIEW-PRIORITY)."""
     _concept(conn, "concept-v", "Vmalloc")
-    _concept(conn, "concept-k", "Kmalloc")          # Levenshtein 1
+    _concept(conn, "concept-k", "Kmalloc")           # Levenshtein 1 — NOT a collision
     _concept(conn, "concept-io", "io_uring")
-    _concept(conn, "concept-ioa", "io_uring Async")  # prefix
+    _concept(conn, "concept-ioa", "io_uring Async")   # prefix
+    _concept(conn, "concept-hp", "Huge Pages")
+    _concept(conn, "concept-thp", "Transparent Huge Pages")  # containment
     _concept(conn, "concept-alone", "Grace Period")
     conn.commit()
     colliding = colliding_concepts(conn)
-    assert colliding == {"concept-v", "concept-k", "concept-io", "concept-ioa"}
+    assert colliding == {"concept-io", "concept-ioa", "concept-hp", "concept-thp"}
+    assert "concept-v" not in colliding, "the Levenshtein false pair came back"
     assert "concept-alone" not in colliding
 
 
-def test_the_measured_four_collisions_of_the_live_corpus(conn):
-    """Measured 2026-09-25 against data/master.db. The plan recorded "ZERO
-    homonyms today", which is true of EXACT names and false of the matcher:
-    io_uring against three io_uring* entries, and Vmalloc against Kmalloc — a
-    FALSE POSITIVE between two different allocators, and the more important of
-    the four because of what it does on the harvest path."""
+def test_the_live_corpus_pairs_that_survived_the_2026_09_28_narrowing(conn):
+    """Measured 2026-09-25, re-measured 2026-09-28 after the Levenshtein tier
+    left the signal: the live corpus went from 54 concepts in 35 pairs to 41
+    in 25, and the 10 pairs that disappeared were ALL different mechanisms.
+
+    io_uring against its three variants is a prefix collision and survives —
+    those are real near-duplicates a human should merge or distinguish.
+    Vmalloc against Kmalloc was the Levenshtein false positive and is gone."""
     for cid, name in (
         ("c-io", "io_uring"),
         ("c-ioa", "io_uring Asynchronous I/O"),
@@ -127,8 +138,10 @@ def test_the_measured_four_collisions_of_the_live_corpus(conn):
     ):
         _concept(conn, cid, name)
     conn.commit()
-    assert len(colliding_concepts(conn)) == 6
-    assert "c-s" not in colliding_concepts(conn)
+    col = colliding_concepts(conn)
+    assert col == {"c-io", "c-ioa", "c-iod", "c-ioo"}
+    assert "c-v" not in col and "c-k" not in col
+    assert "c-s" not in col
 
 
 # --- the list page ----------------------------------------------------------
@@ -197,14 +210,16 @@ def test_collisions_sort_first_then_papers_descending(tmp_path):
         heavy = _concept(c, "concept-heavy", "Zzz Heavy")
         for n in ("1", "2", "3"):
             _paper(c, n, heavy)
-        _concept(c, "concept-v", "Vmalloc")
-        _concept(c, "concept-k", "Kmalloc")
+        # A PREFIX pair, not a Levenshtein one: the signal dropped that tier
+        # on 2026-09-28 and these must still sort first.
+        _concept(c, "concept-v", "Folio")
+        _concept(c, "concept-k", "Folio Marks")
         mid = _concept(c, "concept-mid", "Yyy Middle")
         _paper(c, "4", mid)
 
     with _client(tmp_path, build) as client:
         text = client.get("/concepts").text
-        order = [text.index(n) for n in ("Kmalloc", "Vmalloc")]
+        order = [text.index(n) for n in ("Folio", "Folio Marks")]
         assert max(order) < text.index("Zzz Heavy"), "collisions did not sort first"
         assert text.index("Zzz Heavy") < text.index("Yyy Middle"), (
             "papers did not sort descending")
@@ -212,8 +227,8 @@ def test_collisions_sort_first_then_papers_descending(tmp_path):
 
 def test_a_colliding_row_is_marked_in_the_page(tmp_path):
     def build(c):
-        _concept(c, "concept-v", "Vmalloc")
-        _concept(c, "concept-k", "Kmalloc")
+        _concept(c, "concept-v", "Folio")
+        _concept(c, "concept-k", "Folio Marks")
         _concept(c, "concept-a", "Grace Period")
 
     with _client(tmp_path, build) as client:

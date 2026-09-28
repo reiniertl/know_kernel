@@ -83,12 +83,33 @@ def fuzzy_match_concept(
     for name, cid in name_to_id.items():
         if name.startswith(q) or q.startswith(name):
             return cid
-    best_id, best = None, max_distance + 1
+    # A TIE IS A REFUSAL, NOT A CHOICE. Until 2026-09-28 this returned the
+    # FIRST match at the best distance, which on a tie is dict iteration order
+    # — a silent coin flip that writes a real edge onto a real paper.
+    # strict_match_concept has refused ties since it was written, on the
+    # grounds that attaching to a coin flip is worse than creating; the two
+    # matchers disagreed about the same question and only one was right.
+    #
+    # MEASURED 2026-09-28 over 296 concepts: a self-match test misroutes ZERO
+    # of them, because the exact tier fires first, and near-misses resolve
+    # correctly too — kmallocs to Kmalloc, kreff to kref. The tier earns its
+    # place. Only a name equidistant from SEVERAL concepts was arbitrary:
+    # "zmalloc" sits at distance 1 from Kmalloc, Vmalloc AND zsmalloc. Six of
+    # 296 concepts sit in such a cluster.
+    #
+    # A refusal is the better outcome because it is VISIBLE: an unmatched name
+    # becomes a candidate row a human sees, while a wrong link is
+    # indistinguishable from a right one and survives every later pass.
+    best, winners = max_distance + 1, []
     for name, cid in name_to_id.items():
         d = levenshtein_distance(q, name)
-        if d <= max_distance and d < best:
-            best, best_id = d, cid
-    return best_id
+        if d > max_distance:
+            continue
+        if d < best:
+            best, winners = d, [cid]
+        elif d == best:
+            winners.append(cid)
+    return winners[0] if len(winners) == 1 else None
 
 
 _PAREN_RE = re.compile(r"\(([^)]+)\)")
@@ -172,6 +193,20 @@ def _match_forms(name: str) -> set[str]:
         # and "Grace Period" are the same class with certainty, and a plural is
         # the most obvious duplicate a harvest can produce. Guarded so "Access"
         # does not become "Acces".
+        #
+        # "-es" AND "-ies" JOINED "-s" ON 2026-09-28. The harvest of that day
+        # created both "Robust Futex" and "Robust Futexes" from
+        # robust-futex-ABI.rst and robust-futexes.rst, because stripping one
+        # "s" from "robustfutexes" gives "robustfutexe" and misses
+        # "robustfutex". Measured impact was exactly ONE pair in 296 concepts
+        # — small, and it recurs on every future harvest. Neither -es nor -ies
+        # has another instance in this corpus; both are deterministic
+        # transforms rather than guesses, so they carry no false-positive risk.
+        if len(whole) > 4 and whole.endswith("ies"):
+            forms.add(whole[:-3] + "y")
+        for suffix in ("ches", "shes", "xes", "ses", "zes"):
+            if len(whole) > len(suffix) + 2 and whole.endswith(suffix):
+                forms.add(whole[: -len("es")])
         if len(whole) > 4 and whole.endswith("s") and not whole.endswith("ss"):
             forms.add(whole[:-1])
     outside = squash_concept_name(_PAREN_RE.sub(" ", bare))
@@ -573,8 +608,21 @@ def colliding_concepts(
             # acts on it: "Huge Pages" in "Transparent Huge Pages" is a
             # DIFFERENT mechanism, "Transparent Huge Page Support" in the same
             # is the SAME one, and nothing in their shape tells them apart.
+            #
+            # LEVENSHTEIN LEFT THIS TEST ON 2026-09-28, ON MEASURED PRECISION
+            # OF ZERO. It produced 10 of 35 pairs and every one was a
+            # different mechanism: Vmalloc~Kmalloc, Vmalloc~zsmalloc,
+            # Kmalloc~zsmalloc, kref~kset, Slab Cache~Swap Cache,
+            # Reed-Solomon Encoding~Decoding,
+            # memalloc_nofs_save/restore~memalloc_noio_save/restore, and the
+            # three pairings of PMD, PTE and PUD Page Table Helpers. This
+            # signal's job is to direct a human minute and 29% of the queue
+            # was a pair to dismiss. Tightening to distance 1 was refused: it
+            # leaves Vmalloc~Kmalloc and PMD~PUD, which are the wrong pairs.
+            # It is NOT removed from fuzzy_match_concept, which demonstrably
+            # rescues real near-misses — one surfaces a pair, the other
+            # attaches a paper, and they need not agree.
             if (a == b or a.startswith(b) or b.startswith(a)
-                    or levenshtein_distance(a, b) <= max_distance
                     or contained_in(a, b) or contained_in(b, a)):
                 colliding.add(id_a)
                 colliding.add(id_b)
