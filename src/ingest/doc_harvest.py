@@ -221,6 +221,18 @@ def name_is_a_class(name: str, subsystems: dict[str, str] | None = None) -> bool
     return True
 
 
+class ForeignEdgeError(Exception):
+    """An extracted-from edge already belongs to a different harvest batch.
+
+    Raised by _attach and caught by harvest_document, which counts it as
+    attached_foreign. Not an error in the run — it is the invariant holding.
+    """
+
+    def __init__(self, owner: str) -> None:
+        self.owner = owner
+        super().__init__(f"edge belongs to batch {owner}")
+
+
 @dataclass
 class DocHarvestResult:
     """What one document yielded."""
@@ -231,10 +243,12 @@ class DocHarvestResult:
     rejected_not_mechanism: int = 0
     rejected_incomplete: int = 0
     rejected_not_a_class: int = 0
+    attached_foreign: int = 0
     subsystem_id: str = ""
     subsystem_unmatched: str = ""
     dry_run: bool = False
     prompt_chars: int = 0
+    cached_tokens: int = 0
 
 
 def new_batch_id() -> str:
@@ -351,6 +365,9 @@ def harvest_document(
         user=user_prompt,
         max_tokens=4096,
     )
+    # INV-KK-LLM-CACHE-REPORTED. The first run since the vocabulary moved
+    # into the system prompt; a zero here is a finding, not a detail.
+    result.cached_tokens = int(response.get("cached_tokens", 0) or 0)
     subsystem_name, proposals = _parse_response(response)
 
     subsystem_id = match_subsystem_name(subsystems, subsystem_name)
@@ -383,8 +400,13 @@ def harvest_document(
         # keeps it unchanged.
         existing = strict_match_concept(name, known)
         if existing:
-            _attach(conn, existing, evidence_id, batch_id, document_text, model,
-                    item.get("description", ""))
+            try:
+                _attach(conn, existing, evidence_id, batch_id, document_text,
+                        model, item.get("description", ""))
+            except ForeignEdgeError:
+                # The edge belongs to an earlier batch and stays with it.
+                result.attached_foreign += 1
+                continue
             result.concepts_attached.append(existing)
             continue
 
@@ -425,10 +447,22 @@ def _attach(
     edge_attrs = build_evidence_attrs(description or "", document_text, model)
     edge_attrs["harvest_batch"] = batch_id
     existing = conn.execute(
-        "SELECT id FROM edges WHERE kind = 'extracted-from' "
+        "SELECT id, attrs FROM edges WHERE kind = 'extracted-from' "
         "AND source_id = ? AND target_id = ?", (concept_id, evidence_id)
     ).fetchone()
     if existing:
+        prior = json.loads(existing[1]) if existing[1] else {}
+        owner = prior.get("harvest_batch")
+        if owner and owner != batch_id:
+            # A BATCH NEVER TAKES OWNERSHIP OF ANOTHER BATCH'S EDGE.
+            # Operator decision 2026-09-28, and this is what makes
+            # INV-KK-HARVEST-BATCH-REVERTIBLE structural rather than dependent
+            # on the caller selecting correctly. Overwriting here would move
+            # the edge into this batch, so reverting THIS batch would delete an
+            # edge the earlier one created — leaving its Concept with no
+            # provenance, and leaving the earlier revert unable to reclaim it.
+            # Left exactly as found and counted by the caller.
+            raise ForeignEdgeError(owner)
         conn.execute("UPDATE edges SET attrs = ? WHERE id = ?",
                      (json.dumps(edge_attrs), existing[0]))
         return
@@ -465,14 +499,34 @@ def _create(
 
 
 def select_doc_evidence(
-    conn: sqlite3.Connection, source_types: tuple[str, ...] | None = None
-) -> tuple[list[str], list[str]]:
-    """Evidence of canonical documents, split into usable and empty.
+    conn: sqlite3.Connection,
+    source_types: tuple[str, ...] | None = None,
+    include_harvested: bool = False,
+) -> tuple[list[str], list[str], list[str]]:
+    """Evidence of canonical documents, split into usable, empty and already read.
 
-    Returns (with_text, skipped_empty). The empty ones are filtered BEFORE the
-    limit is applied, so --limit 10 means ten documents actually sent — the
-    241-empty lesson from ALG-KK-EXTRACT-CLI, which this follows rather than
-    inventing a third convention.
+    Returns (with_text, skipped_empty, skipped_harvested). The empty ones are
+    filtered BEFORE the limit is applied, so --limit 10 means ten documents
+    actually sent — the 241-empty lesson from ALG-KK-EXTRACT-CLI, which this
+    follows rather than inventing a third convention.
+
+    ALREADY-READ DOCUMENTS ARE EXCLUDED BY DEFAULT, from 2026-09-28. The old
+    behaviour returned every document carrying text, so the obvious command
+    re-read the 17 already harvested — and _attach UPDATES an existing edge
+    rather than inserting a second one, so a re-read rewrote harvest_batch on
+    edges the PREVIOUS batch had written and made both batches' reverts lossy.
+    See INV-KK-HARVEST-BATCH-REVERTIBLE. include_harvested restores the old
+    behaviour for a deliberate re-read; _attach refuses to take ownership
+    either way, so the property does not depend on this flag.
+
+    THE kind = 'Concept' FILTER IS LOAD-BEARING. Evidence carries
+    extracted-from edges from PerformanceProfile, KernelInvariant, FailureMode
+    and InteractionProtocol too. Measured 2026-09-28: 17 of the 132 doc
+    Evidence nodes carry a Concept edge and 18 carry ANY extracted-from edge.
+    The difference is Documentation/core-api/kernel-api.rst, which the old
+    pre-verdict extractor read and this harvest never did — a filter on "any
+    extracted-from edge" would skip it permanently. The same conflation has
+    produced a wrong count three times in this project.
     """
     types = source_types or DOC_SOURCE_TYPES
     placeholders = ", ".join("?" for _ in types)
@@ -487,7 +541,20 @@ def select_doc_evidence(
     ).fetchall()
     with_text = [r[0] for r in rows if r[1].strip()]
     skipped = [r[0] for r in rows if not r[1].strip()]
-    return with_text, skipped
+
+    if include_harvested:
+        return with_text, skipped, []
+
+    harvested = {
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT x.target_id FROM edges x "
+            "JOIN nodes n ON n.id = x.source_id AND n.kind = 'Concept' "
+            "WHERE x.kind = 'extracted-from'"
+        ).fetchall()
+    }
+    unread = [e for e in with_text if e not in harvested]
+    already = [e for e in with_text if e in harvested]
+    return unread, skipped, already
 
 
 # ---------------------------------------------------------------------------

@@ -310,7 +310,7 @@ def test_documents_with_no_text_are_filtered_before_the_limit(conn):
     for n in ("c", "d"):
         _doc_source(conn, n, text="")
     conn.commit()
-    with_text, skipped = select_doc_evidence(conn)
+    with_text, skipped, _ = select_doc_evidence(conn)
     assert sorted(with_text) == ["ev-a", "ev-b"]
     assert sorted(skipped) == ["ev-c", "ev-d"]
 
@@ -319,7 +319,7 @@ def test_only_canonical_documentation_is_selected(conn):
     _doc_source(conn, "doc", source_type="kernel-doc")
     _doc_source(conn, "paper", source_type="preprint")
     conn.commit()
-    with_text, _ = select_doc_evidence(conn)
+    with_text, _, _ = select_doc_evidence(conn)
     assert with_text == ["ev-doc"]
 
 
@@ -815,3 +815,143 @@ def test_containment_surfaces_the_pair_it_must_not_merge():
     assert contained_in("numa memory policy",
                         "numa topology and memory policy") is True
     assert contained_in("memory reclaim", "memory ballooning") is False
+
+
+# ---------------------------------------------------------------------------
+# Two batches over one corpus (INV-KK-HARVEST-BATCH-REVERTIBLE, corrected
+# 2026-09-28)
+#
+# The predicate quantified over ONE batch and the hazard only appears with two:
+# _attach UPDATES an existing edge rather than inserting a second one, so a
+# re-read rewrote harvest_batch on edges the previous batch had written and
+# made BOTH reverts lossy. Caught before a second batch ran.
+# ---------------------------------------------------------------------------
+
+from ingest.doc_harvest import ForeignEdgeError  # noqa: E402
+
+
+def test_selection_excludes_documents_already_harvested(conn):
+    ev_done = _doc_source(conn, "done")
+    ev_new = _doc_source(conn, "new")
+    harvest_document(conn, ev_done, new_batch_id(),
+                     client=MockLLMClient([_reply([_mech("Work Stealing")])]))
+    conn.commit()
+
+    unread, empty, already = select_doc_evidence(conn)
+    assert unread == [ev_new]
+    assert already == [ev_done]
+    assert empty == []
+
+
+def test_a_non_concept_edge_does_not_count_as_harvested(conn):
+    """Evidence carries extracted-from edges from PerformanceProfile,
+    KernelInvariant, FailureMode and InteractionProtocol too. Measured
+    2026-09-28: 17 of 132 doc Evidence carry a Concept edge and 18 carry ANY
+    extracted-from edge — the difference is core-api/kernel-api.rst, which the
+    old pre-verdict extractor read and the harvest never did. A filter on "any
+    extracted-from edge" would skip it permanently."""
+    ev = _doc_source(conn, "kernel-api")
+    add_node(conn, "pp-1", "PerformanceProfile", {
+        "metric": "latency", "complexity": "O(1)", "best_case": "a",
+        "worst_case": "b", "typical_case": "c", "conditions": "d",
+        "artifact_class": "abstracted-mechanism"})
+    add_edge(conn, "extracted-from", "pp-1", ev)
+    conn.commit()
+
+    unread, _, already = select_doc_evidence(conn)
+    assert unread == [ev], "a non-Concept edge was mistaken for a harvest"
+    assert already == []
+
+
+def test_include_harvested_restores_the_whole_corpus(conn):
+    ev_done = _doc_source(conn, "done")
+    ev_new = _doc_source(conn, "new")
+    harvest_document(conn, ev_done, new_batch_id(),
+                     client=MockLLMClient([_reply([_mech("Work Stealing")])]))
+    conn.commit()
+    unread, _, already = select_doc_evidence(conn, include_harvested=True)
+    assert sorted(unread) == sorted([ev_done, ev_new])
+    assert already == []
+
+
+def test_a_second_batch_never_takes_the_first_batch_s_edge(conn):
+    """THE PROPERTY THE CORRECTION EXISTS FOR, asserted at the edge rather
+    than through the selection, because _attach must hold even under
+    --include-harvested."""
+    _existing_concept(conn, "concept-zswap", "Zswap")
+    ev = _doc_source(conn, "zswap")
+    first = new_batch_id()
+    harvest_document(conn, ev, first,
+                     client=MockLLMClient([_reply([_mech("Zswap")])]))
+    conn.commit()
+
+    second = new_batch_id()
+    result = harvest_document(conn, ev, second,
+                              client=MockLLMClient([_reply([_mech("Zswap")])]))
+    conn.commit()
+
+    assert result.attached_foreign == 1
+    assert result.concepts_attached == []
+    owner = json.loads(conn.execute(
+        "SELECT attrs FROM edges WHERE kind = 'extracted-from' "
+        "AND source_id = 'concept-zswap'").fetchone()[0])["harvest_batch"]
+    assert owner == first, "the second batch took ownership of the first's edge"
+
+
+def test_both_batches_revert_independently_over_one_corpus(conn):
+    """Before the 2026-09-28 correction neither revert could undo these:
+    revert(second) deleted an edge the first created, and revert(first)
+    skipped its own Concepts as linked-outside-batch."""
+    _existing_concept(conn, "concept-zswap", "Zswap")
+    ev_a = _doc_source(conn, "a")
+    ev_b = _doc_source(conn, "b")
+    conn.commit()
+    before = _counts(conn)
+
+    first = new_batch_id()
+    harvest_document(conn, ev_a, first, client=MockLLMClient([
+        _reply([_mech("Zswap"), _mech("First Mechanism")])]))
+    conn.commit()
+
+    second = new_batch_id()
+    harvest_document(conn, ev_b, second,
+                     client=MockLLMClient([_reply([_mech("Second Mechanism")])]))
+    conn.commit()
+
+    r2 = revert_batch(conn, second)
+    assert r2.clean, r2.skipped
+    r1 = revert_batch(conn, first)
+    assert r1.clean, r1.skipped
+    assert _counts(conn) == before
+
+    # and the pre-existing Concept kept its provenance throughout
+    assert conn.execute(
+        "SELECT 1 FROM nodes WHERE id = 'concept-zswap'").fetchone()
+
+
+def test_the_foreign_edge_error_names_the_owning_batch(conn):
+    _existing_concept(conn, "concept-1", "Zswap")
+    ev = _doc_source(conn, "a")
+    first = new_batch_id()
+    harvest_document(conn, ev, first,
+                     client=MockLLMClient([_reply([_mech("Zswap")])]))
+    conn.commit()
+    from ingest.doc_harvest import _attach
+    with pytest.raises(ForeignEdgeError) as exc:
+        _attach(conn, "concept-1", ev, "harvest-other", "t", "m", "d")
+    assert exc.value.owner == first
+
+
+def test_the_cache_figure_reaches_the_result(conn):
+    """INV-KK-LLM-CACHE-REPORTED. A zero across a batch sharing one prefix
+    means something is invalidating it, and every cause is silent."""
+    class CachingClient(MockLLMClient):
+        def create_message(self, model, system, user, max_tokens):
+            out = super().create_message(model, system, user, max_tokens)
+            out["cached_tokens"] = 2419
+            return out
+
+    ev = _doc_source(conn, "a")
+    result = harvest_document(conn, ev, new_batch_id(),
+                              client=CachingClient([_reply([_mech("Work Stealing")])]))
+    assert result.cached_tokens == 2419

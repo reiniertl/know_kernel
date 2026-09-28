@@ -69,6 +69,14 @@ def main(argv: list[str] | None = None) -> None:
              "does NOT change the provider.",
     )
     parser.add_argument(
+        "--include-harvested", action="store_true",
+        help="Re-read documents that already carry a Concept edge. OFF by "
+             "default: a bare run can never migrate an earlier batch's edges "
+             "(INV-KK-HARVEST-BATCH-REVERTIBLE). _attach refuses to take "
+             "ownership either way, so this flag widens the selection and "
+             "does not weaken the guarantee.",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Build prompts and report what would happen; construct no client "
              "and write nothing",
@@ -92,8 +100,9 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(0 if report.clean else 1)
 
     batch_id = new_batch_id()
-    evidence_ids, skipped_empty = select_doc_evidence(
-        conn, tuple(args.source_types) if args.source_types else None)
+    evidence_ids, skipped_empty, skipped_harvested = select_doc_evidence(
+        conn, tuple(args.source_types) if args.source_types else None,
+        include_harvested=args.include_harvested)
     selected = len(evidence_ids)
     if args.limit is not None:
         evidence_ids = evidence_ids[:args.limit]
@@ -138,6 +147,7 @@ def main(argv: list[str] | None = None) -> None:
         "model": model,
         "selected": selected,
         "skipped_empty": len(skipped_empty),
+        "skipped_harvested": len(skipped_harvested),
         "attempted": len(evidence_ids),
         "errors": len(errors),
         "concepts_created": sum(len(r["concepts_created"]) for r in results),
@@ -145,6 +155,11 @@ def main(argv: list[str] | None = None) -> None:
         "rejected_not_mechanism": sum(r["rejected_not_mechanism"] for r in results),
         "rejected_incomplete": sum(r["rejected_incomplete"] for r in results),
         "rejected_not_a_class": sum(r["rejected_not_a_class"] for r in results),
+        "attached_foreign": sum(r["attached_foreign"] for r in results),
+        # INV-KK-LLM-CACHE-REPORTED: read from the provider, never computed.
+        # A zero across a batch sharing one prefix means something is
+        # invalidating it, and every cause is silent.
+        "cached_tokens": sum(r.get("cached_tokens", 0) for r in results),
         "subsystems_unmatched": sum(1 for r in results if r["subsystem_unmatched"]),
         "results": results,
         "error_details": errors,
