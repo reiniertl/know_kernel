@@ -30,6 +30,8 @@ from ingest.doc_harvest import (
     resolve_subsystem_names,
     revert_batch,
     select_doc_evidence,
+    document_announces_a_procedure,
+    PROCEDURAL_OPENING_CHARS,
 )
 
 
@@ -310,7 +312,7 @@ def test_documents_with_no_text_are_filtered_before_the_limit(conn):
     for n in ("c", "d"):
         _doc_source(conn, n, text="")
     conn.commit()
-    with_text, skipped, _ = select_doc_evidence(conn)
+    with_text, skipped, _, _ = select_doc_evidence(conn)
     assert sorted(with_text) == ["ev-a", "ev-b"]
     assert sorted(skipped) == ["ev-c", "ev-d"]
 
@@ -319,7 +321,7 @@ def test_only_canonical_documentation_is_selected(conn):
     _doc_source(conn, "doc", source_type="kernel-doc")
     _doc_source(conn, "paper", source_type="preprint")
     conn.commit()
-    with_text, _, _ = select_doc_evidence(conn)
+    with_text, _, _, _ = select_doc_evidence(conn)
     assert with_text == ["ev-doc"]
 
 
@@ -837,7 +839,7 @@ def test_selection_excludes_documents_already_harvested(conn):
                      client=MockLLMClient([_reply([_mech("Work Stealing")])]))
     conn.commit()
 
-    unread, empty, already = select_doc_evidence(conn)
+    unread, empty, already, _ = select_doc_evidence(conn)
     assert unread == [ev_new]
     assert already == [ev_done]
     assert empty == []
@@ -858,7 +860,7 @@ def test_a_non_concept_edge_does_not_count_as_harvested(conn):
     add_edge(conn, "extracted-from", "pp-1", ev)
     conn.commit()
 
-    unread, _, already = select_doc_evidence(conn)
+    unread, _, already, _ = select_doc_evidence(conn)
     assert unread == [ev], "a non-Concept edge was mistaken for a harvest"
     assert already == []
 
@@ -869,7 +871,7 @@ def test_include_harvested_restores_the_whole_corpus(conn):
     harvest_document(conn, ev_done, new_batch_id(),
                      client=MockLLMClient([_reply([_mech("Work Stealing")])]))
     conn.commit()
-    unread, _, already = select_doc_evidence(conn, include_harvested=True)
+    unread, _, already, _ = select_doc_evidence(conn, include_harvested=True)
     assert sorted(unread) == sorted([ev_done, ev_new])
     assert already == []
 
@@ -955,3 +957,127 @@ def test_the_cache_figure_reaches_the_result(conn):
     result = harvest_document(conn, ev, new_batch_id(),
                               client=CachingClient([_reply([_mech("Work Stealing")])]))
     assert result.cached_tokens == 2419
+
+
+# ---------------------------------------------------------------------------
+# INV-KK-HARVEST-DOCUMENT-DEFINES — a document whose SUBJECT is a procedure
+# is refused before the model is called.
+#
+# The strings below are the real openings of the real documents that shaped
+# the rule, taken from data/master.db on 2026-09-29.
+# ---------------------------------------------------------------------------
+
+#: filesystems/adding-new-filesystems.rst — the document that defeated
+#: INV-KK-SEED-PATH-DEFINITIONAL by sitting in a sanctioned design directory.
+#: It produced "Filesystem Submission Process" and "Filesystem Maintenance
+#: Commitment", neither of which is a mechanism.
+_ADDING_NEW_FILESYSTEMS = (
+    ".. SPDX-License-Identifier: GPL-2.0\n\n.. _adding_new_filesystems:\n\n"
+    "Adding New Filesystems\n======================\n\n"
+    "This document describes what is involved in adding a new filesystem to "
+    "the\nLinux kernel.\n\nEvery filesystem merged into the kernel becomes the "
+    "collective responsibility\nof the VFS maintainers and the wider filesystem "
+    "development community.\n"
+)
+
+#: RCU/checklist.rst — "Review Checklist for RCU Patches". Procedural in FORM
+#: and about RCU in SUBSTANCE; it legitimately created SRCU (Sleepable RCU)
+#: and RCU Callbacks. This is why "checklist" is not a marker.
+_RCU_CHECKLIST = (
+    ".. SPDX-License-Identifier: GPL-2.0\n\n"
+    "================================\nReview Checklist for RCU Patches\n"
+    "================================\n\n\n"
+    "This document contains a checklist for producing and reviewing patches\n"
+    "that make use of RCU.  Violating any of the rules listed below will\n"
+    "result in the same sort of problems that leaving out a locking primitive\n"
+    "would cause.\n"
+)
+
+
+def test_a_document_about_adding_a_filesystem_is_refused():
+    """The exact document that produced the two process concepts."""
+    assert document_announces_a_procedure(_ADDING_NEW_FILESYSTEMS)
+
+
+def test_a_checklist_about_a_mechanism_is_not_refused():
+    """SUBJECT, NOT FORM. RCU/checklist.rst is a review checklist and it
+    created SRCU (Sleepable RCU) and RCU Callbacks — both legitimate. An
+    earlier draft of this rule carried "checklist" as a marker and would have
+    thrown those away, which is how the marker list came to name the ACT a
+    document describes rather than the shape it takes."""
+    assert not document_announces_a_procedure(_RCU_CHECKLIST)
+
+
+def test_a_mechanism_document_that_mentions_patches_later_is_not_refused():
+    """Only the opening is read. A design document may well say "send your
+    patches" in a closing section, and refusing it for that would cost a real
+    mechanism for a line that is not what the document is about."""
+    text = (
+        "Work Stealing\n=============\n\nThis document defines the work "
+        "stealing scheduler used by the kernel's per-CPU run queues. "
+        + ("Idle CPUs steal runnable tasks from busier neighbours. " * 60)
+        + "\n\nTo report bugs, send your patches to the maintainer.\n"
+    )
+    assert len(text) > PROCEDURAL_OPENING_CHARS
+    assert "send your patches" in text.lower()
+    assert not document_announces_a_procedure(text)
+
+
+def test_an_empty_document_is_not_a_procedure():
+    assert not document_announces_a_procedure("")
+    assert not document_announces_a_procedure(None)
+
+
+def test_a_procedural_document_is_refused_at_selection(conn):
+    """It never reaches a prompt, so the refusal costs nothing."""
+    ev_proc = _doc_source(conn, "adding", text=_ADDING_NEW_FILESYSTEMS)
+    ev_mech = _doc_source(conn, "vfs", text="VFS\n===\n\nThis document defines "
+                                            "the virtual filesystem switch.")
+    conn.commit()
+    unread, empty, already, procedural = select_doc_evidence(conn)
+    assert unread == [ev_mech]
+    assert procedural == [ev_proc]
+    assert already == []
+    assert empty == []
+
+
+def test_include_harvested_does_not_restore_a_procedural_document(conn):
+    """--include-harvested exists to re-read a document DELIBERATELY. A
+    document this rule refuses is one nothing should read at all, so the flag
+    does not reach it."""
+    ev_proc = _doc_source(conn, "adding", text=_ADDING_NEW_FILESYSTEMS)
+    ev_mech = _doc_source(conn, "vfs", text="VFS\n===\n\nThis document defines "
+                                            "the virtual filesystem switch.")
+    conn.commit()
+    unread, _, _, procedural = select_doc_evidence(conn, include_harvested=True)
+    assert unread == [ev_mech]
+    assert procedural == [ev_proc]
+
+
+def test_a_procedural_document_is_never_sent_to_the_model(conn):
+    """The end-to-end property: no client call, no Concept, no edge. The
+    client here raises if touched at all."""
+    class ExplodingClient:
+        def create_message(self, **kwargs):
+            raise AssertionError("a refused document reached the model")
+
+    ev_proc = _doc_source(conn, "adding", text=_ADDING_NEW_FILESYSTEMS)
+    conn.commit()
+    unread, _, _, procedural = select_doc_evidence(conn)
+    assert procedural == [ev_proc]
+    for ev in unread:
+        harvest_document(conn, ev, new_batch_id(), client=ExplodingClient())
+    concepts = conn.execute(
+        "SELECT COUNT(*) FROM edges x JOIN nodes n ON n.id = x.source_id "
+        "WHERE x.kind = 'extracted-from' AND x.target_id = ? "
+        "AND n.kind = 'Concept'", (ev_proc,)).fetchone()[0]
+    assert concepts == 0
+
+
+def test_the_name_filter_still_passes_the_names_this_rule_catches():
+    """WHY A THIRD FILTER EXISTS, pinned so nobody removes it as redundant.
+    INV-KK-HARVEST-NAME-IS-A-CLASS reads the SHAPE of a name, and both process
+    concepts are perfectly well-formed names. The document rule is the only
+    thing standing between them and the vocabulary."""
+    assert name_is_a_class("Filesystem Submission Process")
+    assert name_is_a_class("Filesystem Maintenance Commitment")

@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(0 if report.clean else 1)
 
     batch_id = new_batch_id()
-    evidence_ids, skipped_empty, skipped_harvested = select_doc_evidence(
+    evidence_ids, skipped_empty, skipped_harvested, skipped_procedural = select_doc_evidence(
         conn, tuple(args.source_types) if args.source_types else None,
         include_harvested=args.include_harvested)
     selected = len(evidence_ids)
@@ -148,6 +148,9 @@ def main(argv: list[str] | None = None) -> None:
         "selected": selected,
         "skipped_empty": len(skipped_empty),
         "skipped_harvested": len(skipped_harvested),
+        # INV-KK-HARVEST-DOCUMENT-DEFINES. Reported so the rule is
+        # visible in a run's output rather than silently shrinking it.
+        "skipped_procedural": len(skipped_procedural),
         "attempted": len(evidence_ids),
         "errors": len(errors),
         "concepts_created": sum(len(r["concepts_created"]) for r in results),

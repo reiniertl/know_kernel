@@ -174,6 +174,64 @@ def build_harvest_prompt(document_text: str) -> str:
     return f"Name the mechanisms THIS DOCUMENT DEFINES:\n\n{document_text}"
 
 
+#: INV-KK-HARVEST-DOCUMENT-DEFINES. How much of a document decides its genre.
+#: The title and opening paragraphs; a marker further in is a mention, not a
+#: subject. adding-new-filesystems.rst announces itself in its second sentence.
+PROCEDURAL_OPENING_CHARS = 2000
+
+#: INV-KK-HARVEST-DOCUMENT-DEFINES. A document ABOUT the act of contributing,
+#: submitting or maintaining, rather than about a mechanism.
+#:
+#: MEASURED 2026-09-29 OVER ALL 245 SEEDED kernel-doc SOURCES: these refuse
+#: exactly one, filesystems/adding-new-filesystems.rst, which is the one that
+#: produced "Filesystem Submission Process" and "Filesystem Maintenance
+#: Commitment" from inside a directory INV-KK-SEED-PATH-DEFINITIONAL sanctions.
+#:
+#: A FILENAME RULE WAS TRIED FIRST AND REFUSED ON PRECISION. Stems like
+#: "process", "howto" and "adding-new-" refuse 4 of the 245 and 3 are wrong:
+#: mm/process_addrs.rst and core-api/dma-api-howto.rst are mechanism documents
+#: whose names merely read like procedures.
+#:
+#: SUBJECT, NOT FORM, AND "checklist" IS WHY THAT DISTINCTION IS WRITTEN DOWN.
+#: RCU/checklist.rst is "Review Checklist for RCU Patches" — procedural in
+#: shape — and it created SRCU (Sleepable RCU) and RCU Callbacks, both
+#: legitimate. Its subject is RCU. A marker naming the FORM of a document
+#: refuses good mechanisms; a marker naming the ACT it describes does not.
+PROCEDURAL_OPENING_MARKERS = (
+    "what is involved in adding",
+    "how to submit",
+    "how to contribute",
+    "submitting patches",
+    "submitting a patch",
+    "patch submission",
+    "send your patches",
+    "code of conduct",
+    "this document describes the process",
+    "before you submit",
+)
+
+
+def document_announces_a_procedure(text: str) -> bool:
+    """INV-KK-HARVEST-DOCUMENT-DEFINES: is this document ABOUT a procedure?
+
+    THE GAP BETWEEN TWO RULES THAT ARE BOTH CORRECT.
+    INV-KK-HARVEST-NAME-IS-A-CLASS reads the SHAPE of a proposed name and
+    passes "Filesystem Submission Process" — a well-formed name for a thing
+    that is not a kernel mechanism, as that node says itself about "Patch
+    Submission". INV-KK-SEED-PATH-DEFINITIONAL works at DIRECTORY granularity
+    and cannot see one process document sitting in a design directory. Neither
+    is wrong. Between them was a gap exactly one document wide.
+
+    IT READS THE DOCUMENT'S OWN TEXT, which is the only thing that survives a
+    file being moved or renamed, and it reads only the opening, because a
+    mechanism document may well mention patches half way down.
+    """
+    if not text:
+        return False
+    opening = text[:PROCEDURAL_OPENING_CHARS].lower()
+    return any(marker in opening for marker in PROCEDURAL_OPENING_MARKERS)
+
+
 #: INV-KK-HARVEST-NAME-IS-A-CLASS. A declaration is not a class.
 _DECLARATION_RE = re.compile(r"\b(struct|union|enum)\s", re.IGNORECASE)
 
@@ -502,10 +560,20 @@ def select_doc_evidence(
     conn: sqlite3.Connection,
     source_types: tuple[str, ...] | None = None,
     include_harvested: bool = False,
-) -> tuple[list[str], list[str], list[str]]:
-    """Evidence of canonical documents, split into usable, empty and already read.
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Evidence of canonical documents, split four ways.
 
-    Returns (with_text, skipped_empty, skipped_harvested). The empty ones are
+    Returns (with_text, skipped_empty, skipped_harvested, skipped_procedural).
+
+    PROCEDURAL DOCUMENTS ARE REFUSED HERE AND NOT IN harvest_document, per
+    INV-KK-HARVEST-DOCUMENT-DEFINES, because refusing at selection costs no
+    tokens — the document never reaches a prompt and no client is constructed
+    for it. The refused ids are RETURNED rather than dropped, for the same
+    reason rejected_not_a_class is counted separately from the other two: a
+    filter that discarded silently would be indistinguishable from a document
+    that defined nothing.
+
+    The empty ones are
     filtered BEFORE the limit is applied, so --limit 10 means ten documents
     actually sent — the 241-empty lesson from ALG-KK-EXTRACT-CLI, which this
     follows rather than inventing a third convention.
@@ -539,11 +607,21 @@ def select_doc_evidence(
         "ORDER BY e.id",
         types,
     ).fetchall()
-    with_text = [r[0] for r in rows if r[1].strip()]
     skipped = [r[0] for r in rows if not r[1].strip()]
+    # INV-KK-HARVEST-DOCUMENT-DEFINES, before anything else looks at the list.
+    # --include-harvested does NOT restore a procedural document: that flag
+    # exists to re-read a document deliberately, and a document this rule
+    # refuses is one nothing should read at all.
+    procedural = [
+        r[0] for r in rows if r[1].strip() and document_announces_a_procedure(r[1])
+    ]
+    refused = set(procedural)
+    with_text = [
+        r[0] for r in rows if r[1].strip() and r[0] not in refused
+    ]
 
     if include_harvested:
-        return with_text, skipped, []
+        return with_text, skipped, [], procedural
 
     harvested = {
         r[0] for r in conn.execute(
@@ -554,7 +632,7 @@ def select_doc_evidence(
     }
     unread = [e for e in with_text if e not in harvested]
     already = [e for e in with_text if e in harvested]
-    return unread, skipped, already
+    return unread, skipped, already, procedural
 
 
 # ---------------------------------------------------------------------------
