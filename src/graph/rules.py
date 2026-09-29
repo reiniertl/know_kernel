@@ -716,13 +716,47 @@ DOC_SOURCE_TYPES = ("kernel-doc",)
 #: manufactures near-duplicates of entries the vocabulary already holds.
 #:
 #: Every addition is a decision with evidence, not a configuration change.
+#: EIGHT DIRECTORIES ADDED 2026-09-29 BY OPERATOR DECISION, on the debt rather
+#: than on convenience. This is the widening refused on 2026-09-28; what
+#: changed is measurement. Documentation yields 120 of 157 documents carrying
+#: at least one Concept (76%) against the paper re-derivation's 15 of 1,302
+#: (1.2%), and 35 named concepts have no evidence but a discredited
+#: title-regex — Ftrace, Tracepoints, Probes, Netfilter, XDP, NAPI,
+#: Seccomp-BPF, POSIX Capabilities, NVMe, USB, VFIO, Device Mapper, OOM
+#: Killer, cpufreq, Thermal, LSM, dm-crypt and Block Device Layer among them.
+#:
+#: THE COUNTS ARE RECURSIVE AND THAT IS NOT A DETAIL. Every count used in the
+#: 2026-09-28 discussion was flat, and list_subtree did not recurse until the
+#: same day these were added. Flat/recursive, measured against the live
+#: listing: trace 36/62, block 17/17, security 14/29, networking 117/251,
+#: driver-api 70/360, admin-guide 72/399, userspace-api 24/459 (85% of it
+#: media/), virt 4/63. Roughly 1,640 documents in all.
+#:
+#: WHAT WAS NOT RESOLVED, RECORDED AS ACCEPTED RATHER THAN ANSWERED.
+#: admin-guide/ configures rather than defines, and batch
+#: harvest-2026-09-25-b06835db produced THREE of four collision pairs and BOTH
+#: sweep violations from its seven concepts. The argument was not refuted; it
+#: was weighed against the debt and the directory admitted anyway.
+#:
+#: WHAT DEFENDS THESE IS NO LONGER THE PATH ALONE. Every one of the eight
+#: holds process and administration documents beside definitional ones, so
+#: INV-KK-HARVEST-DOCUMENT-DEFINES — measured on 245 documents, not on these
+#: 1,640 — is what stands between them and the vocabulary.
 DOC_PATH_PREFIXES = (
     "Documentation/RCU/",
+    "Documentation/admin-guide/",
+    "Documentation/block/",
     "Documentation/core-api/",
+    "Documentation/driver-api/",
     "Documentation/filesystems/",
     "Documentation/locking/",
     "Documentation/mm/",
+    "Documentation/networking/",
     "Documentation/scheduler/",
+    "Documentation/security/",
+    "Documentation/trace/",
+    "Documentation/userspace-api/",
+    "Documentation/virt/",
 )
 
 

@@ -68,13 +68,20 @@ def _fetcher(mapping, calls=None):
     ("Documentation/core-api/cachetlb.rst", True),
     ("Documentation/scheduler/sched-deadline.rst", True),
     ("Documentation/filesystems/vfs.rst", True),
-    # Refused, each for a measured reason recorded in
-    # IFC-KK-DOC-DEFINED-PROVENANCE.
+    # INVERTED 2026-09-29, EXPLICITLY AND NOT SILENTLY. These four asserted
+    # False because DOC_PATH_PREFIXES held six directories. The operator
+    # admitted eight more that day on the 76%-versus-1.2% yield measurement
+    # and the 35 concepts whose only evidence is a discredited title-regex;
+    # see INV-KK-SEED-PATH-DEFINITIONAL, which records the decision and the
+    # admin-guide objection that was weighed and overridden rather than
+    # answered. What defends these documents is now
+    # INV-KK-HARVEST-DOCUMENT-DEFINES, per document, not the path alone.
+    ("Documentation/admin-guide/mm/ksm.rst", True),
+    ("Documentation/admin-guide/perf/hisi-pmu.rst", True),
+    ("Documentation/networking/napi.rst", True),
+    ("Documentation/driver-api/clk.rst", True),
+    # STILL REFUSED, and this one is the whole reason the rule exists.
     ("Documentation/process/5.Posting.rst", False),       # the project, not the kernel
-    ("Documentation/admin-guide/mm/ksm.rst", False),      # configuration reference
-    ("Documentation/admin-guide/perf/hisi-pmu.rst", False),  # vendor PMU tables
-    ("Documentation/networking/napi.rst", False),         # mixed, pending evidence
-    ("Documentation/driver-api/clk.rst", False),
 ])
 def test_only_the_design_trees_are_definitional(path, expected):
     assert path_is_definitional(TREE + path) is expected
@@ -101,10 +108,26 @@ def test_a_refused_subtree_is_never_fetched(conn):
 
 
 def test_the_prefix_tuple_is_the_one_the_spec_names():
+    """WIDENED 2026-09-29 from six directories to fourteen. The tuple is
+    pinned rather than merely spot-checked so that adding a directory is a
+    decision someone has to write down here as well as in the spec — which is
+    what INV-KK-SEED-PATH-DEFINITIONAL means by "every addition is a decision
+    with evidence, not a configuration change"."""
     assert DOC_PATH_PREFIXES == (
-        "Documentation/RCU/", "Documentation/core-api/",
-        "Documentation/filesystems/", "Documentation/locking/",
-        "Documentation/mm/", "Documentation/scheduler/",
+        "Documentation/RCU/",
+        "Documentation/admin-guide/",
+        "Documentation/block/",
+        "Documentation/core-api/",
+        "Documentation/driver-api/",
+        "Documentation/filesystems/",
+        "Documentation/locking/",
+        "Documentation/mm/",
+        "Documentation/networking/",
+        "Documentation/scheduler/",
+        "Documentation/security/",
+        "Documentation/trace/",
+        "Documentation/userspace-api/",
+        "Documentation/virt/",
     )
 
 
@@ -236,3 +259,125 @@ def test_limit_applies_after_the_already_seeded_filter(conn):
     assert report.seeded == 1
     # one listing fetch plus exactly one document fetch
     assert len(calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# list_subtree RECURSION, fixed 2026-09-29.
+#
+# The fixtures below reproduce the SHAPE of a real cgit /plain/ listing,
+# measured against Documentation/filesystems/ on 2026-09-29: a subdirectory
+# renders with NO trailing slash on its visible name and a trailing slash in
+# its HREF, and it sits beside files that also have no extension-bearing
+# slash. Nothing here touches the network.
+# ---------------------------------------------------------------------------
+
+def _mixed_listing(path, entries):
+    """entries: (name, is_dir). Mirrors cgit — the href carries the slash."""
+    base = f"/pub/scm/linux/kernel/git/torvalds/linux.git/plain/{path}"
+    rows = [f"<li><a href='{base.rsplit('/', 2)[0]}/'>../</a></li>"]
+    for name, is_dir in entries:
+        href = f"{base}/{name}/" if is_dir else f"{base}/{name}"
+        rows.append(f"<li><a href='{href}'>{name}</a></li>")
+    return "<html><body><ul>\n" + "\n".join(rows) + "\n</ul></body></html>"
+
+
+def _tree_fixture():
+    """filesystems/ with xfs/ beneath it — the exact case the bug missed."""
+    p = "Documentation/filesystems"
+    return {
+        TREE.replace("/tree/", "/plain/") + p: _mixed_listing(p, [
+            ("9p.rst", False),
+            ("path-lookup.txt", False),   # a FILE with no trailing slash
+            ("xfs", True),                # a DIRECTORY, also no trailing slash
+        ]),
+        TREE.replace("/tree/", "/plain/") + p + "/xfs": _mixed_listing(
+            p + "/xfs", [("xfs-online-fsck-design.rst", False),
+                         ("xfs-self-describing-metadata.rst", False)]),
+    }
+
+
+def test_the_listing_reaches_documents_in_a_subdirectory():
+    """THE BUG: Documentation/filesystems/ keeps XFS's documentation in xfs/,
+    the 2026-09-29 run seeded 78 flat files and reported success, and XFS
+    Filesystem ended it exactly as evidence-free as it began."""
+    found = list_subtree(TREE + "Documentation/filesystems",
+                         fetch_fn=_fetcher(_tree_fixture()))
+    assert found == [
+        TREE + "Documentation/filesystems/9p.rst",
+        TREE + "Documentation/filesystems/xfs/xfs-online-fsck-design.rst",
+        TREE + "Documentation/filesystems/xfs/xfs-self-describing-metadata.rst",
+    ]
+
+
+def test_a_directory_is_told_from_a_file_by_its_href_and_not_its_name():
+    """MEASURED AGAINST THE LIVE LISTING: ext4, xfs and nfs render with no
+    trailing slash on the visible name, exactly like path-lookup.txt beside
+    them. Only the href carries one. A rule reading the name would get
+    path-lookup.txt right by accident and break on the first extensionless
+    file the kernel adds."""
+    found = list_subtree(TREE + "Documentation/filesystems",
+                         fetch_fn=_fetcher(_tree_fixture()))
+    assert not any(u.endswith("path-lookup.txt") for u in found), \
+        "a .txt file was walked as a directory"
+    assert any("/xfs/" in u for u in found), "a directory was read as a file"
+
+
+def test_the_walk_is_bounded_by_depth():
+    p = "Documentation/mm"
+    plain = TREE.replace("/tree/", "/plain/")
+    mapping = {
+        plain + p: _mixed_listing(p, [("a.rst", False), ("one", True)]),
+        plain + p + "/one": _mixed_listing(p + "/one",
+                                           [("b.rst", False), ("two", True)]),
+        plain + p + "/one/two": _mixed_listing(p + "/one/two",
+                                               [("c.rst", False)]),
+    }
+    assert len(list_subtree(TREE + p, fetch_fn=_fetcher(mapping),
+                            max_depth=0)) == 1
+    assert len(list_subtree(TREE + p, fetch_fn=_fetcher(mapping),
+                            max_depth=1)) == 2
+    assert len(list_subtree(TREE + p, fetch_fn=_fetcher(mapping),
+                            max_depth=2)) == 3
+
+
+def test_an_unlistable_subdirectory_costs_only_itself():
+    """One unreachable subdirectory must not lose the documents beside it."""
+    p = "Documentation/mm"
+    plain = TREE.replace("/tree/", "/plain/")
+
+    def fetch(url):
+        if url.endswith("/broken"):
+            raise OSError("listing unavailable")
+        return {plain + p: _mixed_listing(
+            p, [("good.rst", False), ("broken", True)])}.get(url, "")
+
+    found = list_subtree(TREE + p, fetch_fn=fetch)
+    assert found == [TREE + p + "/good.rst"]
+
+
+def test_a_subtree_whose_own_listing_fails_raises():
+    """THE ASYMMETRY IS DELIBERATE AND WAS LEARNED TWICE IN ONE SITTING. The
+    first draft of the recursion repair swallowed every listing failure, which
+    turned a wrong URL into an empty result and a report of success — the
+    identical failure mode being repaired. The top level must be loud."""
+    def fetch(url):
+        raise OSError("listing unavailable")
+
+    with pytest.raises(OSError):
+        list_subtree(TREE + "Documentation/mm", fetch_fn=fetch)
+
+
+def test_the_newly_admitted_directories_are_definitional():
+    """The eight added 2026-09-29. Recorded as a test so a later edit to
+    DOC_PATH_PREFIXES that drops one is visible rather than silent."""
+    for d in ("trace", "block", "security", "networking",
+              "userspace-api", "driver-api", "virt", "admin-guide"):
+        assert path_is_definitional(TREE + f"Documentation/{d}/x.rst"), d
+
+
+def test_process_is_still_refused_after_the_widening():
+    """The widening must not have admitted the directory the whole rule was
+    written against."""
+    assert not path_is_definitional(
+        TREE + "Documentation/process/submitting-patches.rst")
+    assert not path_is_definitional(TREE + "Documentation/x.rst")

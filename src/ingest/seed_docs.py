@@ -51,6 +51,31 @@ KERNEL_DOC_SOURCE_TYPE = "kernel-doc"
 
 _RST_LINK_RE = re.compile(r">([^<]+\.rst)</a>")
 
+#: Every anchor in a cgit /plain/ listing, as (href, visible name).
+#:
+#: THE HREF IS WHAT SEPARATES A DIRECTORY FROM A FILE, AND THE VISIBLE NAME IS
+#: NOT. Measured against the live listing of Documentation/filesystems/ on
+#: 2026-09-29: the subdirectories ext4, xfs, nfs, fuse, caching, gfs2, iomap,
+#: smb and spufs render WITHOUT a trailing slash, exactly like the files
+#: path-lookup.txt and propagate_umount.txt beside them. Only their HREF
+#: carries one:
+#:
+#:     <a href='.../filesystems/9p.rst'>9p.rst</a>      <- a file
+#:     <a href='.../filesystems/ext4/'>ext4</a>         <- a directory
+#:
+#: Guessing from the name — "it has no extension, so it is a directory" —
+#: would classify path-lookup.txt correctly by accident and break on the first
+#: extensionless file the kernel adds.
+_ENTRY_RE = re.compile(r"<a href='([^']*)'>([^<]+)</a>")
+
+#: The parent link, which is the one entry whose NAME does carry a slash.
+_PARENT_NAME = "../"
+
+#: How deep list_subtree will walk. Documentation/ is three levels at its
+#: deepest (userspace-api/media/v4l/), and an unbounded walk over a listing
+#: service is how a seeding run becomes a crawl.
+MAX_SUBTREE_DEPTH = 3
+
 
 @dataclass
 class SeedOutcome:
@@ -75,19 +100,72 @@ class SeedReport:
         return dict(Counter(o.reason for o in self.outcomes if o.reason))
 
 
-def list_subtree(subtree_url: str, fetch_fn: Callable[[str], str] | None = None) -> list[str]:
-    """Every .rst document in a subtree, as STORED (/tree/) urls.
+def list_subtree(
+    subtree_url: str,
+    fetch_fn: Callable[[str], str] | None = None,
+    max_depth: int = MAX_SUBTREE_DEPTH,
+) -> list[str]:
+    """Every .rst document in a subtree AND ITS SUBDIRECTORIES, as /tree/ urls.
 
     The listing is fetched from the /plain/ form, which returns a bare <ul> of
     links; the /tree/ form returns a full cgit page. The urls returned are the
     /tree/ form, because that is the human-readable address a reader opens and
     the one ALG-KK-BACKFILL-SOURCE-PROSE decided to keep as canonical.
+
+    IT DID NOT RECURSE UNTIL 2026-09-29, AND IT REPORTED SUCCESS ANYWAY. The
+    old body applied one regex to one directory's listing, so it returned the
+    .rst files at that level and nothing beneath. Documentation/filesystems/
+    keeps its substantial per-filesystem documentation in SUBDIRECTORIES, so
+    the 2026-09-29 seeding run offered the seeder 78 flat files and never saw
+    the other 70 — ext4/ 27, nfs/ 12, fuse/ 6, caching/ 5, xfs/ 5, smb/ 4,
+    spufs/ 4, iomap/ 4, gfs2/ 3. The run was justified by "seeding
+    filesystems/ is how XFS Filesystem stops being evidence-free"; XFS
+    Filesystem's five documents were in xfs/ and it ended the run exactly as
+    evidence-free as it began.
+
+    THE WALK IS BOUNDED AND ORDERED. max_depth stops an unbounded crawl of a
+    listing service; the result is sorted so a dry run and the seed that
+    follows it agree on order, which is the contract ALG-KK-SEED-DOC-SUBTREE
+    offers and the reason its 2026-09-28 counts held exactly.
+
+    A SUBDIRECTORY THAT CANNOT BE LISTED IS SKIPPED, NOT FATAL — one
+    unreachable subdirectory must not cost the documents found beside it. THE
+    TOP LEVEL IS NOT COVERED BY THAT, AND THE ASYMMETRY IS DELIBERATE: a
+    subtree whose own listing fails RAISES. Swallowing it would return an empty
+    list and report success, which is the failure this function is being
+    repaired for, and it would be the second time.
     """
     fetch = fetch_fn or _default_fetch
-    html = fetch(plain_url(subtree_url))
-    base = subtree_url.rstrip("/")
-    names = sorted(set(_RST_LINK_RE.findall(html or "")))
-    return [f"{base}/{n}" for n in names]
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def walk(url: str, depth: int) -> None:
+        base = url.rstrip("/")
+        if base in seen:
+            return
+        seen.add(base)
+        # The url is fetched AS GIVEN, trailing slash and all. Normalising it
+        # here would fetch a different address than the caller named.
+        try:
+            html = fetch(plain_url(url)) or ""
+        except Exception:
+            if depth == 0:
+                raise
+            return
+        subdirs: list[str] = []
+        for href, name in _ENTRY_RE.findall(html):
+            if name == _PARENT_NAME:
+                continue
+            if href.endswith("/"):
+                subdirs.append(name.rstrip("/"))
+            elif name.endswith(".rst"):
+                found.append(f"{base}/{name}")
+        if depth < max_depth:
+            for sub in sorted(set(subdirs)):
+                walk(f"{base}/{sub}", depth + 1)
+
+    walk(subtree_url, 0)
+    return sorted(set(found))
 
 
 def existing_source_urls(conn: sqlite3.Connection) -> set[str]:
