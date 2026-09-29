@@ -356,15 +356,74 @@ def test_an_unlistable_subdirectory_costs_only_itself():
 
 
 def test_a_subtree_whose_own_listing_fails_raises():
-    """THE ASYMMETRY IS DELIBERATE AND WAS LEARNED TWICE IN ONE SITTING. The
-    first draft of the recursion repair swallowed every listing failure, which
-    turned a wrong URL into an empty result and a report of success — the
-    identical failure mode being repaired. The top level must be loud."""
-    def fetch(url):
-        raise OSError("listing unavailable")
+    """THE TOP LEVEL MUST BE LOUD.
 
-    with pytest.raises(OSError):
-        list_subtree(TREE + "Documentation/mm", fetch_fn=fetch)
+    REWRITTEN 2026-09-29 AND THE REASON IS THE POINT. The first version passed
+    a fetcher that RAISED OSError, and it was green while the real code lost 37
+    documents — because validate_sources._default_fetch CATCHES every httpx
+    error and returns an EMPTY STRING. The guard under test could never fire in
+    production. A test whose fixture behaves better than the code it stands for
+    proves only that the fixture behaves well, which is the same mistake the
+    artifact_class filter made.
+
+    So this now uses a fetcher that behaves EXACTLY as _default_fetch does.
+    """
+    def fetch_like_default_fetch(url):
+        return ""          # what _default_fetch returns on 503, 404, timeout
+
+    with pytest.raises(RuntimeError):
+        list_subtree(TREE + "Documentation/mm", fetch_fn=fetch_like_default_fetch)
+
+
+def test_an_unreadable_subdirectory_is_reported_and_not_silent():
+    """INV-KK-SEED-LISTING-ACCOUNTED. git.kernel.org 503s under sustained
+    listing; the subtree must still say what it could not read."""
+    p = "Documentation/driver-api"
+    plain = TREE.replace("/tree/", "/plain/")
+    listing = {plain + p: _mixed_listing(p, [("vfio.rst", False), ("usb", True)])}
+
+    def fetch(url):
+        return listing.get(url, "")    # usb/ comes back empty, like a 503
+
+    failures: list[str] = []
+    found = list_subtree(TREE + p, fetch_fn=fetch, failures=failures)
+    assert found == [TREE + p + "/vfio.rst"]
+    assert failures == [TREE + p + "/usb"], "an unreadable directory vanished"
+
+
+def test_the_seed_report_counts_a_failed_listing(conn):
+    """A run that silently returns fewer documents is indistinguishable from a
+    subtree that had fewer. The 37 lost on 2026-09-29 were driver-api/usb/,
+    driver-api/driver-model/ and driver-api/thermal/ — exactly the documents a
+    later prompt planned to discharge link debt with."""
+    p = "Documentation/mm"
+    plain = TREE.replace("/tree/", "/plain/")
+    listing = {
+        plain + p + "/": _mixed_listing(p, [("highmem.rst", False), ("slub", True)]),
+        plain + p + "/highmem.rst": PROSE,
+    }
+    # The trailing slash matters: path_is_definitional matches the prefix
+    # "Documentation/mm/", so the bare directory name is refused before any fetch.
+    report = seed_subtree(conn, TREE + p + "/",
+                          fetch_fn=_fetcher(listing), rate_limit=0)
+    assert report.by_reason().get("listing-failed") == 1
+    assert report.seeded == 1
+
+
+def test_a_directory_that_really_holds_no_rst_is_not_a_failure():
+    """The discriminator is the PARENT ANCHOR, not the .rst count. A real cgit
+    listing always carries '../'; only a page with no anchors at all is
+    unreadable."""
+    p = "Documentation/mm"
+    plain = TREE.replace("/tree/", "/plain/")
+    listing = {
+        plain + p: _mixed_listing(p, [("a.rst", False), ("images", True)]),
+        plain + p + "/images": _mixed_listing(p + "/images", [("diagram.svg", False)]),
+    }
+    failures: list[str] = []
+    found = list_subtree(TREE + p, fetch_fn=_fetcher(listing), failures=failures)
+    assert found == [TREE + p + "/a.rst"]
+    assert failures == [], "an empty-of-rst directory was called unreadable"
 
 
 def test_the_newly_admitted_directories_are_definitional():

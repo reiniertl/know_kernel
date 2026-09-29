@@ -104,6 +104,7 @@ def list_subtree(
     subtree_url: str,
     fetch_fn: Callable[[str], str] | None = None,
     max_depth: int = MAX_SUBTREE_DEPTH,
+    failures: list[str] | None = None,
 ) -> list[str]:
     """Every .rst document in a subtree AND ITS SUBDIRECTORIES, as /tree/ urls.
 
@@ -128,12 +129,24 @@ def list_subtree(
     follows it agree on order, which is the contract ALG-KK-SEED-DOC-SUBTREE
     offers and the reason its 2026-09-28 counts held exactly.
 
-    A SUBDIRECTORY THAT CANNOT BE LISTED IS SKIPPED, NOT FATAL — one
-    unreachable subdirectory must not cost the documents found beside it. THE
-    TOP LEVEL IS NOT COVERED BY THAT, AND THE ASYMMETRY IS DELIBERATE: a
-    subtree whose own listing fails RAISES. Swallowing it would return an empty
-    list and report success, which is the failure this function is being
-    repaired for, and it would be the second time.
+    A SUBDIRECTORY THAT CANNOT BE LISTED IS COUNTED, NOT SKIPPED IN SILENCE
+    (INV-KK-SEED-LISTING-ACCOUNTED), and the first version of this repair got
+    that wrong in a way that cost 37 documents. It guarded with
+    `except Exception: raise if depth == 0`, which cannot fire:
+    validate_sources._default_fetch CATCHES every httpx error, logs it and
+    returns an EMPTY STRING. Under the 503s git.kernel.org returns during
+    sustained listing, a subtree simply came back short and the run reported
+    success — the identical failure this function was being repaired for.
+
+    THE DISCRIMINATOR IS THAT A cgit LISTING IS NEVER EMPTY. Every real /plain/
+    directory listing carries at least the parent anchor "../". A page with NO
+    anchors at all is a 503 body, an error page or nothing — never a directory
+    that merely holds no .rst. Counting anchors works against the fetcher that
+    actually runs, and needs no change to _default_fetch.
+
+    Unreadable SUBDIRECTORIES are appended to `failures` so the caller can
+    report them; an unreadable TOP LEVEL raises, and now raises for the reason
+    that actually occurs rather than for one that never did.
     """
     fetch = fetch_fn or _default_fetch
     found: list[str] = []
@@ -149,11 +162,17 @@ def list_subtree(
         try:
             html = fetch(plain_url(url)) or ""
         except Exception:
+            html = ""
+        entries = _ENTRY_RE.findall(html)
+        if not entries:
+            # Not an empty directory — an unreadable one. See the docstring.
             if depth == 0:
-                raise
+                raise RuntimeError(f"Could not list subtree {url}")
+            if failures is not None:
+                failures.append(base)
             return
         subdirs: list[str] = []
-        for href, name in _ENTRY_RE.findall(html):
+        for href, name in entries:
             if name == _PARENT_NAME:
                 continue
             if href.endswith("/"):
@@ -221,7 +240,13 @@ def seed_subtree(
             url=subtree_url, reason="refused-path"))
         return report
 
-    urls = list_subtree(subtree_url, fetch_fn=fetch)
+    # INV-KK-SEED-LISTING-ACCOUNTED: a subdirectory that could not be read is
+    # reported as its own outcome. The first real run lost 37 documents to
+    # unreadable listings and reported success.
+    listing_failures: list[str] = []
+    urls = list_subtree(subtree_url, fetch_fn=fetch, failures=listing_failures)
+    for failed in listing_failures:
+        report.outcomes.append(SeedOutcome(url=failed, reason="listing-failed"))
     known = existing_source_urls(conn)
 
     pending: list[str] = []
