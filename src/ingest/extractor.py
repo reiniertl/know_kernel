@@ -460,6 +460,17 @@ def wire_relationships(
             if source_id == target_id:
                 skipped += 1
                 continue
+            # The second unguarded writer on the re-link path, fixed with the
+            # first. A relationship this pair already carries is not an error
+            # and not a new edge: a re-derivation re-asks the same question of
+            # the same paper and should reach the same answer without raising
+            # part way through a paid batch.
+            if conn.execute(
+                "SELECT 1 FROM edges WHERE kind=? AND source_id=? AND target_id=?",
+                (kind, source_id, target_id),
+            ).fetchone():
+                skipped += 1
+                continue
             add_edge(conn, kind, source_id, target_id)
             created += 1
     return RelationshipResult(edges_created=created, edges_skipped=skipped)

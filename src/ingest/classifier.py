@@ -58,7 +58,24 @@ def assign_subsystems(
         is_new = subsystem_id not in existing_before
         if subsystem_id not in seen_subsystems:
             seen_subsystems[subsystem_id] = is_new
-        add_edge(conn, "belongs-to", concept_id, subsystem_id)
+        # THE SAME CHECK THE KernelInvariant BRANCH TWENTY LINES BELOW ALREADY
+        # MAKES, and the asymmetry was the defect. edges carries
+        # UNIQUE (kind, source_id, target_id), so re-classifying a Concept that
+        # already belongs to this Subsystem raises IntegrityError — which is
+        # every successful re-link on a mature vocabulary. It never fired in the
+        # 2026-09-21 batches because those MINTED their concepts, so every
+        # belongs-to edge was new; INV-KK-EXTRACT-CONCEPT-MATCHED stopped the
+        # minting, and this surfaced on the first run that actually reused.
+        # Measured 2026-09-28: the only two papers to fail a 1,302-paper
+        # re-derivation were the two that matched — "Agile TLB Prefetching"
+        # against Translation Lookaside Buffer and "Should BBR be the default
+        # TCP Congestion Control Protocol?" against TCP Congestion Control.
+        # Papers that MATCH were the papers that broke.
+        if not conn.execute(
+            "SELECT 1 FROM edges WHERE kind='belongs-to' AND source_id=? "
+            "AND target_id=?", (concept_id, subsystem_id),
+        ).fetchone():
+            add_edge(conn, "belongs-to", concept_id, subsystem_id)
         concept_subsystem_map[concept_id] = subsystem_id
 
     for concept_id, subsystem_id in concept_subsystem_map.items():

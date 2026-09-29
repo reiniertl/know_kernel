@@ -1063,3 +1063,92 @@ def test_the_papers_page_and_the_badge_cannot_disagree(conn):
 
     listed = conn.execute(_CONCEPT_PAPERS_SQL, (cid, 50, 0)).fetchall()
     assert len(listed) == concept_weight(conn, cid) == 1
+
+
+# --- a re-link of a paper that MATCHES must not raise -----------------------
+#
+# MEASURED 2026-09-28: the only two papers to fail a 1,302-paper re-derivation
+# were the two that matched the vocabulary — "Agile TLB Prefetching" against
+# Translation Lookaside Buffer, and "Should BBR be the default TCP Congestion
+# Control Protocol?" against TCP Congestion Control. Papers that MATCH were the
+# papers that broke, which is the worst possible selectivity for a re-link
+# whose entire purpose is to find matches.
+#
+# Two unguarded add_edge calls: classifier.assign_subsystems wrote belongs-to
+# without checking, while the KernelInvariant branch twenty lines below it
+# checked — and wire_relationships wrote its edge the same way. Neither fired
+# in the 2026-09-21 batches because those MINTED their concepts, so every
+# belongs-to edge was new. INV-KK-EXTRACT-CONCEPT-MATCHED stopped the minting,
+# and this surfaced on the first run that actually reused.
+
+
+def test_relinking_a_concept_that_already_belongs_somewhere_does_not_raise(conn):
+    from graph.rules import concept_weight
+
+    eid = _paper(conn, "1")
+    cid = _concept(conn, "concept-cow", "Copy-on-Write")
+    add_node(conn, "sub-memory", "Subsystem", {"name": "Memory"})
+    add_edge(conn, "belongs-to", cid, "sub-memory")
+    _legacy_link(conn, cid, eid)
+    conn.commit()
+
+    r = extract_concepts(conn, eid, SessionGate(), client=MockLLMClient(),
+                         relink=True)
+    conn.commit()
+
+    assert r.concepts_reused == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind='belongs-to' AND source_id=?",
+        (cid,)).fetchone()[0] == 1, "one edge, not a duplicate and not a raise"
+
+
+def test_a_relationship_the_pair_already_carries_is_skipped_not_raised(conn):
+    eid = _paper(conn, "1")
+    cid = _concept(conn, "concept-cow", "Copy-on-Write")
+    other = _concept(conn, "concept-pt", "Page Table")
+    add_edge(conn, "prerequisite", cid, other)
+    _legacy_link(conn, cid, eid)
+    conn.commit()
+
+    client = MockLLMClient(concepts=[{
+        **CONCEPTS[0],
+        "relationships": [{"kind": "prerequisite", "target": "Page Table"}],
+    }, {
+        "name": "Page Table", "description": "Mapping virtual to physical.",
+        "key_properties": ["hierarchical"], "tradeoffs": ["walk cost"],
+        "design_rationale": "n/a", "subsystem": "Memory",
+        "relationships": [], "invariants": [],
+    }])
+    r = extract_concepts(conn, eid, SessionGate(), client=client, relink=True)
+    conn.commit()
+
+    assert r.concepts_reused == 2
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind='prerequisite' AND source_id=? "
+        "AND target_id=?", (cid, other)).fetchone()[0] == 1
+
+
+def test_a_matched_relink_supersedes_the_legacy_link_end_to_end(conn):
+    """THE WHOLE POINT, and it could not happen before this fix: a paper that
+    matches gets its new link AND loses its false one, in one call that
+    completes."""
+    from graph.rules import concept_weight
+
+    eid = _paper(conn, "1")
+    cow = _concept(conn, "concept-cow", "Copy-on-Write")
+    lsm = _concept(conn, "concept-lsm", "Linux Security Modules")
+    add_node(conn, "sub-memory", "Subsystem", {"name": "Memory"})
+    add_edge(conn, "belongs-to", cow, "sub-memory")
+    _legacy_link(conn, lsm, eid)
+    conn.commit()
+    assert concept_weight(conn, lsm) == 1
+
+    r = extract_concepts(conn, eid, SessionGate(), client=MockLLMClient(),
+                         relink=True)
+    conn.commit()
+
+    assert r.concepts_reused == 1
+    assert r.edges_superseded == 1
+    assert concept_weight(conn, lsm) == 0
+    assert concept_weight(conn, cow) == 1
+    assert eid not in select_for_relink(conn)
