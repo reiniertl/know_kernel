@@ -88,7 +88,8 @@ WEB_MUTATION_ALLOWLIST = (
     "/api/concept-merge/",    # collapse a duplicate; the evidence moves
     "/api/concept-retire-bulk",  # one signed act over several ids
     "/api/concept-subsystem/",   # the taxonomy edge the harvest declined to guess
-    "/api/concept-distinct/",    # two colliding names are different things
+    "/api/concept-distinct/",
+    "/api/concept-documentation-absent/",    # two colliding names are different things
 )
 
 
@@ -786,6 +787,50 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         return JSONResponse({
             "concept_a": concept_a, "concept_b": concept_b, "written": written,
         })
+
+    @app.post("/api/concept-documentation-absent/{concept_id}")
+    async def api_concept_documentation_absent(request: Request, concept_id: str):
+        """Record that a Concept's canonical documentation does not exist
+        (ALG-KK-WEB-CONCEPT-DOCUMENTATION-ABSENT).
+
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/concept-documentation-absent/ is
+        allowlisted. INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION: an anonymous caller
+        is refused and nothing is written, because this mark is a CLAIM ABOUT THE
+        KERNEL and someone has to own it.
+
+        THE DISTINCTION IT RECORDS IS ONE THE GRAPH COULD NOT MAKE. Measured
+        2026-09-29, 33 of the 35 concepts carrying unreachable legacy links were
+        undocumented, and almost all of them were merely waiting on a seeding run
+        that had not happened. Signal Delivery was not: kernel/signal.c is its
+        definition and no Documentation/ page exists. Both read as "unlinked",
+        and only one of them is a queue item.
+
+        A REASON IS REQUIRED AND AN EMPTY ONE IS A 422. Without it the attribute
+        is indistinguishable from a curator who did not look.
+
+        IT DOES NOT MARK THE CONCEPT REVIEWED, for the reason the subsystem and
+        distinct routes do not: establishing that no document exists is not the
+        same as having read and approved the entry.
+        """
+        from graph.concept_vocabulary import mark_documentation_absent
+
+        identity = getattr(request.state, "user", None)
+        if identity is None:
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+        payload = await request.json() if await request.body() else {}
+        reason = str(payload.get("reason", "") or "")
+
+        conn = request.app.state.conn
+        try:
+            written = mark_documentation_absent(
+                conn, concept_id, reason, reviewed_by=identity["reviewer"])
+        except ValueError as exc:
+            status = 404 if str(exc).startswith("No Concept") else 422
+            return JSONResponse({"error": str(exc)}, status_code=status)
+
+        conn.commit()
+        return JSONResponse({"concept_id": concept_id, "written": written})
 
     @app.post("/api/concept-merge/{loser_id}/{winner_id}")
     async def api_concept_merge(request: Request, loser_id: str, winner_id: str):

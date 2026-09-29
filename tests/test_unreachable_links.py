@@ -22,6 +22,7 @@ from graph.engine import add_edge, add_node
 from graph.rules import (
     LEGACY_UNVERIFIED_BASIS,
     concept_weight,
+    documented_concepts,
     retire_unreachable_links,
     unreachable_legacy_links,
 )
@@ -281,3 +282,88 @@ def test_the_retired_link_records_why(conn):
     a = _attrs(conn, cid, blind)
     assert a["superseded"] is True
     assert a["superseded_reason"] == "unreachable-legacy"
+
+
+# ---------------------------------------------------------------------------
+# THE PROPERTY THE WHOLE DEBT-PAYMENT ROUTE DEPENDS ON, pinned 2026-09-29.
+#
+# INV-KK-LINK-LAST-EVIDENCE-KEPT says the 94 surviving links are paid off by
+# DOCUMENTING the 35 concepts that hold them. That only works if a concept's
+# documentation counts toward _weight_without_unreachable — and the suspicion
+# was that it does not, because that query counts SOURCES and a documented
+# concept may carry no papers at all. If the suspicion were right the debt
+# would be unpayable by documenting anything, forever, and nothing exercised
+# it either way.
+# ---------------------------------------------------------------------------
+
+def _doc_evidence(conn, n, text="real kernel prose. " * 20):
+    """A canonical-documentation Evidence, which is what pays the debt."""
+    add_node(conn, f"src-{n}", "Source", {
+        "url": f"https://git.kernel.org/x/tree/Documentation/mm/{n}.rst",
+        "source_type": "kernel-doc", "license": "GPL-2.0", "title": n})
+    add_node(conn, f"ev-{n}", "Evidence", {
+        "artifact_class": "A", "contamination_level": "L0", "text": text})
+    add_edge(conn, "sourced-from", f"ev-{n}", f"src-{n}")
+    return f"ev-{n}"
+
+
+def test_a_documented_concept_with_zero_papers_loses_its_legacy_link(conn):
+    """THE CASE THAT DECIDES WHETHER THE DEBT CAN BE PAID AT ALL. Documentation
+    reaches its Source by the same extracted-from then sourced-from traversal a
+    paper does, so it counts — the concept is no longer relying on the legacy
+    link and the sweep takes it."""
+    cid = _concept(conn, "c-doc", "Documented No Papers")
+    _current(conn, cid, _doc_evidence(conn, "highmem"))
+    legacy = _legacy_evidence = _evidence(conn, "leg", text="")
+    _legacy(conn, cid, legacy)
+    conn.commit()
+
+    assert cid in documented_concepts(conn)
+    report = retire_unreachable_links(conn)
+    assert report.retired == 1, "a documented concept was spared as a last resort"
+    assert report.concepts_spared == 0
+    assert _attrs(conn, cid, legacy).get("superseded") is True
+
+
+def test_a_concept_with_only_a_legacy_link_still_keeps_it(conn):
+    """The compromise INV-KK-LINK-LAST-EVIDENCE-KEPT exists for: a vocabulary
+    silently knowing nothing about the OOM Killer is worse than one holding a
+    marked, suspect link to it."""
+    cid = _concept(conn, "c-bare", "Bare Legacy Only")
+    legacy = _evidence(conn, "solo", text="")
+    _legacy(conn, cid, legacy)
+    conn.commit()
+
+    report = retire_unreachable_links(conn)
+    assert report.retired == 0
+    assert report.concepts_spared == 1
+    assert _attrs(conn, cid, legacy).get("superseded") is not True
+
+
+def test_the_sweep_is_a_no_op_the_second_time(conn):
+    cid = _concept(conn, "c-doc2", "Documented Twice Swept")
+    _current(conn, cid, _doc_evidence(conn, "vmalloc"))
+    _legacy(conn, cid, _evidence(conn, "leg2", text=""))
+    conn.commit()
+
+    assert retire_unreachable_links(conn).retired == 1
+    again = retire_unreachable_links(conn)
+    assert again.retired == 0 and again.kept == 0 and again.concepts_touched == 0
+
+
+def test_documentation_absent_does_not_change_what_the_sweep_spares(conn):
+    """INV-KK-CONCEPT-DOCUMENTATION-ABSENT must not suppress the sparing.
+    Knowing a concept's silence is PERMANENT makes its one suspect link more
+    necessary rather than less."""
+    from graph.concept_vocabulary import mark_documentation_absent
+
+    cid = _concept(conn, "c-signal", "Signal Delivery")
+    legacy = _evidence(conn, "sig", text="")
+    _legacy(conn, cid, legacy)
+    assert mark_documentation_absent(
+        conn, cid, "defined by kernel/signal.c; no Documentation/ page", "reiniertl")
+    conn.commit()
+
+    report = retire_unreachable_links(conn)
+    assert report.retired == 0, "marking a concept undocumentable dropped its last link"
+    assert report.concepts_spared == 1

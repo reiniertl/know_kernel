@@ -747,3 +747,107 @@ def test_a_decided_pair_is_gone_from_the_detail_page(distinct_client):
     distinct_client.post("/api/concept-distinct/concept-folio/concept-marks")
     page = distinct_client.get("/concepts/concept-folio").text
     assert "This name collides" not in page
+
+
+# ---------------------------------------------------------------------------
+# INV-KK-CONCEPT-DOCUMENTATION-ABSENT / ALG-KK-WEB-CONCEPT-DOCUMENTATION-ABSENT
+#
+# "unlinked" says nobody has linked a concept. It has never been able to say
+# that nothing COULD. Signal Delivery is defined by kernel/signal.c and has no
+# Documentation/ page, and until this existed it was indistinguishable from
+# the 32 concepts merely waiting for a seeding run.
+# ---------------------------------------------------------------------------
+
+def test_the_documentation_absent_prefix_is_allowlisted():
+    assert "/api/concept-documentation-absent/" in WEB_MUTATION_ALLOWLIST
+
+
+def test_marking_documentation_absent_records_a_reason_and_an_author(conn):
+    from graph.concept_vocabulary import mark_documentation_absent
+    cid = _concept(conn, "concept-signal", "Signal Delivery")
+    conn.commit()
+
+    assert mark_documentation_absent(
+        conn, cid, "defined by kernel/signal.c; no Documentation/ page",
+        "reviewer-kate") is True
+    conn.commit()
+
+    from graph.engine import get_node
+    attrs = get_node(conn, cid)["attrs"]
+    assert attrs["documentation_absent"] is True
+    assert "kernel/signal.c" in attrs["documentation_absent_reason"]
+    assert attrs["reviewed_by"] == "reviewer-kate"
+
+
+def test_marking_does_not_change_the_curation_state(conn):
+    """THE REASON IT IS AN ATTRIBUTE AND NOT A FOURTH STATE. The two facts are
+    orthogonal, and a fourth state would make an unread concept stop counting
+    as unreviewed — corrupting the one number the progress count keeps honest."""
+    from graph.concept_vocabulary import mark_documentation_absent, curation_progress
+    cid = _concept(conn, "concept-signal2", "Signal Delivery")
+    conn.commit()
+    before = curation_progress(conn)
+
+    mark_documentation_absent(conn, cid, "no Documentation/ page", "reviewer-kate")
+    conn.commit()
+
+    assert curation_progress(conn) == before, "an undocumentable concept left the backlog"
+
+
+def test_an_empty_reason_is_refused(conn):
+    """Without a reason the mark is indistinguishable from a curator who did
+    not look."""
+    from graph.concept_vocabulary import mark_documentation_absent
+    cid = _concept(conn, "concept-signal3", "Signal Delivery")
+    conn.commit()
+    with pytest.raises(ValueError):
+        mark_documentation_absent(conn, cid, "   ", "reviewer-kate")
+    with pytest.raises(ValueError):
+        mark_documentation_absent(conn, cid, "a real reason", "")
+
+
+def test_marking_twice_writes_nothing_the_second_time(conn):
+    from graph.concept_vocabulary import mark_documentation_absent
+    cid = _concept(conn, "concept-signal4", "Signal Delivery")
+    conn.commit()
+    assert mark_documentation_absent(conn, cid, "no page", "reviewer-kate") is True
+    assert mark_documentation_absent(conn, cid, "no page", "reviewer-kate") is False
+
+
+def test_an_unknown_concept_is_refused(conn):
+    from graph.concept_vocabulary import mark_documentation_absent
+    with pytest.raises(ValueError, match="No Concept"):
+        mark_documentation_absent(conn, "concept-nope", "no page", "reviewer-kate")
+
+
+def test_the_route_refuses_an_anonymous_caller_and_writes_nothing(tmp_path):
+    """INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION. The mark is a CLAIM ABOUT THE
+    KERNEL and someone has to own it."""
+    app = create_app(_distinct_db(tmp_path))
+    with TestClient(app) as anon:
+        r = anon.post("/api/concept-documentation-absent/concept-folio",
+                      json={"reason": "no page"})
+    assert r.status_code == 401
+
+
+def test_the_route_marks_through_the_real_router(distinct_client):
+    r = distinct_client.post("/api/concept-documentation-absent/concept-folio",
+                             json={"reason": "defined in mm/folio.c, no page"})
+    assert r.status_code == 200, r.text
+    assert r.json()["written"] is True
+
+    again = distinct_client.post("/api/concept-documentation-absent/concept-folio",
+                                 json={"reason": "defined in mm/folio.c, no page"})
+    assert again.json()["written"] is False
+
+
+def test_the_route_refuses_an_empty_reason(distinct_client):
+    r = distinct_client.post("/api/concept-documentation-absent/concept-folio",
+                             json={"reason": ""})
+    assert r.status_code == 422
+
+
+def test_the_route_404s_on_an_unknown_concept(distinct_client):
+    r = distinct_client.post("/api/concept-documentation-absent/concept-nope",
+                             json={"reason": "no page"})
+    assert r.status_code == 404

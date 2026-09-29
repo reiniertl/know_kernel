@@ -1141,6 +1141,64 @@ def curation_progress(conn: sqlite3.Connection) -> dict[str, int]:
     return counts
 
 
+def mark_documentation_absent(
+    conn: sqlite3.Connection,
+    concept_id: str,
+    reason: str,
+    reviewed_by: str,
+    reviewed_at: str = "",
+) -> bool:
+    """A curator records that a Concept's canonical documentation DOES NOT EXIST
+    (ALG-KK-WEB-CONCEPT-DOCUMENTATION-ABSENT, INV-KK-CONCEPT-DOCUMENTATION-ABSENT).
+
+    WHAT THE GRAPH COULD NOT SAY BEFORE THIS. Measured 2026-09-29: 33 of the 35
+    concepts holding unreachable legacy links are undocumented, for two reasons
+    the graph rendered identically. Most are waiting on a seeding run that had
+    not happened — their documents exist in Documentation/ and nothing had
+    fetched them. Signal Delivery is not: kernel/signal.c is the definition and
+    there is no Documentation/ page for it, so no seeding will ever reach it.
+    "unlinked" says nobody has linked a concept and has never been able to say
+    that nothing could, and those two facts call for opposite responses.
+
+    AN ATTRIBUTE AND NOT A FOURTH curation_state, and the reason is structural
+    rather than stylistic. The two facts are ORTHOGONAL — a concept can be
+    reviewed AND undocumentable — so a fourth state would make a curator choose
+    which of two true things to record, and would corrupt the progress count by
+    making an unread concept stop counting as unreviewed.
+
+    THE REASON IS REQUIRED. "defined by kernel/signal.c, no Documentation/ page"
+    is the entire value of the record; without it the mark is indistinguishable
+    from a curator who did not look. An empty reason is refused.
+
+    IT WRITES NO EDGE AND CHANGES NO STATE, so it cannot affect
+    INV-KK-LINK-LAST-EVIDENCE-KEPT's sparing: a marked concept KEEPS its legacy
+    links. Knowing the silence is permanent makes that link more necessary, not
+    less. Clearing the mark is update_concept, the way un-retiring is.
+
+    Returns whether anything was written; marking an already-marked Concept is
+    a no-op reporting False.
+    """
+    from graph.engine import get_node, update_node_attrs
+
+    if not (reason or "").strip():
+        raise ValueError("A reason is required")
+    if not (reviewed_by or "").strip():
+        raise ValueError("An attribution is required")
+    node = get_node(conn, concept_id)
+    if node is None or node["kind"] != "Concept":
+        raise ValueError(f"No Concept '{concept_id}'")
+    if node["attrs"].get("documentation_absent") is True:
+        return False
+
+    update_node_attrs(conn, concept_id, {
+        "documentation_absent": True,
+        "documentation_absent_reason": reason.strip(),
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at or datetime.now(timezone.utc).date().isoformat(),
+    })
+    return True
+
+
 def record_distinct(
     conn: sqlite3.Connection, concept_a: str, concept_b: str
 ) -> bool:
