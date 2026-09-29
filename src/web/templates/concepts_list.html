@@ -48,6 +48,21 @@
 </p>
 {% endif %}
 
+{# IFC-KK-CONCEPT-REVIEW-PRIORITY: the sort key says which item next and
+   nothing about how much is left. Over the CORPUS, never the page. #}
+{% if progress %}
+<p class="muted">
+  Review progress:
+  <strong>{{ progress.reviewed }}</strong> reviewed,
+  <strong>{{ progress.retired }}</strong> retired,
+  <strong>{{ progress.harvested }}</strong> still unread
+  of {{ progress.total }} concepts.
+  {% if progress.harvested %}
+  <a href="/concepts?curation=harvested&per_page={{ per_page }}">Work the unread</a>
+  {% endif %}
+</p>
+{% endif %}
+
 <table>
   <thead>
     <tr><th>Concept</th><th>Subsystem</th><th>Papers</th><th>Kernels</th><th>Admission</th><th>Curation</th></tr>

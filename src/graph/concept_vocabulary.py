@@ -976,3 +976,147 @@ def _edge_exists(
         "SELECT 1 FROM edges WHERE kind = ? AND source_id = ? AND target_id = ?",
         (kind, source_id, target_id),
     ).fetchone() is not None
+
+
+@dataclass
+class BulkRetireResult:
+    """What a bulk retirement did, and what it refused before doing anything."""
+    ok: bool
+    retired: list[str]
+    refused: dict[str, str]
+
+
+def retire_concepts_bulk(
+    conn: sqlite3.Connection,
+    concept_ids: list[str],
+    reviewed_by: str,
+    reviewed_at: str = "",
+) -> BulkRetireResult:
+    """Retire several Concepts in one signed act (ALG-KK-WEB-CONCEPT-RETIRE-BULK).
+
+    THE BACKLOG IS 465 AND NOT ONE ENTRY HAS BEEN REVIEWED. Measured 2026-09-29:
+    curation_state is 'harvested' for 465 of 465. Edit, retire, merge, the
+    priority sort and the collision badge all ship and have never been used. A
+    backlog that size is worked in sittings, and the first sitting should not go
+    on entries that need no reading at all.
+
+    IT EXISTS FOR A POPULATION WHOSE EVIDENCE IS IN THE NODE ID. Fourteen
+    Concepts carry zero papers, are undocumented, and were minted by the PAPER
+    extractor before INV-KK-EXTRACT-CONCEPT-MATCHED stopped it minting — and
+    their ids are the papers' own system names: concept-cachebpf, concept-schedcp,
+    concept-xlb, concept-resystance, concept-dfuse, concept-tierbpf,
+    concept-uringscope. CacheBPF, SchedCP, XLB, ReSysTance, DFUSE, TierBPF and
+    UringScope are one paper's system apiece, named as though each were a
+    mechanism, which is exactly what INV-KK-HARVEST-NAME-IS-A-CLASS refuses.
+
+    IT REFUSES MORE THAN IT ACCEPTS AND THE REFUSALS ARE THE DESIGN. A DOCUMENTED
+    Concept is refused whatever else is true: documentation admits it under
+    INV-KK-CONCEPT-ADMISSION's reverse route, and a bulk action must not be able
+    to contradict the admission rule. A Concept CARRYING PAPERS is refused,
+    because that is evidence and retiring it in bulk strands it — the very thing
+    merge_concepts exists to prevent.
+
+    ALL OR NOTHING. If any id is refused, NOTHING is retired. A partial bulk
+    retire is worse than none, because a caller reading a success cannot tell
+    which half happened, and the obvious retry then double-signs the half that
+    did.
+
+    IT IS NOT A DIFFERENT RETIREMENT. retire_concept does every write, so the
+    state flip, the signature and INV-KK-VOCABULARY-EXCLUDES-RETIRED's
+    consequence have one implementation. A second copy of "what retiring means"
+    is the defect this codebase keeps finding.
+    """
+    from graph.engine import get_node
+    from graph.rules import concept_weight, documented_concepts
+
+    if not reviewed_by:
+        raise ValueError("A retirement must name the human who made it")
+    if not concept_ids:
+        return BulkRetireResult(ok=True, retired=[], refused={})
+
+    documented = documented_concepts(conn)
+    refused: dict[str, str] = {}
+    for cid in concept_ids:
+        node = get_node(conn, cid)
+        if node is None or node["kind"] != "Concept":
+            refused[cid] = f"No Concept '{cid}'"
+        elif cid in documented:
+            refused[cid] = "Documented concepts are admitted by their documentation"
+        elif concept_weight(conn, cid) > 0:
+            refused[cid] = "Carries papers; retiring in bulk would strand them"
+
+    if refused:
+        return BulkRetireResult(ok=False, retired=[], refused=refused)
+
+    for cid in concept_ids:
+        retire_concept(conn, cid, reviewed_by=reviewed_by, reviewed_at=reviewed_at)
+    return BulkRetireResult(ok=True, retired=list(concept_ids), refused={})
+
+
+def assign_subsystem(
+    conn: sqlite3.Connection, concept_id: str, subsystem_id: str
+) -> str:
+    """A human gives a Concept the subsystem the harvest declined to guess
+    (ALG-KK-WEB-CONCEPT-SUBSYSTEM).
+
+    78 CONCEPTS HAVE NO belongs-to EDGE AND EVERY ONE CAME FROM THE HARVEST.
+    That is not a gap in ALG-KK-DOC-HARVEST: build_subsystem_context offers the
+    22 Subsystems and tells the model to answer "none" rather than guess, because
+    a wrong subsystem is worse than no subsystem. So the 78 are the harvest
+    declining, correctly, 78 times — and nothing in this application could accept
+    on its behalf. Cgroup Controllers, Memory Barriers, XArray and Circular
+    Buffer are among them and each has an obvious home.
+
+    CARDINALITY ONE, SO IT REPLACES RATHER THAN ADDS. belongs-to is
+    (Concept, Subsystem) and a Concept belongs to one subsystem; clearing first
+    also makes the call idempotent, which a plain add_edge would not be against
+    UNIQUE (kind, source_id, target_id).
+
+    IT MAY NOT CREATE A SUBSYSTEM. A subsystem_id naming no Subsystem raises,
+    for the same reason the extractor may not mint a Concept: seeding the
+    taxonomy is human curation, not a side effect of using it.
+    """
+    from graph.engine import add_edge, get_node
+
+    node = get_node(conn, concept_id)
+    if node is None or node["kind"] != "Concept":
+        raise ValueError(f"No Concept '{concept_id}'")
+    sub = get_node(conn, subsystem_id)
+    if sub is None or sub["kind"] != "Subsystem":
+        raise ValueError(f"No Subsystem '{subsystem_id}'")
+
+    conn.execute(
+        "DELETE FROM edges WHERE kind = 'belongs-to' AND source_id = ?",
+        (concept_id,))
+    add_edge(conn, "belongs-to", concept_id, subsystem_id)
+    return subsystem_id
+
+
+def curation_progress(conn: sqlite3.Connection) -> dict[str, int]:
+    """How many Concepts sit in each curation state, over the WHOLE corpus.
+
+    THE SORT KEY CANNOT ANSWER "HOW MUCH IS LEFT". IFC-KK-CONCEPT-REVIEW-PRIORITY
+    orders the queue well and says nothing about progress, and a curator working
+    465 entries across sittings needs the second question answered to start the
+    third sitting.
+
+    THE CORPUS AND NEVER THE PAGE, which is the distinction ?curation= already
+    draws against ?state=. A count of the page would read "50 harvested" forever
+    and be worse than no count, exactly as a filter narrowing only the page was
+    judged worse than none.
+
+    ONE O(1) QUERY, AND THAT IS WHY IT DOES NOT BREACH INV-KK-WEB-QUERY-BOUNDED,
+    whose predicate bounds enrichment calls PER ROW. A single GROUP BY is not
+    per-row work and does not grow with per_page. Recorded rather than assumed,
+    because "it is only one more query" is how a bounded route stops being one.
+    """
+    counts = {state: 0 for state in CURATION_STATES}
+    rows = conn.execute(
+        "SELECT COALESCE(NULLIF(json_extract(attrs, '$.curation_state'), ''), ?), "
+        "COUNT(*) FROM nodes WHERE kind = 'Concept' GROUP BY 1",
+        (DEFAULT_CURATION_STATE,),
+    ).fetchall()
+    for state, n in rows:
+        counts[state] = counts.get(state, 0) + n
+    counts["total"] = sum(counts[s] for s in CURATION_STATES)
+    return counts

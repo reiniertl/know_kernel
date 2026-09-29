@@ -86,6 +86,8 @@ WEB_MUTATION_ALLOWLIST = (
     "/api/concept/",          # edit an existing Concept — the review mechanism
     "/api/concept-retire/",   # a state flip, never a delete
     "/api/concept-merge/",    # collapse a duplicate; the evidence moves
+    "/api/concept-retire-bulk",  # one signed act over several ids
+    "/api/concept-subsystem/",   # the taxonomy edge the harvest declined to guess
 )
 
 
@@ -326,6 +328,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             CURATION_STATES,
             DEFAULT_CURATION_STATE,
             colliding_pairs,
+            curation_progress,
             curation_state as read_curation_state,
         )
         from graph.rules import admission_state, seminal_concepts
@@ -419,10 +422,19 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         # filter so the order is the order of what is shown.
         concepts.sort(key=lambda c: (not c["collides"], -c["papers"], c["name"]))
 
+        # IFC-KK-CONCEPT-REVIEW-PRIORITY, 2026-09-29. The sort key answers "which
+        # item next" and nothing about "how much is left", and the backlog is
+        # 465. ONE O(1) GROUP BY, which is why it does not breach
+        # INV-KK-WEB-QUERY-BOUNDED — that predicate bounds enrichment calls PER
+        # ROW and this does not grow with per_page. Over the CORPUS and never the
+        # page: a page count would read "50 harvested" forever.
+        progress = curation_progress(conn)
+
         return templates.TemplateResponse(
             request, "concepts_list.html",
             {
                 "concepts": concepts,
+                "progress": progress,
                 "state_filter": state or "",
                 "curation_filter": curation or "",
                 "curation_states": list(CURATION_STATES),
@@ -650,6 +662,89 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             "concept_id": concept_id,
             "curation_state": "retired",
             "reviewed_by": identity["reviewer"],
+        })
+
+    @app.post("/api/concept-retire-bulk")
+    async def api_concept_retire_bulk(request: Request):
+        """Retire several Concepts in one signed act
+        (ALG-KK-WEB-CONCEPT-RETIRE-BULK).
+
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/concept-retire-bulk is allowlisted.
+        INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION: every retirement is signed from
+        the gate-resolved identity; a reviewer field in the body is ignored.
+
+        ALL OR NOTHING, AND THE REFUSALS COME BACK NAMED. A partial bulk retire
+        is worse than none — a caller reading a success cannot tell which half
+        happened — so a single refused id refuses the call and the response says
+        which id and why. 422 rather than 404 even for an unknown id, because the
+        request as a whole is what was rejected.
+        """
+        from graph.concept_vocabulary import retire_concepts_bulk
+        import dataclasses
+
+        identity = getattr(request.state, "user", None)
+        if identity is None:
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+        conn = request.app.state.conn
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        ids = body.get("ids")
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            return JSONResponse(
+                {"error": "Body must carry an 'ids' list of concept ids"},
+                status_code=422)
+
+        try:
+            result = retire_concepts_bulk(
+                conn, ids, reviewed_by=identity["reviewer"])
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+
+        if not result.ok:
+            return JSONResponse(dataclasses.asdict(result), status_code=422)
+        conn.commit()
+        return JSONResponse(dataclasses.asdict(result))
+
+    @app.post("/api/concept-subsystem/{concept_id}/{subsystem_id}")
+    async def api_concept_subsystem(
+        request: Request, concept_id: str, subsystem_id: str
+    ):
+        """Give a Concept the subsystem the harvest declined to guess
+        (ALG-KK-WEB-CONCEPT-SUBSYSTEM).
+
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/concept-subsystem/ is allowlisted.
+        INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION: an anonymous caller is refused.
+
+        A SEPARATE ROUTE AND NOT A SEVENTH FIELD ON THE EDIT FORM. The edit route
+        writes six attributes and has never touched an edge; teaching it to would
+        make every save re-assert a belongs-to, and a save that changes nothing
+        already means "reviewed". Assigning a subsystem is a different claim from
+        correcting a description.
+
+        IT DOES NOT MARK THE CONCEPT REVIEWED, deliberately. Classifying is not
+        reading: a curator who files XArray under Data Structures has not
+        necessarily checked its description, and a review state that overcounts
+        is the mirror of the undercount ALG-KK-WEB-CONCEPT-EDIT was built to
+        avoid.
+        """
+        from graph.concept_vocabulary import assign_subsystem
+
+        identity = getattr(request.state, "user", None)
+        if identity is None:
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+        conn = request.app.state.conn
+        try:
+            assign_subsystem(conn, concept_id, subsystem_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+        conn.commit()
+        return JSONResponse({
+            "concept_id": concept_id, "subsystem_id": subsystem_id,
         })
 
     @app.post("/api/concept-merge/{loser_id}/{winner_id}")
@@ -895,11 +990,24 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                     "id": other, "name": row[0] or other,
                     "papers": concept_weight(conn, other)})
 
+        subsystems: list[dict] = []
+        if node["kind"] == "Concept":
+            # ALG-KK-WEB-CONCEPT-SUBSYSTEM. The 22 Subsystems, offered as a
+            # choice — this route may not create one, so the select IS the
+            # complete set of valid answers.
+            subsystems = [
+                {"id": r[0], "name": r[1] or r[0]}
+                for r in conn.execute(
+                    "SELECT id, json_extract(attrs, '$.name') FROM nodes "
+                    "WHERE kind = 'Subsystem' ORDER BY 2").fetchall()
+            ]
+
         return templates.TemplateResponse(
             request,
             "concept_detail.html",
             {
                 "node": node,
+                "subsystems": subsystems,
                 "edges": edges,
                 "grouped_edges": grouped_edges,
                 "node_labels": node_labels,

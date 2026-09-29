@@ -75,6 +75,27 @@
     </p>
   </form>
 
+  {% if subsystems and attrs.get('curation_state') != 'retired' %}
+  {# ALG-KK-WEB-CONCEPT-SUBSYSTEM. 78 concepts carry no belongs-to edge, every
+     one from the harvest, which is instructed to answer "none" rather than
+     guess because a wrong subsystem is worse than no subsystem. Nothing could
+     accept on its behalf until now. This does NOT mark the concept reviewed:
+     classifying is not reading. #}
+  <h4>Subsystem</h4>
+  <p>
+    <select id="concept-subsystem">
+      {% for sub in subsystems %}
+      <option value="{{ sub.id }}">{{ sub.name }}</option>
+      {% endfor %}
+    </select>
+    <button type="button" onclick="assignSubsystem()">Assign</button>
+    <span class="muted small">
+      A concept belongs to one subsystem; assigning replaces any existing one.
+    </span>
+  </p>
+  <p class="muted small" id="concept-subsystem-status"></p>
+  {% endif %}
+
   {% if concept_collides_with and attrs.get('curation_state') != 'retired' %}
   {# ALG-KK-WEB-CONCEPT-MERGE. The counterpart is NAMED and pressed, never
      typed: a curator retyping "NUMA Topology and Memory Policy" will mistype
@@ -160,6 +181,15 @@ async function mergeConcept(loser, winner, winnerName) {
   } else {
     el.textContent = body.error || "merge failed";
   }
+}
+async function assignSubsystem() {
+  var sel = document.getElementById("concept-subsystem");
+  var el = document.getElementById("concept-subsystem-status");
+  el.textContent = "assigning\u2026";
+  var r = await fetch("/api/concept-subsystem/{{ node.id }}/" + encodeURIComponent(sel.value), {method: "POST"});
+  var body = await r.json();
+  if (r.ok) { location.reload(); }
+  else { el.textContent = body.error || "assign failed"; }
 }
 async function retireConcept() {
   if (!confirm("Retire this concept? It keeps its links but is withdrawn from the vocabulary the extractor is shown.")) return;
