@@ -88,6 +88,7 @@ WEB_MUTATION_ALLOWLIST = (
     "/api/concept-merge/",    # collapse a duplicate; the evidence moves
     "/api/concept-retire-bulk",  # one signed act over several ids
     "/api/concept-subsystem/",   # the taxonomy edge the harvest declined to guess
+    "/api/concept-distinct/",    # two colliding names are different things
 )
 
 
@@ -745,6 +746,45 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         conn.commit()
         return JSONResponse({
             "concept_id": concept_id, "subsystem_id": subsystem_id,
+        })
+
+    @app.post("/api/concept-distinct/{concept_a}/{concept_b}")
+    async def api_concept_distinct(request: Request, concept_a: str, concept_b: str):
+        """Record that two colliding names are different things
+        (ALG-KK-WEB-CONCEPT-DISTINCT).
+
+        INV-KK-WEB-MUTATION-ALLOWLISTED: /api/concept-distinct/ is allowlisted.
+        INV-KK-REVIEW-ATTRIBUTION-FROM-SESSION: an anonymous caller is refused.
+
+        THE DECISION THIS RECORDS IS THE ONE THAT PREVENTS THE UNRECOVERABLE
+        ERROR. Every one of these pairs would have been a WRONG merge, and a
+        wrong merge is the single mistake in this vocabulary nothing ever finds
+        again — the evidence of the merged-away concept is now attached to the
+        survivor and no later reader can tell. Huge Pages against Transparent
+        Huge Pages is hugetlbfs against THP; Folio against Folio Marks is a page
+        against its flags; Mutex against Mutex Waiters Tree is a lock against a
+        field inside it.
+
+        IT DOES NOT MARK EITHER CONCEPT REVIEWED, for the reason the subsystem
+        route does not: deciding two names are different is not the same as
+        having read and approved either entry.
+        """
+        from graph.concept_vocabulary import record_distinct
+
+        identity = getattr(request.state, "user", None)
+        if identity is None:
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+        conn = request.app.state.conn
+        try:
+            written = record_distinct(conn, concept_a, concept_b)
+        except ValueError as exc:
+            status = 404 if str(exc).startswith("No Concept") else 422
+            return JSONResponse({"error": str(exc)}, status_code=status)
+
+        conn.commit()
+        return JSONResponse({
+            "concept_a": concept_a, "concept_b": concept_b, "written": written,
         })
 
     @app.post("/api/concept-merge/{loser_id}/{winner_id}")

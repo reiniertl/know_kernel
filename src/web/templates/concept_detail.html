@@ -129,6 +129,10 @@
                   onclick="mergeConcept('{{ other.id }}', '{{ node.id }}', {{ (attrs.get('name') or node.id) | tojson }})">
             Merge it into this
           </button>
+          <button type="button"
+                  onclick="markDistinct('{{ node.id }}', '{{ other.id }}', {{ other.name | tojson }})">
+            Not the same thing
+          </button>
         </td>
       </tr>
       {% endfor %}
@@ -165,6 +169,16 @@ async function saveConcept(ev) {
   if (r.ok) { location.reload(); }
   else { conceptStatus(body.error || "save failed"); }
   return false;
+}
+async function markDistinct(a, b, otherName) {
+  if (!confirm("Record that this is NOT the same thing as \u201c" + otherName + "\u201d? The pair stops being offered in the review queue; both entries are unchanged."))
+    return;
+  var el = document.getElementById("concept-merge-status");
+  el.textContent = "recording\u2026";
+  var r = await fetch("/api/concept-distinct/" + encodeURIComponent(a) + "/" + encodeURIComponent(b), {method: "POST"});
+  var body = await r.json();
+  if (r.ok) { location.reload(); }
+  else { el.textContent = body.error || "failed"; }
 }
 async function mergeConcept(loser, winner, winnerName) {
   if (!confirm("Merge into \u201c" + winnerName + "\u201d? Every paper and link moves to it, and the other entry is retired. This cannot be undone from this page."))

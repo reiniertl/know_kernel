@@ -405,15 +405,21 @@ def test_colliding_concepts_is_a_flattening_and_never_a_second_matcher(conn):
     assert "concept-c" not in flat
 
 
-def test_a_merged_away_concept_still_collides_until_the_queue_filters_it(conn):
-    """Recorded rather than fixed here: the pair remains in the signal because
-    the loser keeps its name. The review queue's curation filter is what hides
-    it, and that is ALG-KK-WEB-CONCEPTS-LIST's job, not the matcher's."""
+def test_a_merged_away_concept_leaves_the_collision_signal(conn):
+    """THIS ASSERTION WAS INVERTED ON 2026-09-29, AND THE OLD ONE WAS THE BUG.
+    It read "the pair remains in the signal because the loser keeps its name",
+    with a note deferring the fix to the review queue's filter. Retiring
+    fourteen paper artifacts then made SIX of 29 collision pairs noise about
+    concepts already dealt with, and build_vocabulary_context had excluded
+    retired concepts since 2026-09-25 — so the generator was simply
+    inconsistent with the rest of the system."""
     win = _concept(conn, "concept-win", "Folio")
     lose = _concept(conn, "concept-lose", "Folio Marks")
     conn.commit()
-    merge_concepts(conn, lose, win, reviewed_by="reinier")
     assert len(colliding_pairs(conn)) == 1
+    merge_concepts(conn, lose, win, reviewed_by="reinier")
+    conn.commit()
+    assert colliding_pairs(conn) == []
 
 
 # --- through the real router (ALG-KK-WEB-CONCEPT-MERGE) ---------------------
@@ -574,3 +580,170 @@ def test_the_list_names_what_each_row_collides_with(curator_client):
     assert "collides with" in page
     assert 'href="/concepts/concept-win"' in page
     assert 'href="/concepts/concept-lose"' in page
+
+
+# --- a pair a human decided against (ALG-KK-WEB-CONCEPT-DISTINCT) -----------
+#
+# ELEVEN LIVE PAIRS ARE NOT MERGES and nothing could record that: a curator who
+# decides against Folio ~ Folio Marks today sees it again tomorrow, which is how
+# a review queue becomes something people stop opening. Every one of these would
+# have been a WRONG merge, and a wrong merge is the single error in this
+# vocabulary that nothing ever finds again — the evidence of the merged-away
+# concept is now attached to the survivor.
+
+
+def _distinct_db(tmp_path):
+    path = tmp_path / "distinct.db"
+    c = init_db(path)
+    _concept(c, "concept-folio", "Folio")
+    _concept(c, "concept-marks", "Folio Marks")
+    _concept(c, "concept-far", "Grace Period")
+    c.commit()
+    c.close()
+    return str(path)
+
+
+@pytest.fixture
+def distinct_client(tmp_path):
+    app = create_app(_distinct_db(tmp_path))
+
+    @app.middleware("http")
+    async def _as_curator(request, call_next):
+        request.state.user = {"username": "kate", "role": "reviewer",
+                              "reviewer": "reviewer-kate"}
+        return await call_next(request)
+
+    with TestClient(app) as c:
+        yield c
+
+
+def test_the_distinct_prefix_is_allowlisted():
+    assert "/api/concept-distinct/" in WEB_MUTATION_ALLOWLIST
+
+
+def test_a_decided_pair_leaves_the_collision_signal(conn):
+    a = _concept(conn, "concept-folio", "Folio")
+    b = _concept(conn, "concept-marks", "Folio Marks")
+    conn.commit()
+    assert len(colliding_pairs(conn)) == 1
+
+    from graph.concept_vocabulary import record_distinct
+    assert record_distinct(conn, a, b) is True
+    conn.commit()
+
+    assert colliding_pairs(conn) == []
+    assert colliding_concepts(conn) == set()
+
+
+def test_either_direction_suppresses_the_pair(conn):
+    """The relation is symmetric in meaning; storing it twice would let the two
+    halves drift."""
+    a = _concept(conn, "concept-folio", "Folio")
+    b = _concept(conn, "concept-marks", "Folio Marks")
+    conn.commit()
+    add_edge(conn, "contradicts", b, a)   # b -> a, the reverse of what a curator
+    conn.commit()                          # pressing on Folio's page would write
+    assert colliding_pairs(conn) == []
+
+
+def test_recording_the_same_pair_twice_adds_nothing(conn):
+    """THE ENGINE ALREADY TREATS contradicts AS SYMMETRIC, found by this test
+    rather than assumed: graph.engine.add_edge writes the reverse edge itself
+    for this kind, so ONE call leaves TWO rows — and they cannot drift, because
+    nothing writes one without the other."""
+    from graph.concept_vocabulary import record_distinct
+    a = _concept(conn, "concept-folio", "Folio")
+    b = _concept(conn, "concept-marks", "Folio Marks")
+    conn.commit()
+    assert record_distinct(conn, a, b) is True
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind='contradicts'").fetchone()[0] == 2
+    assert record_distinct(conn, b, a) is False
+    conn.commit()
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind='contradicts'").fetchone()[0] == 2
+
+
+def test_a_concept_cannot_be_distinct_from_itself(conn):
+    from graph.concept_vocabulary import record_distinct
+    _concept(conn, "concept-folio", "Folio")
+    conn.commit()
+    with pytest.raises(ValueError, match="itself"):
+        record_distinct(conn, "concept-folio", "concept-folio")
+
+
+def test_both_concepts_survive_untouched(conn):
+    """It suppresses the PAIRING and nothing else."""
+    from graph.concept_vocabulary import record_distinct
+    a = _concept(conn, "concept-folio", "Folio")
+    b = _concept(conn, "concept-marks", "Folio Marks")
+    _paper(conn, "1", a)
+    conn.commit()
+    record_distinct(conn, a, b)
+    conn.commit()
+    assert curation_state(get_node(conn, a)["attrs"]) == "harvested"
+    assert curation_state(get_node(conn, b)["attrs"]) == "harvested"
+    assert concept_weight(conn, a) == 1
+    assert "Folio" in build_vocabulary_context(conn)
+    assert "Folio Marks" in build_vocabulary_context(conn)
+
+
+def test_a_retired_concept_leaves_the_collision_signal(conn):
+    """A PLAIN BUG UNTIL 2026-09-29. build_vocabulary_context has excluded
+    retired concepts since 2026-09-25 and this generator did not, so retiring
+    fourteen paper artifacts left SIX of 29 pairs as noise about concepts
+    already dealt with."""
+    _concept(conn, "concept-iouring", "io_uring")
+    _concept(conn, "concept-async", "io_uring Asynchronous I/O")
+    conn.commit()
+    assert len(colliding_pairs(conn)) == 1
+
+    from graph.concept_vocabulary import retire_concept
+    retire_concept(conn, "concept-async", reviewed_by="reviewer-kate")
+    conn.commit()
+
+    assert colliding_pairs(conn) == []
+
+
+def test_the_route_records_and_the_pair_disappears(distinct_client):
+    r = distinct_client.post("/api/concept-distinct/concept-folio/concept-marks")
+    assert r.status_code == 200, r.text
+    assert r.json()["written"] is True
+    assert colliding_pairs(distinct_client.app.state.conn) == []
+
+
+def test_the_route_is_idempotent(distinct_client):
+    distinct_client.post("/api/concept-distinct/concept-folio/concept-marks")
+    r = distinct_client.post("/api/concept-distinct/concept-marks/concept-folio")
+    assert r.status_code == 200, r.text
+    assert r.json()["written"] is False
+
+
+def test_an_unknown_concept_is_404(distinct_client):
+    r = distinct_client.post("/api/concept-distinct/concept-folio/concept-nope")
+    assert r.status_code == 404
+
+
+def test_a_self_pair_is_422(distinct_client):
+    r = distinct_client.post("/api/concept-distinct/concept-folio/concept-folio")
+    assert r.status_code == 422
+
+
+def test_an_anonymous_caller_is_refused_and_writes_nothing(tmp_path):
+    with TestClient(create_app(_distinct_db(tmp_path))) as c:
+        r = c.post("/api/concept-distinct/concept-folio/concept-marks")
+        assert r.status_code == 401
+        assert c.app.state.conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE kind='contradicts'").fetchone()[0] == 0
+
+
+def test_the_detail_page_offers_the_not_the_same_control(distinct_client):
+    page = distinct_client.get("/concepts/concept-folio").text
+    assert "Not the same thing" in page
+    assert "markDistinct('concept-folio', 'concept-marks'" in page
+
+
+def test_a_decided_pair_is_gone_from_the_detail_page(distinct_client):
+    distinct_client.post("/api/concept-distinct/concept-folio/concept-marks")
+    page = distinct_client.get("/concepts/concept-folio").text
+    assert "This name collides" not in page

@@ -598,13 +598,30 @@ def colliding_pairs(
     ONE QUERY, NOT ONE PER ROW. Read once per render like seminal_concepts, for
     the reason INV-KK-WEB-QUERY-BOUNDED gives.
     """
+    # RETIRED CONCEPTS LEAVE THE SIGNAL, 2026-09-29, AND THIS WAS A PLAIN BUG.
+    # build_vocabulary_context has excluded them since 2026-09-25, and this
+    # generator did not — so the moment fourteen paper artifacts were retired,
+    # SIX of 29 collision pairs became noise about concepts already dealt with:
+    # Page Cache against the retired eBPF-Customizable Page Cache, io_uring
+    # against its three retired prefixes, and two more. A queue whose first sort
+    # key is 20% stale is spending the human minute it exists to direct.
     rows = [
         (r[0], normalise_concept_name(r[1]))
         for r in conn.execute(
             "SELECT id, json_extract(attrs, '$.name') FROM nodes "
-            "WHERE kind = 'Concept'"
+            "WHERE kind = 'Concept' "
+            "AND COALESCE(json_extract(attrs, '$.curation_state'), '') != 'retired'"
         ).fetchall() if r[1]
     ]
+    # AND SO DO PAIRS A HUMAN HAS DECIDED AGAINST (ALG-KK-WEB-CONCEPT-DISTINCT).
+    # Read ONCE for the whole sweep, not once per candidate pair, for the reason
+    # INV-KK-WEB-QUERY-BOUNDED gives. Either direction suppresses: the relation
+    # is symmetric in meaning and storing it twice would let the two halves drift.
+    decided = {
+        frozenset(r) for r in conn.execute(
+            "SELECT source_id, target_id FROM edges WHERE kind = 'contradicts'"
+        ).fetchall()
+    }
     pairs: list[tuple[str, str]] = []
     for i in range(len(rows)):
         id_a, a = rows[i]
@@ -631,6 +648,8 @@ def colliding_pairs(
             # attaches a paper, and they need not agree.
             if (a == b or a.startswith(b) or b.startswith(a)
                     or contained_in(a, b) or contained_in(b, a)):
+                if frozenset((id_a, id_b)) in decided:
+                    continue
                 pairs.append((id_a, id_b))
     return pairs
 
@@ -1120,3 +1139,54 @@ def curation_progress(conn: sqlite3.Connection) -> dict[str, int]:
         counts[state] = counts.get(state, 0) + n
     counts["total"] = sum(counts[s] for s in CURATION_STATES)
     return counts
+
+
+def record_distinct(
+    conn: sqlite3.Connection, concept_a: str, concept_b: str
+) -> bool:
+    """A human records that two colliding names are DIFFERENT things
+    (ALG-KK-WEB-CONCEPT-DISTINCT). Returns whether an edge was written.
+
+    A REVIEW QUEUE THAT REPEATS ITSELF IS ONE PEOPLE STOP OPENING. Eleven live
+    collision pairs are not merges and nothing could record that: a curator who
+    decides against Folio ~ Folio Marks today sees it again tomorrow, and again
+    the day after. IFC-KK-CONCEPT-REVIEW-PRIORITY says the queue's job is to
+    direct a human minute; a pair that has already had its minute is spending it
+    twice.
+
+    IT USES contradicts, WHICH THE SCHEMA ALREADY HAS AND NOTHING USES.
+    contradicts is (Concept, Concept) in EDGE_VALID_PAIRS with zero instances —
+    exactly where supersedes stood before the merge gave it a job. The word is
+    slightly loose for what is meant: these concepts do not contradict each
+    other, they are merely not the same. That looseness is recorded rather than
+    hidden, because the alternative was widening EDGE_KINDS for a single use.
+
+    THE ENGINE ALREADY TREATS contradicts AS SYMMETRIC, which was found by a test
+    rather than assumed: graph.engine.add_edge writes the reverse edge itself for
+    this kind and for contradicted-by, so one call leaves TWO rows and they
+    cannot drift because nothing writes one without the other. The suppression
+    below still tests both directions, because a reader of this function should
+    not have to know that the engine does it.
+
+    IT SUPPRESSES AND NEVER DELETES. Both concepts keep their names, their
+    evidence and their place in the vocabulary; only the PAIRING stops being
+    offered. A curator who changes their mind removes the edge.
+    """
+    from graph.engine import add_edge, get_node
+
+    if concept_a == concept_b:
+        raise ValueError("A concept cannot be distinct from itself")
+    for cid in (concept_a, concept_b):
+        node = get_node(conn, cid)
+        if node is None or node["kind"] != "Concept":
+            raise ValueError(f"No Concept '{cid}'")
+
+    already = conn.execute(
+        "SELECT 1 FROM edges WHERE kind = 'contradicts' "
+        "AND ((source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?))",
+        (concept_a, concept_b, concept_b, concept_a),
+    ).fetchone()
+    if already is not None:
+        return False
+    add_edge(conn, "contradicts", concept_a, concept_b)
+    return True
