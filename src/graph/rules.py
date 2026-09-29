@@ -992,3 +992,128 @@ def check_link_confirmations(conn: sqlite3.Connection) -> list[Violation]:
         if not attrs.get("confirmed_at"):
             bad("confirmed without a date")
     return violations
+
+
+LEGACY_UNREACHABLE_REASON = "unreachable-legacy"
+
+
+@dataclass
+class UnreachableSweep:
+    """What the sweep retired, and what it kept because it was the last of its kind."""
+    retired: int
+    kept: int
+    concepts_touched: int
+    concepts_spared: int
+
+
+def unreachable_legacy_links(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    """(concept_id, evidence_id) for every legacy link no extractor can examine.
+
+    THE POPULATION IS DEFINED BY WHAT CANNOT BE ASKED, NOT BY WHAT WAS ANSWERED.
+    Measured 2026-09-29: 289 unverified-legacy Concept links survived the
+    re-derivation. 25 sit on Evidence carrying text and are a work queue —
+    --all-relink selects them and INV-KK-EXTRACT-RELINK-CONVERGENT retries them.
+    The other 264 sit on 134 Evidence with NO TEXT, of 223 such nodes: the paper
+    was recorded from a citation and the body was never fetched, so
+    extract_concepts has nothing to read and never will.
+
+    n.kind = 'Concept' IS LOAD-BEARING AND IS NOT DECORATION. extracted-from runs
+    from THIRTEEN node kinds into Evidence and this sweep concerns exactly one.
+    The missing kind filter has produced a wrong answer five separate times here
+    — the admission yield count, the harvest census twice, supersession, and
+    select_for_relink's masking case — and a sweep that retired a FailureMode's
+    provenance because it shared an Evidence with a Concept would be the sixth.
+    """
+    return [
+        (r[0], r[1]) for r in conn.execute(
+            "SELECT e.source_id, e.target_id FROM edges e "
+            "JOIN nodes n ON n.id = e.source_id "
+            "JOIN nodes ev ON ev.id = e.target_id "
+            "WHERE e.kind = 'extracted-from' AND n.kind = 'Concept' "
+            "AND json_extract(e.attrs, '$.basis') = ? "
+            "AND COALESCE(json_extract(e.attrs, '$.superseded'), 0) != 1 "
+            "AND COALESCE(json_extract(ev.attrs, '$.text'), '') = ''",
+            (LEGACY_UNVERIFIED_BASIS,),
+        ).fetchall()
+    ]
+
+
+def _weight_without_unreachable(conn: sqlite3.Connection, concept_id: str) -> int:
+    """The weight a Concept would keep if every unreachable legacy link went.
+
+    The same traversal concept_weight walks, minus the links this sweep targets.
+    Zero means the sweep would take the concept's last evidence.
+    """
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT s.target_id) FROM edges e "
+        "JOIN edges s ON s.source_id = e.target_id AND s.kind = 'sourced-from' "
+        "JOIN nodes ev ON ev.id = e.target_id "
+        "WHERE e.kind = 'extracted-from' AND e.source_id = ? "
+        + not_superseded("e") + " "
+        "AND NOT (json_extract(e.attrs, '$.basis') = ? "
+        "         AND COALESCE(json_extract(ev.attrs, '$.text'), '') = '')",
+        (concept_id, LEGACY_UNVERIFIED_BASIS),
+    ).fetchone()
+    return row[0] if row else 0
+
+
+def retire_unreachable_links(
+    conn: sqlite3.Connection, dry_run: bool = False
+) -> UnreachableSweep:
+    """Retire the legacy links nobody can check, except a concept's last evidence
+    (ALG-KK-GRAPH-RETIRE-UNREACHABLE-LINKS, INV-KK-LINK-LAST-EVIDENCE-KEPT).
+
+    THE TITLE TEST WAS PROPOSED, MEASURED AND REFUSED. Checking whether the
+    concept's name appears in the paper's title is free and needs no model; run
+    over all 264 it fired TWICE, and both were doubtful — "Memory Ballooning"
+    against "Prism: Multi-LLM Serving via GPU Memory Ballooning", "Shared Memory
+    (shmem/tmpfs)" against "Duhu: Shared Disaggregated Memory". A rule that keeps
+    2 of 264 and is wrong about both is not a different answer from retiring
+    everything; it is retiring everything while claiming to have judged.
+
+    SO THE RULE IS THE LAST-EVIDENCE ONE, AND IT IS A COMPROMISE RATHER THAN A
+    PRINCIPLE. Of the 57 concepts holding these links, THIRTY-FIVE would lose
+    every piece of evidence they have and NONE of the 35 is documented, so all 35
+    would drop to 'unlinked': Signal Delivery, OOM Killer, Perf Events Subsystem,
+    Ftrace, Namespaces, Seccomp-BPF, Netfilter, Procfs and Sysfs, FUSE, NVMe,
+    Vmalloc, Kmalloc, SLUB Allocator, XDP, USB Subsystem, ext4, Interrupt
+    Handling and sched_ext among them. Keeping a link we believe false, because
+    it is the only one, is not a claim that it is true; it is a decision that a
+    vocabulary silently knowing nothing about the OOM Killer is worse than one
+    holding a link already marked 'unverified-legacy'.
+
+    NO concept_verdict IS WRITTEN. INV-KK-EXTRACT-NEGATIVE-VERDICT's marker means
+    "a model read this paper and concluded it matches nothing", and writing it
+    where no model read anything would be a lie in the graph — worse than the
+    false link, because a verdict is believed. It would also withdraw the paper
+    from --all-relink forever, which is the wrong outcome the day its text is
+    fetched.
+
+    IDEMPOTENT: a second call finds every target already superseded and reports
+    zero, because the selection tests the same superseded flag the sweep sets.
+    """
+    targets = unreachable_legacy_links(conn)
+    by_concept: dict[str, list[str]] = {}
+    for cid, eid in targets:
+        by_concept.setdefault(cid, []).append(eid)
+
+    retired = kept = spared = touched = 0
+    for cid, evidence_ids in by_concept.items():
+        if _weight_without_unreachable(conn, cid) == 0:
+            kept += len(evidence_ids)
+            spared += 1
+            continue
+        touched += 1
+        for eid in evidence_ids:
+            if not dry_run:
+                conn.execute(
+                    "UPDATE edges SET attrs = json_set(attrs, '$.superseded', "
+                    "json('true'), '$.superseded_reason', ?) "
+                    "WHERE kind = 'extracted-from' AND source_id = ? "
+                    "AND target_id = ?",
+                    (LEGACY_UNREACHABLE_REASON, cid, eid))
+            retired += 1
+
+    return UnreachableSweep(
+        retired=retired, kept=kept,
+        concepts_touched=touched, concepts_spared=spared)
