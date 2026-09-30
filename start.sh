@@ -30,7 +30,40 @@ echo "  Auth DB:  $KNOW_KERNEL_AUTH_DB"
 echo "  URL:      http://localhost:8000"
 echo ""
 
-# authgate.app:app, never web.app:app — the latter serves the knowledge app
-# with no authentication at all (INV-KK-AUTH-GATE-COVERS-MOUNT).
+# THE REPOSITORY'S OWN INTERPRETER, NEVER whatever `python` means on the PATH
+# (ALG-KK-OPS-START-SERVER). This line used to read `python -m uvicorn`, which
+# resolved to /usr/bin/python and failed with "No module named uvicorn" on a
+# machine where nothing was missing — the venv holds uvicorn and fastapi, and
+# the app imports cleanly there. That message names a DEPENDENCY when the
+# INTERPRETER is wrong, and it sends a reader to pip install: run outside the
+# venv that installs uvicorn into the system Python, makes the symptom vanish,
+# and leaves this script still wrong. A failure that misdirects the repair is
+# worse than a louder one.
+PY="$SCRIPT_DIR/venv/bin/python"
+
+if [ ! -x "$PY" ]; then
+    echo "ERROR: the project virtualenv is missing or not executable:"
+    echo "  $PY"
+    echo ""
+    echo "This is NOT a missing dependency. Create the venv and install into it:"
+    echo "  python3 -m venv \"$SCRIPT_DIR/venv\""
+    echo "  \"$PY\" -m pip install -e \"$SCRIPT_DIR\""
+    exit 1
+fi
+
+# NO MODULE LIST HERE, DELIBERATELY. A hand-written check drifts and then
+# reports confidently while drifting: while diagnosing the bug above, a guess at
+# itsdangerous, passlib and bcrypt reported all three missing and all three are
+# unused — src/authgate and src/web import only stdlib plus fastapi, with
+# password hashing and sessions on hashlib, hmac and secrets. Python's own
+# ImportError is current by construction; this script's job is to make sure the
+# right Python raises it.
+
+# authgate.app:app, never web.app:app — ALG-KK-AUTH-GATE puts the single
+# middleware on the PARENT gate app, registered before the Mount of the
+# know_kernel app at /, so serving web.app directly bypasses authentication
+# entirely. (This comment cited INV-KK-AUTH-GATE-COVERS-MOUNT until 2026-09-30;
+# that node has no predicate and says only that the gate covers HTTP rather than
+# the whole system. The claim was true and the citation was wrong.)
 # --reload is safe: sessions live in auth.db, not in an in-process secret.
-python -m uvicorn authgate.app:app --host 127.0.0.1 --port 8000 --reload
+exec "$PY" -m uvicorn authgate.app:app --host 127.0.0.1 --port 8000 --reload
