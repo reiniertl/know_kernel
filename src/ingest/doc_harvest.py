@@ -211,6 +211,69 @@ PROCEDURAL_OPENING_MARKERS = (
 )
 
 
+#: INV-KK-HARVEST-DOCUMENT-DEFINES. Above this share of non-blank lines inside
+#: toctree blocks, a document is navigation rather than definition.
+#:
+#: MEASURED 2026-09-30 OVER ALL 1,510 kernel-doc DOCUMENTS, and the two
+#: populations barely touch: navigation pages score 0.55 to 0.97 and the
+#: highest-scoring real document scores 0.03. The threshold sits in a gap
+#: seventeen times wider than the nearest real document's score.
+NAVIGATION_TOCTREE_SHARE = 0.5
+
+
+def document_is_navigation(text: str) -> bool:
+    """INV-KK-HARVEST-DOCUMENT-DEFINES: is this a table of contents?
+
+    A subtree's index.rst names its children and defines nothing. Harvested on
+    2026-09-30, trace/index.rst, mm/index.rst and filesystems/index.rst
+    produced nine Concepts: four correct attachments to entries they merely
+    name, and FIVE creations whose only evidence is the table of contents —
+    "Tracing Frameworks" and "Filesystem Support Layers" among them, which are
+    directory summaries rather than mechanisms. "Ring Buffer" was another, and
+    it went on to form three of that day's thirteen collision pairs: a
+    navigation page does not merely add noise, it manufactures collisions.
+
+    ALG-KK-SEED-DOC-SUBTREE claimed these were "refused as a stub". They were
+    not. classify_content refuses a document for being SHORT, and a subtree
+    index is not short — those three carry 2,077, 2,057 and 1,826 characters of
+    genuine prose introduction before the toctree.
+
+    IT IS DOMINANCE, NOT PRESENCE, AND THAT WAS MEASURED BEFORE IT WAS WRITTEN.
+    60 of 1,510 documents contain a '.. toctree::' directive and only 24 are
+    named index.rst. Refusing on the directive would discard
+    mm/process_addrs.rst (47,256 characters) and mm/damon/design.rst (47,184),
+    which carry a toctree near the end and are exactly the design documents
+    this corpus exists for.
+
+    IT READS THE BODY, NOT THE FILENAME, for the reason the procedural filter
+    does: userspace-api/media/v4l/user-func.rst scores 0.93 and is a list of
+    sub-pages exactly like an index, while process_addrs.rst is named like a
+    process document and is not one.
+    """
+    lines = (text or "").splitlines()
+    total = sum(1 for line in lines if line.strip())
+    if not total:
+        return False
+
+    in_toctree = 0
+    inside = False
+    for line in lines:
+        if ".. toctree::" in line:
+            inside = True
+            in_toctree += 1
+            continue
+        if inside:
+            if not line.strip():
+                continue
+            # A toctree's entries and options are indented; the first
+            # unindented line ends the block.
+            if line[:1].isspace():
+                in_toctree += 1
+            else:
+                inside = False
+    return in_toctree / total >= NAVIGATION_TOCTREE_SHARE
+
+
 def document_announces_a_procedure(text: str) -> bool:
     """INV-KK-HARVEST-DOCUMENT-DEFINES: is this document ABOUT a procedure?
 
@@ -561,10 +624,11 @@ def select_doc_evidence(
     source_types: tuple[str, ...] | None = None,
     include_harvested: bool = False,
     path_prefixes: tuple[str, ...] | None = None,
-) -> tuple[list[str], list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
     """Evidence of canonical documents, split four ways.
 
-    Returns (with_text, skipped_empty, skipped_harvested, skipped_procedural).
+    Returns (with_text, skipped_empty, skipped_harvested, skipped_procedural,
+    skipped_navigation).
 
     PROCEDURAL DOCUMENTS ARE REFUSED HERE AND NOT IN harvest_document, per
     INV-KK-HARVEST-DOCUMENT-DEFINES, because refusing at selection costs no
@@ -634,13 +698,22 @@ def select_doc_evidence(
     procedural = [
         r[0] for r in rows if r[1].strip() and document_announces_a_procedure(r[1])
     ]
-    refused = set(procedural)
+    # INV-KK-HARVEST-DOCUMENT-DEFINES' second genre. Counted SEPARATELY from
+    # procedural, for the reason listing-failed is counted separately from
+    # unreachable: two refusals with different causes that report as one number
+    # are a number nobody can act on.
+    navigation = [
+        r[0] for r in rows
+        if r[1].strip() and r[0] not in set(procedural)
+        and document_is_navigation(r[1])
+    ]
+    refused = set(procedural) | set(navigation)
     with_text = [
         r[0] for r in rows if r[1].strip() and r[0] not in refused
     ]
 
     if include_harvested:
-        return with_text, skipped, [], procedural
+        return with_text, skipped, [], procedural, navigation
 
     harvested = {
         r[0] for r in conn.execute(
@@ -651,7 +724,7 @@ def select_doc_evidence(
     }
     unread = [e for e in with_text if e not in harvested]
     already = [e for e in with_text if e in harvested]
-    return unread, skipped, already, procedural
+    return unread, skipped, already, procedural, navigation
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,7 @@ from ingest.doc_harvest import (
     revert_batch,
     select_doc_evidence,
     document_announces_a_procedure,
+    document_is_navigation,
     PROCEDURAL_OPENING_CHARS,
 )
 
@@ -312,7 +313,7 @@ def test_documents_with_no_text_are_filtered_before_the_limit(conn):
     for n in ("c", "d"):
         _doc_source(conn, n, text="")
     conn.commit()
-    with_text, skipped, _, _ = select_doc_evidence(conn)
+    with_text, skipped, _, _, _ = select_doc_evidence(conn)
     assert sorted(with_text) == ["ev-a", "ev-b"]
     assert sorted(skipped) == ["ev-c", "ev-d"]
 
@@ -321,7 +322,7 @@ def test_only_canonical_documentation_is_selected(conn):
     _doc_source(conn, "doc", source_type="kernel-doc")
     _doc_source(conn, "paper", source_type="preprint")
     conn.commit()
-    with_text, _, _, _ = select_doc_evidence(conn)
+    with_text, _, _, _, _ = select_doc_evidence(conn)
     assert with_text == ["ev-doc"]
 
 
@@ -860,7 +861,7 @@ def test_selection_excludes_documents_already_harvested(conn):
                      client=MockLLMClient([_reply([_mech("Work Stealing")])]))
     conn.commit()
 
-    unread, empty, already, _ = select_doc_evidence(conn)
+    unread, empty, already, _, _ = select_doc_evidence(conn)
     assert unread == [ev_new]
     assert already == [ev_done]
     assert empty == []
@@ -881,7 +882,7 @@ def test_a_non_concept_edge_does_not_count_as_harvested(conn):
     add_edge(conn, "extracted-from", "pp-1", ev)
     conn.commit()
 
-    unread, _, already, _ = select_doc_evidence(conn)
+    unread, _, already, _, _ = select_doc_evidence(conn)
     assert unread == [ev], "a non-Concept edge was mistaken for a harvest"
     assert already == []
 
@@ -892,7 +893,7 @@ def test_include_harvested_restores_the_whole_corpus(conn):
     harvest_document(conn, ev_done, new_batch_id(),
                      client=MockLLMClient([_reply([_mech("Work Stealing")])]))
     conn.commit()
-    unread, _, already, _ = select_doc_evidence(conn, include_harvested=True)
+    unread, _, already, _, _ = select_doc_evidence(conn, include_harvested=True)
     assert sorted(unread) == sorted([ev_done, ev_new])
     assert already == []
 
@@ -1055,7 +1056,7 @@ def test_a_procedural_document_is_refused_at_selection(conn):
     ev_mech = _doc_source(conn, "vfs", text="VFS\n===\n\nThis document defines "
                                             "the virtual filesystem switch.")
     conn.commit()
-    unread, empty, already, procedural = select_doc_evidence(conn)
+    unread, empty, already, procedural, _ = select_doc_evidence(conn)
     assert unread == [ev_mech]
     assert procedural == [ev_proc]
     assert already == []
@@ -1070,7 +1071,7 @@ def test_include_harvested_does_not_restore_a_procedural_document(conn):
     ev_mech = _doc_source(conn, "vfs", text="VFS\n===\n\nThis document defines "
                                             "the virtual filesystem switch.")
     conn.commit()
-    unread, _, _, procedural = select_doc_evidence(conn, include_harvested=True)
+    unread, _, _, procedural, _ = select_doc_evidence(conn, include_harvested=True)
     assert unread == [ev_mech]
     assert procedural == [ev_proc]
 
@@ -1084,7 +1085,7 @@ def test_a_procedural_document_is_never_sent_to_the_model(conn):
 
     ev_proc = _doc_source(conn, "adding", text=_ADDING_NEW_FILESYSTEMS)
     conn.commit()
-    unread, _, _, procedural = select_doc_evidence(conn)
+    unread, _, _, procedural, _ = select_doc_evidence(conn)
     assert procedural == [ev_proc]
     for ev in unread:
         harvest_document(conn, ev, new_batch_id(), client=ExplodingClient())
@@ -1120,7 +1121,7 @@ def test_a_subtree_filter_selects_only_that_subtree(conn):
     _doc_source(conn, "userspace-api/media/v4l/ioctl")
     conn.commit()
 
-    unread, _, _, _ = select_doc_evidence(
+    unread, _, _, _, _ = select_doc_evidence(
         conn, path_prefixes=("Documentation/trace/",))
     assert unread == ["ev-trace/ftrace"]
 
@@ -1131,7 +1132,7 @@ def test_several_subtrees_are_a_union(conn):
     _doc_source(conn, "userspace-api/media/v4l/ioctl")
     conn.commit()
 
-    unread, _, _, _ = select_doc_evidence(
+    unread, _, _, _, _ = select_doc_evidence(
         conn, path_prefixes=("Documentation/trace/", "Documentation/block/"))
     assert sorted(unread) == ["ev-block/queue", "ev-trace/ftrace"]
 
@@ -1142,7 +1143,7 @@ def test_no_filter_still_selects_everything(conn):
     _doc_source(conn, "block/queue")
     conn.commit()
 
-    unread, _, _, _ = select_doc_evidence(conn)
+    unread, _, _, _, _ = select_doc_evidence(conn)
     assert len(unread) == 2
 
 
@@ -1155,7 +1156,7 @@ def test_the_filter_does_not_reach_past_the_already_harvested_exclusion(conn):
                      client=MockLLMClient([_reply([_mech("Work Stealing")])]))
     conn.commit()
 
-    unread, _, already, _ = select_doc_evidence(
+    unread, _, already, _, _ = select_doc_evidence(
         conn, path_prefixes=("Documentation/trace/",))
     assert unread == ["ev-trace/new"]
     assert already == [done]
@@ -1169,6 +1170,75 @@ def test_the_filter_cannot_admit_a_path_seeding_would_refuse(conn):
     _doc_source(conn, "trace/ftrace")
     conn.commit()
 
-    unread, _, _, _ = select_doc_evidence(
+    unread, _, _, _, _ = select_doc_evidence(
         conn, path_prefixes=("Documentation/process/",))
     assert unread == []
+
+
+# ---------------------------------------------------------------------------
+# INV-KK-HARVEST-DOCUMENT-DEFINES, second genre: a table of contents.
+#
+# ALG-KK-SEED-DOC-SUBTREE claimed a subtree's index.rst "will be refused as a
+# stub". It is not: classify_content refuses a document for being SHORT, and
+# trace/index.rst carries 2,077 characters of prose before its toctree. It was
+# harvested and minted "Tracing Frameworks" and "Ring Buffer" from a list of
+# links.
+# ---------------------------------------------------------------------------
+
+def _toctree_page(prose_lines: int, entry_lines: int) -> str:
+    head = "Linux Tracing Technologies Guide\n=====\n\n"
+    prose = "".join(f"Some real prose about tracing, line {i}.\n"
+                    for i in range(prose_lines))
+    toc = "\n.. toctree::\n   :maxdepth: 2\n"
+    toc += "".join(f"   some-document-{i}\n" for i in range(entry_lines))
+    return head + prose + toc
+
+
+def test_a_table_of_contents_is_refused():
+    assert document_is_navigation(_toctree_page(prose_lines=3, entry_lines=40))
+
+
+def test_a_design_document_that_merely_carries_a_toctree_is_kept():
+    """THE MEASUREMENT THAT CHOSE DOMINANCE OVER PRESENCE. 60 of 1,510
+    kernel-doc documents contain a toctree and only 24 are index pages;
+    refusing on the directive would discard mm/process_addrs.rst (47,256
+    characters) and mm/damon/design.rst (47,184), which are exactly the design
+    documents this corpus exists for."""
+    assert not document_is_navigation(_toctree_page(prose_lines=400, entry_lines=6))
+
+
+def test_a_document_with_no_toctree_at_all_is_kept():
+    assert not document_is_navigation("Ftrace\n======\n\n" + "Real prose.\n" * 50)
+
+
+def test_an_empty_document_is_not_navigation():
+    assert not document_is_navigation("")
+    assert not document_is_navigation(None)
+
+
+def test_navigation_is_counted_apart_from_procedural(conn):
+    """Two refusals with different causes reported as one number is a number
+    nobody can act on — the same reason listing-failed is counted apart from
+    unreachable."""
+    ev_nav = _doc_source(conn, "trace/index", text=_toctree_page(3, 40))
+    ev_proc = _doc_source(conn, "adding", text=_ADDING_NEW_FILESYSTEMS)
+    ev_real = _doc_source(conn, "ftrace",
+                          text="Ftrace\n======\n\nThis document defines the "
+                               "function tracer. " * 20)
+    conn.commit()
+
+    unread, _, _, procedural, navigation = select_doc_evidence(conn)
+    assert unread == [ev_real]
+    assert procedural == [ev_proc]
+    assert navigation == [ev_nav]
+
+
+def test_include_harvested_does_not_restore_a_navigation_page(conn):
+    ev_nav = _doc_source(conn, "trace/index", text=_toctree_page(3, 40))
+    ev_real = _doc_source(conn, "ftrace",
+                          text="Ftrace\n======\n\nThis defines the tracer. " * 20)
+    conn.commit()
+
+    unread, _, _, _, navigation = select_doc_evidence(conn, include_harvested=True)
+    assert unread == [ev_real]
+    assert navigation == [ev_nav]
