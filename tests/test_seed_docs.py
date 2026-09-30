@@ -440,3 +440,59 @@ def test_process_is_still_refused_after_the_widening():
     assert not path_is_definitional(
         TREE + "Documentation/process/submitting-patches.rst")
     assert not path_is_definitional(TREE + "Documentation/x.rst")
+
+
+# --- titles (ALG-KK-SEED-DOC-SUBTREE) ---------------------------------------
+#
+# ALL 1,510 kernel-doc SOURCES HAD NO TITLE, measured 2026-09-30, because the
+# seeder never captured one. The concept page renders an untitled Source as its
+# node id, so a curator reading Block Groups saw "src-462ab441d987" where
+# blockgroup.rst belonged.
+
+def test_rst_title_reads_an_overlined_heading():
+    from ingest.seed_docs import rst_title
+    assert rst_title(
+        "=====================\n"
+        "Transparent Hugepage\n"
+        "=====================\n\nBody.") == "Transparent Hugepage"
+
+
+def test_rst_title_reads_an_underlined_heading():
+    from ingest.seed_docs import rst_title
+    assert rst_title("NAPI\n====\n\nBody.") == "NAPI"
+
+
+def test_rst_title_skips_the_licence_line_and_directives():
+    """Every kernel document opens with an SPDX comment, and a title taken
+    from line one would be "SPDX-License-Identifier: GPL-2.0" on all 1,510."""
+    from ingest.seed_docs import rst_title
+    assert rst_title(
+        ".. SPDX-License-Identifier: GPL-2.0\n\n"
+        "Block Groups\n============\n\nBody.") == "Block Groups"
+
+
+def test_rst_title_falls_back_when_the_adornments_were_stripped():
+    """41 OF 1,510 HAD NO ADORNMENTS LEFT. transhuge.rst, cgroup-v2.rst,
+    vfs.rst and napi.rst all reached the graph with their rules removed, so
+    the adornment rule alone recovers 1,469 and reports nothing for the rest —
+    a null result that looks exactly like a document with no title. The
+    fallback takes it to 1,484 of the 1,485 that carry text at all."""
+    from ingest.seed_docs import rst_title
+    assert rst_title(
+        ".. SPDX-License-Identifier: GPL-2.0\n\n"
+        "Overview of the Linux Virtual File System\n\n"
+        "Original author: ...") == "Overview of the Linux Virtual File System"
+
+
+def test_rst_title_is_empty_when_there_is_nothing_to_read():
+    """25 Evidence nodes carry no text. An empty string is the honest answer
+    and the caller writes no title rather than writing a wrong one."""
+    from ingest.seed_docs import rst_title
+    assert rst_title("") == ""
+    assert rst_title("\n\n   \n") == ""
+
+
+def test_a_bullet_list_is_not_an_adornment():
+    """Three or more characters, not one: "-" under a line is a bullet."""
+    from ingest.seed_docs import rst_title
+    assert rst_title("Real Title\n==========\n\n- a\n- b\n") == "Real Title"

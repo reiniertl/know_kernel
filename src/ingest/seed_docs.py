@@ -28,7 +28,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable
 
-from graph.engine import add_edge, add_node
+from graph.engine import add_edge, add_node, update_node_attrs
 from graph.rules import DOC_PATH_PREFIXES, path_is_definitional
 from ingest.pipeline import ingest_document
 from ingest.validate_sources import (
@@ -187,6 +187,55 @@ def list_subtree(
     return sorted(set(found))
 
 
+#: An RST section adornment: three or more of one punctuation character on a
+#: line of their own. Three, not one, because a line reading "---" under a
+#: heading is an adornment and a line reading "-" is a bullet.
+_RST_ADORNMENT = re.compile(r"^([=\-~`:'\"^_*+#<>])\1{2,}\s*$")
+
+#: A line that cannot be a title: an RST directive, a comment, or a table rule.
+_RST_NOT_A_TITLE = re.compile(r"^(\.\.|[+|])")
+
+
+def rst_title(text: str) -> str:
+    """The document's title, taken from text already in hand.
+
+    ALG-KK-SEED-DOC-SUBTREE. EVERY ONE OF THE 1,510 kernel-doc SOURCES HAD NO
+    TITLE, and the concept page renders a Source with no title as its node id —
+    a curator reading Block Groups saw "src-462ab441d987" where blockgroup.rst
+    belonged. Every other source type was fully titled: preprint 2883 of 2883,
+    conference-paper 597 of 597.
+
+    NO SECOND FETCH, which is why this takes text rather than a URL. The body
+    is in hand at seed time and stored on the Evidence node afterwards, so the
+    same function serves the seeder and the backfill over what is already
+    there.
+
+    TWO RULES, AND THE SECOND EXISTS BECAUSE THE FIRST MISSES 41 DOCUMENTS.
+    An RST title is a heading adorned above and below or below alone, which
+    recovers 1,469 of 1,510. The rest had their adornments stripped before the
+    text was stored, among them transhuge.rst, cgroup-v2.rst, vfs.rst and
+    napi.rst — all real documents with real titles on their first line. Falling
+    back to the first line that is not a directive, a comment or a table rule
+    takes it to 1,484 of the 1,485 documents that carry text at all.
+    """
+    lines = (text or "").splitlines()
+    for i, line in enumerate(lines[:40]):
+        if not _RST_ADORNMENT.match(line):
+            continue
+        # Overline: adornment, title, matching adornment.
+        if (i + 2 < len(lines) and lines[i + 1].strip()
+                and _RST_ADORNMENT.match(lines[i + 2])):
+            return lines[i + 1].strip()
+        # Underline: the line above is the title.
+        if i and lines[i - 1].strip() and not _RST_ADORNMENT.match(lines[i - 1]):
+            return lines[i - 1].strip()
+    for line in lines[:40]:
+        stripped = line.strip()
+        if stripped and not _RST_NOT_A_TITLE.match(stripped):
+            return stripped
+    return ""
+
+
 def existing_source_urls(conn: sqlite3.Connection) -> set[str]:
     """Every url already registered, so a re-run adds only what is missing."""
     return {
@@ -309,6 +358,10 @@ def seed_subtree(
             os.unlink(tmp)
 
         _write_advisory(conn, result.source_id)
+        # The title, from the body already fetched — never a second request.
+        title = rst_title(body)
+        if title:
+            update_node_attrs(conn, result.source_id, {"title": title})
         report.outcomes.append(SeedOutcome(
             url=url, seeded=True, source_id=result.source_id,
             chars=result.text_length))
