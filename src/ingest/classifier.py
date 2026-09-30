@@ -71,11 +71,31 @@ def assign_subsystems(
         # against Translation Lookaside Buffer and "Should BBR be the default
         # TCP Congestion Control Protocol?" against TCP Congestion Control.
         # Papers that MATCH were the papers that broke.
-        if not conn.execute(
-            "SELECT 1 FROM edges WHERE kind='belongs-to' AND source_id=? "
-            "AND target_id=?", (concept_id, subsystem_id),
-        ).fetchone():
-            add_edge(conn, "belongs-to", concept_id, subsystem_id)
+        #
+        # THAT CHECK WAS NECESSARY AND NOT SUFFICIENT, FOUND 2026-09-30. It asks
+        # whether THIS EXACT pair exists and never whether the Concept already
+        # belongs to a DIFFERENT Subsystem, so repeated classification runs
+        # ACCUMULATED homes instead of replacing them. Nine live Concepts had
+        # two or three each: Page Cache sat in File Systems, Security AND
+        # Virtual Memory; Transparent Huge Pages in Memory Management,
+        # Networking and Virtual Memory.
+        #
+        # CLEAR-THEN-ADD, the way assign_subsystem has always done it, per
+        # INV-KK-CONCEPT-SUBSYSTEM-SINGLE. Clearing first also subsumes the
+        # UNIQUE-constraint guard above: a re-classification into the SAME
+        # subsystem now deletes and re-adds rather than skipping, which is
+        # idempotent and one query shorter to reason about.
+        #
+        # THIS IS THE ONLY WRITER THAT NEEDED IT. doc_harvest._create and
+        # promote_candidate mint a fresh Concept and write its FIRST edge, so
+        # they have nothing to duplicate — measured on 2026-09-30, when a
+        # 99-document harvest added 163 Concepts and 121 belongs-to edges and
+        # produced ZERO new violations.
+        conn.execute(
+            "DELETE FROM edges WHERE kind='belongs-to' AND source_id=?",
+            (concept_id,),
+        )
+        add_edge(conn, "belongs-to", concept_id, subsystem_id)
         concept_subsystem_map[concept_id] = subsystem_id
 
     for concept_id, subsystem_id in concept_subsystem_map.items():

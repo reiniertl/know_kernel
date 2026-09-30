@@ -291,3 +291,73 @@ def test_classification_result_dataclass():
     assert cr.concept_subsystem_map == {"c-1": "sub-vm"}
     assert cr.subsystems_created == 1
     assert cr.subsystems_reused == 0
+
+
+# ---------------------------------------------------------------------------
+# INV-KK-CONCEPT-SUBSYSTEM-SINGLE — a Concept belongs to AT MOST ONE Subsystem.
+#
+# The old guard asked whether THIS EXACT (concept, subsystem) pair existed and
+# never whether the Concept already had a DIFFERENT one, so repeated
+# classification runs ACCUMULATED homes. Measured 2026-09-30: nine live
+# Concepts had two or three each — Page Cache sat in File Systems, Security AND
+# Virtual Memory.
+# ---------------------------------------------------------------------------
+
+def _subsystems_of(conn, cid):
+    return sorted(
+        json.loads(conn.execute(
+            "SELECT attrs FROM nodes WHERE id = ?", (r[0],)).fetchone()[0])["name"]
+        for r in conn.execute(
+            "SELECT target_id FROM edges WHERE kind = 'belongs-to' AND source_id = ?",
+            (cid,)).fetchall()
+    )
+
+
+def test_reclassifying_into_a_different_subsystem_replaces(conn):
+    """THE DEFECT, stated as the property it broke. Page Cache reached three
+    subsystems by being classified three different ways over three runs."""
+    _make_concept(conn, "c-1")
+    assign_subsystems(conn, ["c-1"], {"c-1": "File Systems"})
+    assign_subsystems(conn, ["c-1"], {"c-1": "Security"})
+    assign_subsystems(conn, ["c-1"], {"c-1": "Virtual Memory"})
+
+    assert _subsystems_of(conn, "c-1") == ["Virtual Memory"], \
+        "a Concept accumulated subsystems instead of replacing"
+
+
+def test_reclassifying_into_the_same_subsystem_is_idempotent(conn):
+    """Clearing first subsumes the old UNIQUE-constraint guard: the same
+    subsystem twice deletes and re-adds rather than skipping."""
+    _make_concept(conn, "c-1")
+    assign_subsystems(conn, ["c-1"], {"c-1": "Scheduler"})
+    assign_subsystems(conn, ["c-1"], {"c-1": "Scheduler"})
+
+    assert _subsystems_of(conn, "c-1") == ["Scheduler"]
+
+
+def test_the_edges_of_other_concepts_are_untouched(conn):
+    """The DELETE is scoped by source_id. A clear on one Concept must not
+    disturb another that shares the Subsystem."""
+    _make_concept(conn, "c-1")
+    _make_concept(conn, "c-2")
+    assign_subsystems(conn, ["c-1", "c-2"], {"c-1": "Virtual Memory",
+                                             "c-2": "Virtual Memory"})
+    assign_subsystems(conn, ["c-1"], {"c-1": "Scheduler"})
+
+    assert _subsystems_of(conn, "c-1") == ["Scheduler"]
+    assert _subsystems_of(conn, "c-2") == ["Virtual Memory"]
+
+
+def test_no_concept_ends_with_more_than_one_subsystem(conn):
+    """The invariant itself, over a run that classifies several concepts
+    repeatedly and inconsistently."""
+    for n in range(1, 5):
+        _make_concept(conn, f"c-{n}")
+    for label in ("Memory Management", "Virtual Memory", "Security"):
+        assign_subsystems(conn, [f"c-{n}" for n in range(1, 5)],
+                          {f"c-{n}": label for n in range(1, 5)})
+
+    offenders = conn.execute(
+        "SELECT source_id, COUNT(*) n FROM edges WHERE kind = 'belongs-to' "
+        "GROUP BY source_id HAVING n > 1").fetchall()
+    assert offenders == []
