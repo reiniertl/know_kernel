@@ -547,7 +547,43 @@ def harvest_document(
         # rather than creating a duplicate within its own response.
         known[normalise_concept_name(name)] = concept_id
 
+    # INV-KK-HARVEST-READ-RECORDED. The read is recorded EVEN WHEN IT YIELDED
+    # NOTHING, which is the whole point: the only prior evidence of a read was
+    # a Concept edge, and a null answer writes none. Batch 9e2419bc read 99
+    # documents and 10 defined no reusable mechanism, so those ten looked
+    # untouched and were offered straight back to the next run.
+    #
+    # The BATCH ID and not merely a flag, because INV-KK-HARVEST-BATCH-REVERTIBLE
+    # makes the batch the unit of undo — and a run that produced little is the
+    # one most likely to be repeated by someone who assumes it never ran.
+    mark_evidence_read(conn, evidence_id, batch_id)
     return result
+
+
+def mark_evidence_read(
+    conn: sqlite3.Connection, evidence_id: str, batch_id: str
+) -> None:
+    """Record that the harvest READ this Evidence (INV-KK-HARVEST-READ-RECORDED).
+
+    AN ATTRIBUTE AND NOT AN EDGE. A marker edge would need EDGE_KINDS and
+    EDGE_VALID_PAIRS widened for a single use, which ALG-KK-WEB-CONCEPT-DISTINCT
+    records as having been refused once already — it reused the unused
+    `contradicts` kind rather than widen the metamodel. An edge also needs a
+    source node, and a no-yield read has none.
+
+    THE WRITE IS SAFE HERE AND THAT WAS CHECKED RATHER THAN ASSUMED.
+    update_node_attrs re-checks only REQUIRED_ATTRS, and Evidence's two —
+    artifact_class and contamination_level — are always present on a seeded
+    document. There is no revalidation trap of the kind that forced
+    venue_store's direct-SQL carve-out, where re-running validate_node on a
+    Source would have failed on an unrelated missing Advisory.
+    """
+    from graph.engine import update_node_attrs
+
+    update_node_attrs(conn, evidence_id, {
+        "harvest_read_batch": batch_id,
+        "harvest_read_at": datetime.now(timezone.utc).date().isoformat(),
+    })
 
 
 def _attach(
@@ -715,11 +751,22 @@ def select_doc_evidence(
     if include_harvested:
         return with_text, skipped, [], procedural, navigation
 
+    # A CONCEPT EDGE IS NOT THE SAME SET AS "HAS BEEN READ", and conflating
+    # them cost a repeat read of 10 documents in 99 (INV-KK-HARVEST-READ-RECORDED).
+    # The union of both is what "already harvested" means: an edge written by
+    # any batch, OR an explicit record that some batch read it and the document
+    # defined nothing.
     harvested = {
         r[0] for r in conn.execute(
             "SELECT DISTINCT x.target_id FROM edges x "
             "JOIN nodes n ON n.id = x.source_id AND n.kind = 'Concept' "
             "WHERE x.kind = 'extracted-from'"
+        ).fetchall()
+    }
+    harvested |= {
+        r[0] for r in conn.execute(
+            "SELECT id FROM nodes WHERE kind = 'Evidence' "
+            "AND json_extract(attrs, '$.harvest_read_batch') IS NOT NULL"
         ).fetchall()
     }
     unread = [e for e in with_text if e not in harvested]
@@ -862,6 +909,21 @@ def revert_batch(
         conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?",
                      (concept_id, concept_id))
         conn.execute("DELETE FROM nodes WHERE id = ?", (concept_id,))
+
+    # INV-KK-HARVEST-READ-RECORDED: clear the read marks this batch wrote, so a
+    # reverted document becomes selectable again. Without this the undo would be
+    # nearly complete — the concepts gone but the documents still counted as
+    # read, which is the worst of both states.
+    #
+    # Direct SQL and not update_node_attrs, because there is no "remove an
+    # attribute" on that path and re-writing the whole attrs dict to drop two
+    # keys is a wider blast radius than a targeted json_remove.
+    conn.execute(
+        "UPDATE nodes SET attrs = json_remove(attrs, '$.harvest_read_batch', "
+        "'$.harvest_read_at') WHERE kind = 'Evidence' "
+        "AND json_extract(attrs, '$.harvest_read_batch') = ?",
+        (batch_id,),
+    )
     conn.commit()
     return report
 

@@ -1242,3 +1242,93 @@ def test_include_harvested_does_not_restore_a_navigation_page(conn):
     unread, _, _, _, navigation = select_doc_evidence(conn, include_harvested=True)
     assert unread == [ev_real]
     assert navigation == [ev_nav]
+
+
+# ---------------------------------------------------------------------------
+# INV-KK-HARVEST-READ-RECORDED — a read is recorded even when it yields nothing.
+#
+# The third instance of one shape in one week. A directory that could not be
+# LISTED looked like a directory with no files; a concept nobody had LINKED
+# looked like one nothing could link; and a document READ that defined no
+# reusable mechanism looked exactly like one never opened. Batch
+# harvest-2026-09-30-9e2419bc read 99 documents, 10 yielded nothing, and those
+# ten were offered straight back to the next run.
+# ---------------------------------------------------------------------------
+
+def test_a_document_that_yields_nothing_is_not_re_selected(conn):
+    """THE DEFECT, stated as the property it broke."""
+    ev = _doc_source(conn, "coresight-tpdm")
+    harvest_document(conn, ev, new_batch_id(),
+                     client=MockLLMClient([_reply([])]))
+    conn.commit()
+
+    unread, _, already, _, _ = select_doc_evidence(conn)
+    assert unread == [], "a document read and found empty was offered again"
+    assert already == [ev]
+
+
+def test_the_mark_carries_the_batch_that_read_it(conn):
+    """A flag would not be enough: INV-KK-HARVEST-BATCH-REVERTIBLE makes the
+    batch the unit of undo, and a run that produced little is the one most
+    likely to be repeated by someone who assumes it never ran."""
+    from graph.engine import get_node
+    ev = _doc_source(conn, "stat")
+    batch = new_batch_id()
+    harvest_document(conn, ev, batch, client=MockLLMClient([_reply([])]))
+    conn.commit()
+
+    assert get_node(conn, ev)["attrs"]["harvest_read_batch"] == batch
+
+
+def test_a_yielding_document_is_marked_too(conn):
+    """The mark records the READ, not the outcome — otherwise the two states
+    are distinguishable only by the thing that was missing in the first place."""
+    from graph.engine import get_node
+    ev = _doc_source(conn, "ftrace")
+    batch = new_batch_id()
+    harvest_document(conn, ev, batch,
+                     client=MockLLMClient([_reply([_mech("Work Stealing")])]))
+    conn.commit()
+
+    assert get_node(conn, ev)["attrs"]["harvest_read_batch"] == batch
+
+
+def test_include_harvested_still_reaches_a_no_yield_document(conn):
+    """That flag exists for a deliberate re-read, and a no-yield document is
+    exactly the kind worth re-reading after the prompt changes."""
+    ev = _doc_source(conn, "debugging")
+    harvest_document(conn, ev, new_batch_id(),
+                     client=MockLLMClient([_reply([])]))
+    conn.commit()
+
+    unread, _, _, _, _ = select_doc_evidence(conn, include_harvested=True)
+    assert unread == [ev]
+
+
+def test_reverting_a_batch_that_yielded_nothing_restores_the_document(conn):
+    """Without this the undo would be NEARLY complete — the concepts gone but
+    the documents still counted as read, which is the worst of both states."""
+    ev = _doc_source(conn, "switching-sched")
+    batch = new_batch_id()
+    harvest_document(conn, ev, batch, client=MockLLMClient([_reply([])]))
+    conn.commit()
+    assert select_doc_evidence(conn)[0] == []
+
+    revert_batch(conn, batch)
+    unread, _, already, _, _ = select_doc_evidence(conn)
+    assert unread == [ev], "a reverted document stayed marked as read"
+    assert already == []
+
+
+def test_reverting_one_batch_leaves_another_batch_s_marks(conn):
+    """The UPDATE is scoped by batch id."""
+    ev_a = _doc_source(conn, "aaa")
+    ev_b = _doc_source(conn, "bbb")
+    batch_a, batch_b = new_batch_id(), new_batch_id()
+    harvest_document(conn, ev_a, batch_a, client=MockLLMClient([_reply([])]))
+    harvest_document(conn, ev_b, batch_b, client=MockLLMClient([_reply([])]))
+    conn.commit()
+
+    revert_batch(conn, batch_a)
+    unread, _, _, _, _ = select_doc_evidence(conn)
+    assert unread == [ev_a]
