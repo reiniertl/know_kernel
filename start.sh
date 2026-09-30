@@ -59,11 +59,16 @@ fi
 # ImportError is current by construction; this script's job is to make sure the
 # right Python raises it.
 
-# authgate.app:app, never web.app:app — ALG-KK-AUTH-GATE puts the single
-# middleware on the PARENT gate app, registered before the Mount of the
-# know_kernel app at /, so serving web.app directly bypasses authentication
-# entirely. (This comment cited INV-KK-AUTH-GATE-COVERS-MOUNT until 2026-09-30;
-# that node has no predicate and says only that the gate covers HTTP rather than
-# the whole system. The claim was true and the citation was wrong.)
+# authgate.app:app, never web.app:app — INV-KK-AUTH-GATE-COVERS-MOUNT:
+# "Nothing served by the mounted app is reachable anonymously." ALG-KK-AUTH-GATE
+# puts the single middleware on the PARENT gate app, registered before the Mount
+# of the know_kernel app at /, so serving web.app directly bypasses
+# authentication entirely rather than partially.
+#
+# (An edit on 2026-09-30 briefly claimed this citation was wrong, on the ground
+# that the invariant "has no predicate". It has one. That was concluded from
+# `ril query node`, whose payload omits predicate fields — a negative asserted
+# from a tool that cannot establish one, against CLAUDE.md's explicit "prefer
+# node-info over node". The original citation was correct and is restored.)
 # --reload is safe: sessions live in auth.db, not in an in-process secret.
 exec "$PY" -m uvicorn authgate.app:app --host 127.0.0.1 --port 8000 --reload
