@@ -24,6 +24,7 @@ from graph.concept_vocabulary import (
     normalise_concept_name,
     record_candidate,
     resolve_concept_names,
+    strict_match_concept,
 )
 from graph.engine import add_edge, add_node
 from graph.schema import init_db
@@ -269,3 +270,53 @@ def test_nothing_promotes_a_candidate_automatically(conn):
         record_candidate(conn, "Popular Idea", ev, "2026-09-22")
     conn.commit()
     assert _concepts(conn) == 0
+
+
+# ---------------------------------------------------------------------------
+# THE TIERS ARE TRIED IN ORDER, added 2026-09-30.
+#
+# strict_match_concept's docstring named three tiers from the day it was
+# written; the implementation pooled them into one flat set, so an ambiguous
+# abbreviation could veto a unique exact hit. That minted two Concepts with the
+# identical name "Linux Security Module (LSM)".
+# ---------------------------------------------------------------------------
+
+def test_an_exact_name_wins_over_an_ambiguous_abbreviation():
+    """THE CASE THAT WAS FOUND IN REAL DATA. Querying the exact name hit itself
+    by every form, a plural sibling by the squash tier, and a third concept by
+    the shared parenthetical 'lsm' — three hits, a tie, and a duplicate."""
+    table = {
+        normalise_concept_name("Linux Security Module (LSM)"): "concept-exact",
+        normalise_concept_name("Linux Security Modules"): "concept-plural",
+        normalise_concept_name("Linux Security Modules (LSM) framework"): "concept-fw",
+    }
+    assert strict_match_concept("Linux Security Module (LSM)", table) == "concept-exact"
+
+
+def test_the_parenthetical_tier_still_works_when_nothing_stronger_matches():
+    """The tier that carries "Kernel Samepage Merging" to its bracketed alias
+    must survive the reordering — it is why the tier exists."""
+    table = {normalise_concept_name("KSM (Kernel Same-page Merging)"): "concept-ksm"}
+    assert strict_match_concept("Kernel Samepage Merging", table) == "concept-ksm"
+
+
+def test_a_declaration_still_reaches_its_bracketed_alias():
+    table = {normalise_concept_name("Socket Buffer (sk_buff)"): "concept-skb"}
+    assert strict_match_concept("struct sk_buff", table) == "concept-skb"
+
+
+def test_a_tie_inside_the_exact_tier_is_impossible_and_a_weaker_one_refuses():
+    """Two concepts cannot share an exact normalised name in a dict keyed by
+    it, so ties can only happen in the weaker tiers — where refusing is right."""
+    table = {normalise_concept_name("Vmalloc"): "concept-v",
+             normalise_concept_name("Kmalloc"): "concept-k"}
+    assert strict_match_concept("zmalloc", table) is None
+
+
+def test_a_shared_abbreviation_is_still_a_tie_when_nothing_stronger_matches():
+    """The LSM shape with the exact hit removed. Two concepts reachable only by
+    the SAME bracketed alias are a coin flip, and refusing is what stops an
+    abbreviation attaching a paper to the wrong mechanism."""
+    table = {normalise_concept_name("Address Space Layout Randomization (ASLR)"): "concept-a",
+             normalise_concept_name("Adaptive Stream Load Reporting (ASLR)"): "concept-b"}
+    assert strict_match_concept("Some Other Thing (ASLR)", table) is None

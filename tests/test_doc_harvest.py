@@ -799,10 +799,31 @@ def test_the_strict_matcher_refuses_proximity(proposed, existing):
     assert strict_match_concept(proposed, table) is None
 
 
-def test_a_tie_attaches_to_nothing():
+def test_an_exact_name_beats_an_ambiguous_plural():
+    """INVERTED 2026-09-30, EXPLICITLY, BECAUSE IT ENCODED THE DEFECT.
+
+    This asserted None: "grace period" hit "Grace Period" by its exact name AND
+    "Grace Periods" by the squash tier's plural stripping, and the flat form-set
+    called that a tie. But refusing here is how the vocabulary acquires a THIRD
+    "Grace Period" — which is exactly what happened on 2026-09-30, when batch
+    9e2419bc minted "Linux Security Module (LSM)" twice because an ambiguous
+    abbreviation vetoed a unique exact hit.
+
+    A query whose FULL NAME is in the vocabulary attaches to the concept of that
+    name. The plural sibling remains a collision pair for a human to resolve;
+    that is the review queue's job and not the matcher's.
+    """
     table = {normalise_concept_name("Grace Period"): "concept-a",
              normalise_concept_name("Grace Periods"): "concept-b"}
-    assert strict_match_concept("grace period", table) is None
+    assert strict_match_concept("grace period", table) == "concept-a"
+
+
+def test_a_tie_within_one_tier_still_attaches_to_nothing():
+    """The tie rule itself is unchanged and still right. Two concepts reachable
+    only by the SAME tier, neither by a stronger one, stay a coin flip."""
+    table = {normalise_concept_name("KSM (Kernel Same-page Merging)"): "concept-a",
+             normalise_concept_name("Kernel Samepage Merging"): "concept-b"}
+    assert strict_match_concept("kernel same page merging", table) is None
 
 
 def test_containment_surfaces_the_pair_it_must_not_merge():

@@ -158,21 +158,91 @@ def strict_match_concept(query: str, name_to_id: dict[str, str]) -> str | None:
     and is the same — nothing in the shape separates them, so containment
     surfaces in the review queue instead of acting.
 
-    Returns None on a tie, for the reason find_concept_by_name does: attaching
-    to a coin flip is worse than creating.
+    THE TIERS ARE TRIED IN ORDER AND A TIE IS BROKEN ONLY WITHIN A TIER. Until
+    2026-09-30 they were not tiers at all: every form went into one flat set and
+    any intersection counted, so the strongest evidence and the weakest were
+    weighed together. Querying "Linux Security Module (LSM)" against a
+    vocabulary CONTAINING that exact normalised name returned None — it hit
+    itself by all three forms, "Linux Security Modules" by the squash form
+    (squashing strips the trailing plural) and "Linux Security Modules (LSM)
+    framework" by the parenthetical "lsm". Three hits, a tie, no match, while a
+    unique exact hit sat in the set.
+
+    IT COMPOUNDED, AND THAT IS HOW IT PRODUCED AN IMPOSSIBLE ROW. Every concept
+    added to a family makes the family more ambiguous, so the next document is
+    MORE likely to mint. Batch harvest-2026-09-30-9e2419bc created "Linux
+    Security Module (LSM)" TWICE, from security/lsm-development.rst and
+    security/credentials.rst — two Concepts with the identical normalised name,
+    which the exact tier exists to prevent.
+
+    Returns None on a tie WITHIN a tier, for the reason find_concept_by_name
+    does: attaching to a coin flip is worse than creating. That rule was never
+    the problem; applying it across tiers of different strength was.
     """
-    forms = _match_forms(query)
-    if not forms:
-        return None
-    hits = {cid for name, cid in name_to_id.items() if forms & _match_forms(name)}
-    # None on a tie, for the reason find_concept_by_name gives: attaching to a
-    # coin flip is worse than creating.
-    return hits.pop() if len(hits) == 1 else None
+    for forms in _match_tiers(query):
+        if not forms:
+            continue
+        hits = {
+            cid for name, cid in name_to_id.items()
+            if any(forms & tier for tier in _match_tiers(name))
+        }
+        if len(hits) == 1:
+            return hits.pop()
+        if hits:
+            # A genuine tie at this strength. Weaker tiers cannot resolve it —
+            # they are looser, so they can only add candidates.
+            return None
+    return None
 
 
 #: Declaration keywords stripped before matching. "struct sk_buff" is the same
 #: thing as "Socket Buffer (sk_buff)" and must reach it.
 _DECLARATION_RE = re.compile(r"^(struct|union|enum|class)\s+", re.IGNORECASE)
+
+
+def _match_tiers(name: str) -> list[set[str]]:
+    """The match forms of a name, STRONGEST FIRST, as separate tiers.
+
+    (1) the normalised name itself; (2) the squashed name and its singular;
+    (3) the name outside any brackets, and the bracketed alias alone.
+
+    The split exists because these are not equally strong evidence. An exact
+    name is identity. A squashed name is identity modulo punctuation and a
+    plural. A bracketed alias is an abbreviation, which is where collisions
+    live: "lsm" is shared by every concept in the LSM family. Pooling them let
+    an ambiguous abbreviation veto a unique exact hit — see
+    strict_match_concept for what that cost.
+    """
+    bare = _DECLARATION_RE.sub("", (name or "").strip())
+    exact = {f for f in {normalise_concept_name(bare)} if len(f) > 2}
+
+    squashed: set[str] = set()
+    whole = squash_concept_name(bare)
+    if whole:
+        squashed.add(whole)
+        if len(whole) > 4 and whole.endswith("ies"):
+            squashed.add(whole[:-3] + "y")
+        for suffix in ("ches", "shes", "xes", "ses", "zes"):
+            if len(whole) > len(suffix) + 2 and whole.endswith(suffix):
+                squashed.add(whole[: -len("es")])
+        if len(whole) > 4 and whole.endswith("s") and not whole.endswith("ss"):
+            squashed.add(whole[:-1])
+
+    alias: set[str] = set()
+    outside = squash_concept_name(_PAREN_RE.sub(" ", bare))
+    if outside:
+        alias.add(outside)
+    inside = squash_concept_name(parenthetical_of(bare))
+    if inside:
+        alias.add(inside)
+
+    # A bare form of two characters or fewer is an initialism collision waiting
+    # to happen and is not worth matching on.
+    return [
+        exact,
+        {f for f in squashed if len(f) > 2},
+        {f for f in alias if len(f) > 2} - {f for f in squashed if len(f) > 2},
+    ]
 
 
 def _match_forms(name: str) -> set[str]:
