@@ -851,3 +851,76 @@ def test_the_route_404s_on_an_unknown_concept(distinct_client):
     r = distinct_client.post("/api/concept-documentation-absent/concept-nope",
                              json={"reason": "no page"})
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# A MERGE MUST NOT BREAK INV-KK-CONCEPT-SUBSYSTEM-SINGLE.
+#
+# Found 2026-09-30, by a merge that did. _edge_exists asks whether the winner
+# has this edge to the SAME target — the right test for a kind that may repeat
+# and the wrong one for a kind that may not. Merging "Page Table Hierarchy"
+# (Virtual Memory) into "Hierarchical Page Tables" (Memory Management) moved a
+# SECOND belongs-to onto the winner.
+# ---------------------------------------------------------------------------
+
+def test_a_merge_does_not_give_the_winner_two_subsystems(conn):
+    from graph.concept_vocabulary import merge_concepts
+    w = _concept(conn, "concept-w", "Hierarchical Page Tables")
+    l = _concept(conn, "concept-l", "Page Table Hierarchy")
+    add_node(conn, "sub-mm", "Subsystem", {"name": "Memory Management"})
+    add_node(conn, "sub-vm", "Subsystem", {"name": "Virtual Memory"})
+    add_edge(conn, "belongs-to", w, "sub-mm")
+    add_edge(conn, "belongs-to", l, "sub-vm")
+    conn.commit()
+
+    merge_concepts(conn, l, w, "reviewer-kate")
+    conn.commit()
+
+    subs = conn.execute(
+        "SELECT target_id FROM edges WHERE kind='belongs-to' AND source_id=?",
+        (w,)).fetchall()
+    assert len(subs) == 1, "the merge gave the winner two subsystems"
+    assert subs[0][0] == "sub-mm", \
+        "the winner's own subsystem must survive, not the loser's"
+
+
+def test_a_merge_still_carries_the_subsystem_when_the_winner_has_none(conn):
+    """Dropping is only right when the winner ALREADY has one. A winner with
+    no home should inherit the loser's."""
+    from graph.concept_vocabulary import merge_concepts
+    w = _concept(conn, "concept-w2", "Winner")
+    l = _concept(conn, "concept-l2", "Loser")
+    add_node(conn, "sub-vm2", "Subsystem", {"name": "Virtual Memory"})
+    add_edge(conn, "belongs-to", l, "sub-vm2")
+    conn.commit()
+
+    merge_concepts(conn, l, w, "reviewer-kate")
+    conn.commit()
+
+    subs = conn.execute(
+        "SELECT target_id FROM edges WHERE kind='belongs-to' AND source_id=?",
+        (w,)).fetchall()
+    assert [r[0] for r in subs] == ["sub-vm2"]
+
+
+def test_a_merge_still_repoints_edge_kinds_that_may_repeat(conn):
+    """The drop is scoped to cardinality-one kinds. extracted-from may repeat
+    and must still move — that is what a merge is for."""
+    from graph.concept_vocabulary import merge_concepts
+    w = _concept(conn, "concept-w3", "Winner")
+    l = _concept(conn, "concept-l3", "Loser")
+    add_node(conn, "src-x", "Source", {"url": "https://x/1", "source_type": "preprint",
+                                       "license": "MIT", "title": "P"})
+    add_node(conn, "ev-x", "Evidence", {"artifact_class": "A",
+                                        "contamination_level": "L0", "text": "t"})
+    add_edge(conn, "sourced-from", "ev-x", "src-x")
+    add_edge(conn, "extracted-from", l, "ev-x")
+    conn.commit()
+
+    r = merge_concepts(conn, l, w, "reviewer-kate")
+    conn.commit()
+
+    assert r.moved >= 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind='extracted-from' AND source_id=?",
+        (w,)).fetchone()[0] == 1

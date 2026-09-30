@@ -1006,6 +1006,25 @@ def merge_concepts(
     for kind, other in conn.execute(
         "SELECT kind, target_id FROM edges WHERE source_id = ?", (loser_id,)
     ).fetchall():
+        # CARDINALITY-ONE KINDS ARE DROPPED, NOT REPOINTED, WHEN THE WINNER
+        # ALREADY HAS ONE — found 2026-09-30 by a merge that produced a
+        # violation. _edge_exists asks whether the winner has this edge to the
+        # SAME target, which is the right test for a kind that may repeat and
+        # the wrong one for a kind that may not: merging "Page Table Hierarchy"
+        # (Virtual Memory) into "Hierarchical Page Tables" (Memory Management)
+        # moved a SECOND belongs-to onto the winner and broke
+        # INV-KK-CONCEPT-SUBSYSTEM-SINGLE.
+        #
+        # THE WINNER'S OWN EDGE SURVIVES, because the winner is the concept
+        # that persists and its subsystem is the one a human may have set by
+        # hand through ALG-KK-WEB-CONCEPT-SUBSYSTEM.
+        if (kind in _CARDINALITY_ONE_OUT
+                and _edge_exists_of_kind(conn, kind, winner_id)):
+            conn.execute(
+                "DELETE FROM edges WHERE kind = ? AND source_id = ? AND target_id = ?",
+                (kind, loser_id, other))
+            dropped += 1
+            continue
         if other == winner_id or _edge_exists(conn, kind, winner_id, other):
             conn.execute(
                 "DELETE FROM edges WHERE kind = ? AND source_id = ? AND target_id = ?",
@@ -1049,6 +1068,28 @@ def merge_concepts(
         weight_before=weight_before,
         weight_after=concept_weight(conn, winner_id),
     )
+
+
+#: Outbound edge kinds a Concept may have AT MOST ONE of. A merge must drop the
+#: loser's rather than repoint it, or the winner ends with two.
+#: belongs-to is the only one today (INV-KK-CONCEPT-SUBSYSTEM-SINGLE); the
+#: tuple exists so the next such kind is one entry rather than a second bug.
+_CARDINALITY_ONE_OUT = ("belongs-to",)
+
+
+def _edge_exists_of_kind(
+    conn: sqlite3.Connection, kind: str, source_id: str
+) -> bool:
+    """Whether `source_id` already has ANY edge of this kind.
+
+    Distinct from _edge_exists, which asks about a specific target. The
+    difference is exactly what a cardinality-one kind needs and what a merge
+    got wrong until 2026-09-30.
+    """
+    return conn.execute(
+        "SELECT 1 FROM edges WHERE kind = ? AND source_id = ? LIMIT 1",
+        (kind, source_id),
+    ).fetchone() is not None
 
 
 def _edge_exists(
