@@ -560,6 +560,7 @@ def select_doc_evidence(
     conn: sqlite3.Connection,
     source_types: tuple[str, ...] | None = None,
     include_harvested: bool = False,
+    path_prefixes: tuple[str, ...] | None = None,
 ) -> tuple[list[str], list[str], list[str], list[str]]:
     """Evidence of canonical documents, split four ways.
 
@@ -598,14 +599,32 @@ def select_doc_evidence(
     """
     types = source_types or DOC_SOURCE_TYPES
     placeholders = ", ".join("?" for _ in types)
+    params: list[str] = list(types)
+
+    # A PATH FILTER ON SELECTION, NOT ON ADMISSION. INV-KK-SEED-PATH-DEFINITIONAL
+    # decides what may ENTER the graph and is enforced at seeding; this decides
+    # what one RUN reads from what is already there, so it can never admit
+    # anything the seed rule refused. It exists because --limit applies AFTER
+    # this query, which orders by Evidence id — a hash — so a bound of 99
+    # returned an arbitrary 99 documents drawn from every subtree at once. A
+    # batch that mixes trace/ with userspace-api/media/ cannot be read, and
+    # INV-KK-HARVEST-BATCH-REVERTIBLE makes that one batch the unit of undo.
+    path_clause = ""
+    if path_prefixes:
+        path_clause = " AND (" + " OR ".join(
+            "json_extract(src.attrs, '$.url') LIKE ?" for _ in path_prefixes
+        ) + ")"
+        params.extend(f"%{prefix}%" for prefix in path_prefixes)
+
     rows = conn.execute(
         "SELECT e.id, COALESCE(json_extract(e.attrs, '$.text'), '') FROM nodes e "
         "JOIN edges s ON s.source_id = e.id AND s.kind = 'sourced-from' "
         "JOIN nodes src ON src.id = s.target_id "
         "WHERE e.kind = 'Evidence' "
-        f"AND json_extract(src.attrs, '$.source_type') IN ({placeholders}) "
-        "ORDER BY e.id",
-        types,
+        f"AND json_extract(src.attrs, '$.source_type') IN ({placeholders})"
+        + path_clause +
+        " ORDER BY e.id",
+        params,
     ).fetchall()
     skipped = [r[0] for r in rows if not r[1].strip()]
     # INV-KK-HARVEST-DOCUMENT-DEFINES, before anything else looks at the list.

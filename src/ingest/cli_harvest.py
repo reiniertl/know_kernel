@@ -54,6 +54,14 @@ def main(argv: list[str] | None = None) -> None:
              "DOC_SOURCE_TYPES per IFC-KK-DOC-DEFINED-PROVENANCE.",
     )
     parser.add_argument(
+        "--subtree", action="append", dest="subtrees", default=None,
+        help="Restrict to documents whose Source url contains this path; "
+             "repeatable. Named like ALG-KK-SEED-DOC-SUBTREE's flag so both "
+             "halves of the pipeline are bounded the same way. This filters "
+             "SELECTION, not admission — a path that passed seeding is already "
+             "admissible and this cannot widen DOC_PATH_PREFIXES.",
+    )
+    parser.add_argument(
         "--limit", type=int, default=None,
         help="Bound the run to N documents, applied AFTER selection and AFTER "
              "the empty-input filter.",
@@ -85,7 +93,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
-    if args.revert and (args.limit or args.source_types):
+    if args.revert and (args.limit or args.source_types or args.subtrees):
         parser.error("--revert takes a batch id and no selection options")
 
     logging.basicConfig(level=logging.INFO)
@@ -102,7 +110,8 @@ def main(argv: list[str] | None = None) -> None:
     batch_id = new_batch_id()
     evidence_ids, skipped_empty, skipped_harvested, skipped_procedural = select_doc_evidence(
         conn, tuple(args.source_types) if args.source_types else None,
-        include_harvested=args.include_harvested)
+        include_harvested=args.include_harvested,
+        path_prefixes=tuple(args.subtrees) if args.subtrees else None)
     selected = len(evidence_ids)
     if args.limit is not None:
         evidence_ids = evidence_ids[:args.limit]

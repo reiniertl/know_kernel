@@ -1081,3 +1081,73 @@ def test_the_name_filter_still_passes_the_names_this_rule_catches():
     thing standing between them and the vocabulary."""
     assert name_is_a_class("Filesystem Submission Process")
     assert name_is_a_class("Filesystem Maintenance Commitment")
+
+
+# ---------------------------------------------------------------------------
+# THE PATH FILTER ON SELECTION, added 2026-09-30.
+#
+# --limit applies AFTER select_doc_evidence, which orders by Evidence id — a
+# hash — so a bound of 99 returned an arbitrary 99 documents drawn from every
+# subtree at once. INV-KK-HARVEST-BATCH-REVERTIBLE makes one batch the unit of
+# undo, so a batch mixing trace/ with userspace-api/media/ can neither be read
+# nor reverted usefully.
+# ---------------------------------------------------------------------------
+
+def test_a_subtree_filter_selects_only_that_subtree(conn):
+    _doc_source(conn, "trace/ftrace")
+    _doc_source(conn, "block/queue")
+    _doc_source(conn, "userspace-api/media/v4l/ioctl")
+    conn.commit()
+
+    unread, _, _, _ = select_doc_evidence(
+        conn, path_prefixes=("Documentation/trace/",))
+    assert unread == ["ev-trace/ftrace"]
+
+
+def test_several_subtrees_are_a_union(conn):
+    _doc_source(conn, "trace/ftrace")
+    _doc_source(conn, "block/queue")
+    _doc_source(conn, "userspace-api/media/v4l/ioctl")
+    conn.commit()
+
+    unread, _, _, _ = select_doc_evidence(
+        conn, path_prefixes=("Documentation/trace/", "Documentation/block/"))
+    assert sorted(unread) == ["ev-block/queue", "ev-trace/ftrace"]
+
+
+def test_no_filter_still_selects_everything(conn):
+    """The default must not change: an unfiltered run reads the whole corpus."""
+    _doc_source(conn, "trace/ftrace")
+    _doc_source(conn, "block/queue")
+    conn.commit()
+
+    unread, _, _, _ = select_doc_evidence(conn)
+    assert len(unread) == 2
+
+
+def test_the_filter_does_not_reach_past_the_already_harvested_exclusion(conn):
+    """It narrows selection; it does not weaken
+    INV-KK-HARVEST-BATCH-REVERTIBLE's default exclusion."""
+    done = _doc_source(conn, "trace/done")
+    _doc_source(conn, "trace/new")
+    harvest_document(conn, done, new_batch_id(),
+                     client=MockLLMClient([_reply([_mech("Work Stealing")])]))
+    conn.commit()
+
+    unread, _, already, _ = select_doc_evidence(
+        conn, path_prefixes=("Documentation/trace/",))
+    assert unread == ["ev-trace/new"]
+    assert already == [done]
+
+
+def test_the_filter_cannot_admit_a_path_seeding_would_refuse(conn):
+    """SELECTION, NOT ADMISSION. INV-KK-SEED-PATH-DEFINITIONAL decides what
+    may ENTER as kernel-doc and is enforced at seeding; this only chooses among
+    what is already there. A prefix matching nothing selects nothing — it
+    cannot conjure a document the seed rule refused."""
+    _doc_source(conn, "trace/ftrace")
+    conn.commit()
+
+    unread, _, _, _ = select_doc_evidence(
+        conn, path_prefixes=("Documentation/process/",))
+    assert unread == []
