@@ -29,9 +29,14 @@ def _concept(conn, cid, name):
     return cid
 
 
-def _paper(conn, n, title=None):
+def _paper(conn, n, title=None, source_type="conference-paper"):
+    # conference-paper, not "paper": the corpus has no such source_type, and
+    # since INV-KK-WEB-CONCEPT-EVIDENCE-SPLIT the page reads the type to decide
+    # which column a Source belongs in. A fixture type that exists nowhere in
+    # the data would have made every row fall to `other` and the split
+    # untestable.
     add_node(conn, f"src-{n}", "Source", {
-        "url": f"https://example.com/{n}.pdf", "source_type": "paper",
+        "url": f"https://example.com/{n}.pdf", "source_type": source_type,
         "license": "MIT", "title": title or f"Paper {n}", "venue": "OSDI"})
     add_node(conn, f"ev-{n}", "Evidence", {
         "artifact_class": "licensed-evidence",
@@ -196,7 +201,11 @@ def test_the_papers_route_is_bounded(tmp_path):
         assert first.count("Big paper") == 10, "page 1 exceeded per_page"
         assert second.count("Big paper") == 10
         assert "Big paper 00" in first and "Big paper 00" not in second
-        assert "25 papers" in first, "the total is still reported in full"
+        # "25 sources" and not "25 papers": kind defaults to all, and the
+        # total it reports is concept_weight, which counts documentation too.
+        assert "25 sources" in first, "the total is still reported in full"
+        assert "25 papers" in c.get(
+            "/concepts/concept-big/papers?kind=papers&per_page=10").text
 
 
 def test_the_papers_count_equals_the_admission_weight(client):
@@ -208,7 +217,7 @@ def test_the_papers_count_equals_the_admission_weight(client):
         "PRAGMA database_list").fetchone()[2])
     assert concept_weight(conn, "concept-heavy") == 3
     text = client.get("/concepts/concept-heavy/papers").text
-    assert "3 papers" in text
+    assert "3 sources" in text
     conn.close()
 
 
@@ -218,7 +227,9 @@ def test_papers_for_an_unknown_concept_is_404(client):
 
 def test_a_concept_with_no_papers_says_so_rather_than_rendering_empty(client):
     text = client.get("/concepts/concept-orphan/papers").text
-    assert "No papers are linked" in text
+    assert "No sources are linked" in text
+    assert "No papers are linked" in client.get(
+        "/concepts/concept-orphan/papers?kind=papers").text
 
 
 # --- the detail page --------------------------------------------------------
@@ -476,3 +487,205 @@ def test_the_new_prefixes_are_on_the_mutation_allowlist():
     from web.routes import WEB_MUTATION_ALLOWLIST
     assert "/api/concept-admit/" in WEB_MUTATION_ALLOWLIST
     assert "/api/concept-dismiss/" in WEB_MUTATION_ALLOWLIST
+
+
+# --- papers are not documentation (INV-KK-WEB-CONCEPT-EVIDENCE-SPLIT) -------
+#
+# MEASURED 2026-09-30 over 731 live Concepts: 665 rest on documentation alone,
+# 42 on papers alone, 10 on both, 13 on neither. The page headed all of it
+# "Papers", so the label was wrong for 91% of the vocabulary — and the four
+# rows a curator saw under Block Groups were blockgroup.rst, blocks.rst,
+# overview.rst and ext2.rst, rendered as node ids because no kernel-doc Source
+# had a title either.
+
+
+@pytest.fixture
+def split_db(tmp_path):
+    """One concept of each evidence shape, which is the census in miniature.
+
+    docs-only  — 2 kernel-doc Sources, the state 665 concepts are in
+    both       — 1 paper AND 1 document
+    mixed      — 1 paper, 1 document, 1 article, so the two columns do NOT sum
+                 to the weight on their own
+    """
+    path = tmp_path / "split.db"
+    conn = init_db(path)
+    for c, n in (("c-docs", "Block Groups"), ("c-both", "Zswap"),
+                 ("c-mixed", "Futex")):
+        _concept(conn, c, n)
+    _link(conn, "c-docs", _paper(conn, "d1", "Block Group Descriptors",
+                                 source_type="kernel-doc"))
+    _link(conn, "c-docs", _paper(conn, "d2", "Blocks", source_type="kernel-doc"))
+    _link(conn, "c-both", _paper(conn, "p1", "A Study of Zswap"))
+    _link(conn, "c-both", _paper(conn, "d3", "Zswap", source_type="kernel-doc"))
+    _link(conn, "c-mixed", _paper(conn, "p2", "Futexes Are Tricky"))
+    _link(conn, "c-mixed", _paper(conn, "d4", "Futex", source_type="kernel-doc"))
+    _link(conn, "c-mixed", _paper(conn, "a1", "A blog post", source_type="article"))
+    conn.commit()
+    conn.close()
+    return str(path)
+
+
+@pytest.fixture
+def split_client(split_db):
+    with TestClient(create_app(split_db)) as c:
+        yield c
+
+
+def test_documentation_is_shown_as_documentation_and_not_as_papers(split_client):
+    """The 665-concept case. Its two Sources are kernel-doc, so the Papers
+    column must be empty and the Documentation column must hold both."""
+    text = split_client.get("/concepts/c-docs").text
+    assert "Documentation (2)" in text
+    assert "Papers (0)" in text
+    assert "Block Group Descriptors" in text and "Blocks" in text
+    assert "No peer-reviewed or preprint literature is linked" in text
+
+
+def test_a_concept_with_both_shows_both_and_they_sum_to_the_weight(split_client):
+    import sqlite3
+
+    from graph.rules import concept_evidence_by_class, concept_weight
+
+    text = split_client.get("/concepts/c-both").text
+    assert "Papers (1)" in text and "Documentation (1)" in text
+    assert "A Study of Zswap" in text
+
+    conn = sqlite3.connect(split_client.app.state.conn.execute(
+        "PRAGMA database_list").fetchone()[2])
+    for cid in ("c-docs", "c-both", "c-mixed"):
+        counts = concept_evidence_by_class(conn, cid)
+        assert sum(counts.values()) == concept_weight(conn, cid), cid
+    # c-mixed is the case the sum rule exists for: an article is neither, so
+    # the two displayed counts alone are 2 against a weight of 3.
+    counts = concept_evidence_by_class(conn, "c-mixed")
+    assert (counts["papers"], counts["documentation"], counts["other"]) == (1, 1, 1)
+    conn.close()
+
+
+def test_splitting_the_display_did_not_split_the_rule(split_client):
+    """The badge is computed from concept_weight and must be unchanged by the
+    split. c-docs is admissible ON ITS DOCUMENTATION — a paper-only section
+    would render "Papers (0) admissible", which is the trap this asserts is
+    not sprung: the badge sits on the total, which is 2."""
+    import sqlite3
+
+    from graph.rules import admission_state, concept_weight, seminal_concepts
+
+    conn = sqlite3.connect(split_client.app.state.conn.execute(
+        "PRAGMA database_list").fetchone()[2])
+    assert concept_weight(conn, "c-docs") == 2
+    assert admission_state(conn, "c-docs", seminal_concepts(conn)) == "admissible"
+    conn.close()
+
+    text = split_client.get("/concepts/c-docs").text
+    assert "Evidence (2)" in text, "the badge's own total is no longer shown"
+    assert "admissible" in text
+
+
+def test_the_split_adds_no_per_row_query(tmp_path):
+    """INV-KK-WEB-QUERY-BOUNDED. Two bounded previews and one GROUP BY,
+    whatever the row count.
+
+    COUNTED AGAINST SCALE AND NOT AGAINST A CONSTANT. Asking for "at most N
+    queries" fixes a number that has nothing to do with the defect; a per-row
+    source_type lookup — which is the obvious way to write this section — is
+    visible as a count that GROWS with the rows. Thirty sources against three
+    must cost the same number of statements.
+    """
+    counts = []
+    for cid, n in (("c-small", 3), ("c-large", 30)):
+        path = tmp_path / f"{cid}.db"
+        conn = init_db(path)
+        _concept(conn, cid, "Scale")
+        for i in range(n):
+            _link(conn, cid, _paper(
+                conn, f"{cid}-{i:02d}", f"S{i:02d}",
+                source_type="kernel-doc" if i % 2 else "conference-paper"))
+        conn.commit()
+        conn.close()
+        with TestClient(create_app(str(path))) as c:
+            seen: list[str] = []
+            c.app.state.conn.set_trace_callback(seen.append)
+            try:
+                c.get(f"/concepts/{cid}")
+            finally:
+                c.app.state.conn.set_trace_callback(None)
+            counts.append(len(seen))
+
+    assert counts[0] == counts[1], (
+        f"{counts[0]} statements for 3 sources, {counts[1]} for 30 — "
+        "the render is per-row")
+
+
+def test_the_paginated_route_serves_each_column(split_client):
+    """kind=papers and kind=documentation, because the detail page's two "see
+    all" links must land on the column they came from. kind=all stays the
+    default and stays the badge's set."""
+    papers = split_client.get("/concepts/c-mixed/papers?kind=papers").text
+    assert "Futexes Are Tricky" in papers
+    assert "src-d4" not in papers, "the kernel-doc Source is in the papers list"
+    assert "src-a1" not in papers, "the article is in the papers list"
+    assert "1 paper" in papers
+
+    docs = split_client.get("/concepts/c-mixed/papers?kind=documentation").text
+    assert "src-d4" in docs
+    assert "src-p2" not in docs and "src-a1" not in docs
+    assert "1 document" in docs
+
+    every = split_client.get("/concepts/c-mixed/papers").text
+    assert "src-p2" in every and "src-d4" in every and "src-a1" in every
+    assert "3 sources" in every
+
+
+def test_the_kind_parameter_rejects_anything_else(split_client):
+    """A free-text kind would reach the dict lookup in the route and 500."""
+    assert split_client.get(
+        "/concepts/c-mixed/papers?kind=nonsense").status_code == 422
+
+
+# --- the live corpus, not a fixture -----------------------------------------
+
+def test_the_split_sums_to_the_weight_on_every_live_concept():
+    """AGAINST data/master.db, BECAUSE THE FIXTURES ARE THE THINGS I CHOSE.
+
+    A fixture proves the split works on the three shapes I thought of. The
+    census is the claim: measured 2026-09-30 over 731 live Concepts, 665 rest
+    on documentation ALONE, 42 on papers alone, 10 on both, 13 on neither. Any
+    of those 665 rendered under a Papers heading was mislabelled, and any of
+    them whose displayed counts stop summing to concept_weight has a badge the
+    page no longer explains.
+
+    IT ASSERTS THE SUM AND NOT THE FOUR NUMBERS. The corpus grows every week;
+    a test pinned to 665 fails on the next harvest and says nothing about this
+    defect. The sum is the invariant — INV-KK-WEB-CONCEPT-EVIDENCE-SPLIT — and
+    it holds at any size.
+    """
+    import sqlite3
+    from pathlib import Path
+
+    from graph.rules import concept_evidence_by_class, concept_weight
+
+    db = Path(__file__).resolve().parent.parent / "data" / "master.db"
+    if not db.exists():
+        pytest.skip("data/master.db is not present")
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        cids = [r[0] for r in conn.execute(
+            "SELECT id FROM nodes WHERE kind = 'Concept' AND "
+            "COALESCE(json_extract(attrs, '$.curation_state'), '') != 'retired'"
+        ).fetchall()]
+        assert len(cids) > 100, "the live corpus looks empty"
+
+        docs_only = 0
+        for cid in cids:
+            counts = concept_evidence_by_class(conn, cid)
+            assert sum(counts.values()) == concept_weight(conn, cid), cid
+            if counts["documentation"] and not counts["papers"]:
+                docs_only += 1
+        # The shape, loosely: documentation-only is the MAJORITY case, which is
+        # why the old heading was wrong more often than it was right.
+        assert docs_only > len(cids) // 2, (
+            f"{docs_only} of {len(cids)} rest on documentation alone")
+    finally:
+        conn.close()

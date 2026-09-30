@@ -698,6 +698,58 @@ def kernel_breadth(conn: sqlite3.Connection, concept_id: str) -> int:
 DOC_SOURCE_TYPES = ("kernel-doc",)
 
 
+#: The other half of IFC-KK-DOC-DEFINED-PROVENANCE, named 2026-09-30 so the
+#: distinction the admission rule acts on can also be DISPLAYED
+#: (INV-KK-WEB-CONCEPT-EVIDENCE-SPLIT). Peer-reviewed or preprint literature:
+#: a paper PROPOSES and measures and is contested, where a document DEFINES.
+#: That asymmetry is already in INV-KK-CONCEPT-ADMISSION — one document admits
+#: a Concept where two papers are required — and until this constant existed
+#: the concept page had no way to say which kind of witness it was showing.
+#:
+#: NOT THE COMPLEMENT OF DOC_SOURCE_TYPES, DELIBERATELY. article (24),
+#: vulnerability-database (16) and discourse (9) are neither literature nor
+#: canonical documentation, and folding them into either column would claim
+#: an authority their provenance does not carry. They fall to `other`, which
+#: is why the page's two counts and `other` must sum to concept_weight rather
+#: than the two counts alone.
+RESEARCH_SOURCE_TYPES = ("preprint", "conference-paper", "conference-proceedings")
+
+
+def concept_evidence_by_class(
+    conn: sqlite3.Connection, concept_id: str
+) -> dict[str, int]:
+    """Distinct Sources behind a Concept, split into papers / documentation /
+    other — ONE query, the same traversal concept_weight walks.
+
+    SUMS TO concept_weight BY CONSTRUCTION, WHICH IS THE POINT. The admission
+    badge is computed from concept_weight; a page that shows a filtered count
+    beside that badge stops explaining it. Block Groups is badged admissible at
+    weight 4 with all four Sources kernel-doc, so a paper-only section renders
+    "Papers (0) admissible" — more honest about the label and less honest about
+    the badge. Splitting the display must not split the rule.
+
+    GROUP BY source_type and not three queries: a Source has exactly one
+    source_type, so COUNT(DISTINCT) per group partitions the same set the
+    ungrouped count returns (INV-KK-WEB-QUERY-BOUNDED — this is called once per
+    page, never per row).
+    """
+    counts = {"papers": 0, "documentation": 0, "other": 0}
+    rows = conn.execute(
+        "SELECT COALESCE(json_extract(s.attrs, '$.source_type'), ''), "
+        "COUNT(DISTINCT s.id) FROM edges e "
+        "JOIN edges se ON se.source_id = e.target_id AND se.kind = 'sourced-from' "
+        "JOIN nodes s ON s.id = se.target_id AND s.kind = 'Source' "
+        "WHERE e.kind = 'extracted-from' AND e.source_id = ? "
+        + not_superseded("e") + " GROUP BY 1", (concept_id,)
+    ).fetchall()
+    for source_type, n in rows:
+        key = ("documentation" if source_type in DOC_SOURCE_TYPES
+               else "papers" if source_type in RESEARCH_SOURCE_TYPES
+               else "other")
+        counts[key] += n
+    return counts
+
+
 #: IFC-KK-DOC-DEFINED-PROVENANCE, the path half. Added 2026-09-28, because the
 #: source TYPE is only half the question: Documentation/process/ is kernel-doc
 #: too, and without this rule seeding it would make "Code of Conduct" an

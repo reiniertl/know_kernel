@@ -1,20 +1,35 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Papers: {{ concept_name }}</h1>
+{# The heading follows `kind`, because this one route serves three lists
+   (INV-KK-WEB-CONCEPT-EVIDENCE-SPLIT). The path keeps the word /papers — it is
+   a URL a curator may have bookmarked — and the page no longer claims it. #}
+{% set heading = {'all': 'Evidence', 'papers': 'Papers', 'documentation': 'Documentation'}[kind] %}
+{% set noun = {'all': 'source', 'papers': 'paper', 'documentation': 'document'}[kind] %}
+<h1>{{ heading }}: {{ concept_name }}</h1>
 <p>
   <a href="/concepts/{{ concept_id }}">&larr; back to {{ concept_name }}</a>
   &middot; <span class="badge badge-{{ state }}">{{ state }}</span>
-  &middot; {{ total }} paper{{ '' if total == 1 else 's' }}
+  &middot; {{ total }} {{ noun }}{{ '' if total == 1 else 's' }}
 </p>
 <p class="muted">
-  These are the papers the admission rule counts: each one is a distinct Source
+  {% if kind == 'all' %}
+  This is the evidence the admission rule counts: each row is a distinct Source
   reached by <code>extracted-from</code> then <code>sourced-from</code>. The
   count above is the concept's weight, so this page is the evidence for the
-  badge rather than a restatement of it.
+  badge rather than a restatement of it. A paper proposes and is contested; a
+  document defines &mdash; the Type column says which each row is, and the
+  admission rule treats them differently.
+  {% else %}
+  One kind of the evidence the admission rule counts, reached by
+  <code>extracted-from</code> then <code>sourced-from</code>. The count above is
+  this kind alone and is therefore SMALLER than the concept's weight; the badge
+  beside it is computed from the whole.
+  <a href="/concepts/{{ concept_id }}/papers">See all evidence &rarr;</a>
+  {% endif %}
 </p>
 
 <table>
-  <thead><tr><th>Paper</th><th>Venue</th><th>Type</th></tr></thead>
+  <thead><tr><th>Source</th><th>Venue</th><th>Type</th></tr></thead>
   <tbody>
     {% for p in papers %}
     <tr>
@@ -23,14 +38,14 @@
       <td>{{ p.source_type or '—' }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="3">No papers are linked to this concept.</td></tr>
+    <tr><td colspan="3">No {{ noun }}s are linked to this concept.</td></tr>
     {% endfor %}
   </tbody>
 </table>
 
 <p>
-  {% if page > 1 %}<a href="/concepts/{{ concept_id }}/papers?page={{ page - 1 }}&per_page={{ per_page }}">&larr; Previous</a>{% endif %}
+  {% if page > 1 %}<a href="/concepts/{{ concept_id }}/papers?kind={{ kind }}&page={{ page - 1 }}&per_page={{ per_page }}">&larr; Previous</a>{% endif %}
   <span class="muted">page {{ page }}</span>
-  {% if has_next %}<a href="/concepts/{{ concept_id }}/papers?page={{ page + 1 }}&per_page={{ per_page }}">Next &rarr;</a>{% endif %}
+  {% if has_next %}<a href="/concepts/{{ concept_id }}/papers?kind={{ kind }}&page={{ page + 1 }}&per_page={{ per_page }}">Next &rarr;</a>{% endif %}
 </p>
 {% endblock %}

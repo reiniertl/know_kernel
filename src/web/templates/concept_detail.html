@@ -105,21 +105,24 @@
   <h4>This name collides</h4>
   <p class="muted small">
     Until one of these is resolved both entries collect evidence separately, and
-    the split is permanent. Merging moves every paper and every link onto the
-    entry you keep and retires the other &mdash; it keeps its name and gains a
-    <code>supersedes</code> edge saying which entry replaced it. Where the two
-    already share a link the survivor&rsquo;s is kept and the duplicate is
-    dropped, so the paper count afterwards is the union and not the sum.
+    the split is permanent. Merging moves every piece of evidence and every link
+    onto the entry you keep and retires the other &mdash; it keeps its name and
+    gains a <code>supersedes</code> edge saying which entry replaced it. Where
+    the two already share a link the survivor&rsquo;s is kept and the duplicate
+    is dropped, so the weight afterwards is the union and not the sum.
     <strong>Some collisions are not merges</strong>: Huge Pages and Transparent
     Huge Pages are different mechanisms.
   </p>
   <table>
-    <thead><tr><th>Collides with</th><th>Papers</th><th>Merge</th></tr></thead>
+    {# "Weight", not "Papers": this column is concept_weight, which counts
+       documentation as well, and 665 of 731 concepts have nothing else
+       (INV-KK-WEB-CONCEPT-EVIDENCE-SPLIT). #}
+    <thead><tr><th>Collides with</th><th>Weight</th><th>Merge</th></tr></thead>
     <tbody>
       {% for other in concept_collides_with %}
       <tr>
         <td><a href="/concepts/{{ other.id }}">{{ other.name }}</a></td>
-        <td>{{ other.papers }}</td>
+        <td>{{ other.weight }}</td>
         <td>
           <button type="button"
                   onclick="mergeConcept('{{ node.id }}', '{{ other.id }}', {{ other.name | tojson }})">
@@ -181,7 +184,7 @@ async function markDistinct(a, b, otherName) {
   else { el.textContent = body.error || "failed"; }
 }
 async function mergeConcept(loser, winner, winnerName) {
-  if (!confirm("Merge into \u201c" + winnerName + "\u201d? Every paper and link moves to it, and the other entry is retired. This cannot be undone from this page."))
+  if (!confirm("Merge into \u201c" + winnerName + "\u201d? Every piece of evidence and every link moves to it, and the other entry is retired. This cannot be undone from this page."))
     return;
   var el = document.getElementById("concept-merge-status");
   el.textContent = "merging\u2026";
@@ -189,7 +192,7 @@ async function mergeConcept(loser, winner, winnerName) {
   var body = await r.json();
   if (r.ok) {
     el.textContent = body.moved + " links moved, " + body.dropped +
-      " already shared and dropped; papers " + body.weight_before +
+      " already shared and dropped; weight " + body.weight_before +
       " \u2192 " + body.weight_after + ".";
     setTimeout(function () { location.href = "/concepts/" + winner; }, 1500);
   } else {
@@ -215,26 +218,64 @@ async function retireConcept() {
 }
 </script>
 
-{# The papers behind this concept: the same traversal the admission rule walks,
-   so the section shows WHY the badge says what it says. Bounded to a preview —
-   Scheduling Classes has 440 — with the full list on its own paginated route. #}
+{# The evidence behind this concept: the same traversal the admission rule
+   walks, so the section shows WHY the badge says what it says. Bounded to a
+   preview — Scheduling Classes has 440 — with the full list on its own
+   paginated route.
+
+   SPLIT INTO PAPERS AND DOCUMENTATION (INV-KK-WEB-CONCEPT-EVIDENCE-SPLIT).
+   A paper proposes and is contested; a document defines. The admission rule
+   already acts on that difference — one document admits where two papers are
+   required — and this page pooled both under "Papers" for 665 of 731
+   concepts. The badge stays on the TOTAL, because the total is what it is
+   computed from: the counts below sum to it, so splitting what is shown never
+   changes what was decided. #}
 <div class="attrs-section">
   <h3>
-    Papers ({{ concept_paper_total }})
+    Evidence ({{ concept_paper_total }})
     {% if concept_state %}<span class="badge badge-{{ concept_state }}">{{ concept_state }}</span>{% endif %}
   </h3>
+
+  <h4>Papers ({{ concept_evidence_counts.papers }})</h4>
   {% if concept_papers %}
   <ul>
     {% for p in concept_papers %}
     <li><a href="{{ p.route }}">{{ p.title }}</a>{% if p.venue %} <span class="muted small">{{ p.venue }}</span>{% endif %}</li>
     {% endfor %}
   </ul>
-  {% if concept_paper_total > papers_preview_size %}
-  <p><a href="/concepts/{{ node.id }}/papers">See all {{ concept_paper_total }} papers &rarr;</a></p>
+  {% if concept_evidence_counts.papers > papers_preview_size %}
+  <p><a href="/concepts/{{ node.id }}/papers?kind=papers">See all {{ concept_evidence_counts.papers }} papers &rarr;</a></p>
   {% endif %}
   {% else %}
+  <p class="muted small">No peer-reviewed or preprint literature is linked to this concept.</p>
+  {% endif %}
+
+  <h4>Documentation ({{ concept_evidence_counts.documentation }})</h4>
+  {% if concept_docs %}
+  <ul>
+    {% for p in concept_docs %}
+    <li><a href="{{ p.route }}">{{ p.title }}</a></li>
+    {% endfor %}
+  </ul>
+  {% if concept_evidence_counts.documentation > papers_preview_size %}
+  <p><a href="/concepts/{{ node.id }}/papers?kind=documentation">See all {{ concept_evidence_counts.documentation }} documents &rarr;</a></p>
+  {% endif %}
+  {% else %}
+  <p class="muted small">No canonical documentation is linked to this concept.</p>
+  {% endif %}
+
+  {% if concept_evidence_counts.other %}
+  {# Neither literature nor canonical documentation — an article, a CVE record
+     or a mailing-list thread. Counted in the weight and named as itself. #}
+  <p class="muted small">
+    {{ concept_evidence_counts.other }} further source{{ '' if concept_evidence_counts.other == 1 else 's' }}
+    of neither kind &mdash; <a href="/concepts/{{ node.id }}/papers">see all evidence &rarr;</a>
+  </p>
+  {% endif %}
+
+  {% if concept_paper_total == 0 %}
   <p class="muted">
-    No papers are linked to this concept. That is what <code>unlinked</code>
+    No evidence is linked to this concept. That is what <code>unlinked</code>
     means, and it is the weakest position a concept in the vocabulary can be in.
   </p>
   {% endif %}

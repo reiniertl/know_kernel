@@ -1050,7 +1050,7 @@ def test_the_papers_page_and_the_badge_cannot_disagree(conn):
     """A page listing papers the badge no longer counts is worse than either
     being wrong alone, so both read graph.rules.not_superseded."""
     from graph.rules import concept_weight
-    from web.routes import _CONCEPT_PAPERS_SQL
+    from web.routes import _CONCEPT_EVIDENCE_SQL
 
     cid = _concept(conn, "concept-lsm", "Linux Security Modules")
     for n in ("a", "b"):
@@ -1061,7 +1061,11 @@ def test_the_papers_page_and_the_badge_cannot_disagree(conn):
         (cid, "ev-a"))
     conn.commit()
 
-    listed = conn.execute(_CONCEPT_PAPERS_SQL, (cid, 50, 0)).fetchall()
+    # types="" is the unfiltered form the paginated route serves: the set the
+    # badge counted, which is the set this test is about
+    # (INV-KK-WEB-CONCEPT-EVIDENCE-SPLIT did not change it).
+    listed = conn.execute(
+        _CONCEPT_EVIDENCE_SQL.format(types=""), (cid, 50, 0)).fetchall()
     assert len(listed) == concept_weight(conn, cid) == 1
 
 

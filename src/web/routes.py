@@ -176,12 +176,18 @@ def route_for_node(kind: str, node_id: str) -> str:
     return _ROUTE_FOR_KIND.get(kind, _DEFAULT_ROUTE) + node_id
 
 
-#: Papers behind a concept, in the order the admission rule counts them.
+#: Evidence behind a concept, in the order the admission rule counts it.
 #: INV-KK-CONCEPT-ADMISSION walks concept -extracted-from-> Evidence
 #: -sourced-from-> Source, so this is the same traversal concept_weight makes.
-#: DISTINCT on the Source: two Evidence nodes from one paper are one paper, and
-#: rendering it twice would overstate the evidence the badge is claiming.
-_CONCEPT_PAPERS_SQL = (
+#: DISTINCT on the Source: two Evidence nodes from one document are one
+#: document, and rendering it twice would overstate what the badge is claiming.
+#:
+#: IT WAS CALLED _CONCEPT_PAPERS_SQL AND IT NEVER RETURNED ONLY PAPERS
+#: (INV-KK-WEB-CONCEPT-EVIDENCE-SPLIT, 2026-09-30). There is no source_type
+#: predicate here and there must not be one — this is the badge's traversal.
+#: The TYPES clause below narrows it for display only, and the caller that
+#: passes no types gets what the badge counted.
+_CONCEPT_EVIDENCE_SQL = (
     "SELECT DISTINCT s.id, s.attrs FROM edges e "
     "JOIN edges se ON se.source_id = e.target_id AND se.kind = 'sourced-from' "
     "JOIN nodes s ON s.id = se.target_id AND s.kind = 'Source' "
@@ -189,22 +195,43 @@ _CONCEPT_PAPERS_SQL = (
     # A RETIRED LINK IS NOT EVIDENCE AND MUST NOT BE LISTED HERE. This page is
     # the evidence for the badge concept_weight computes, so the two share
     # graph.rules.not_superseded rather than each carrying the clause.
-    + not_superseded("e") + " "
+    + not_superseded("e") + " {types}"
     "ORDER BY s.id LIMIT ? OFFSET ?"
 )
 
 
-def _concept_papers(conn, concept_id: str, limit: int, offset: int = 0) -> list[dict]:
-    """One bounded page of the papers behind a concept.
+def _concept_evidence(
+    conn, concept_id: str, limit: int, offset: int = 0,
+    source_types: tuple[str, ...] | None = None,
+) -> list[dict]:
+    """One bounded page of the evidence behind a concept.
 
     ALG-KK-WEB-CONCEPT-PAPERS. Every row routes through route_for_node, so a
-    paper row goes to /paper/{id} and never back into /concepts/{id}
+    Source row goes to /paper/{id} and never back into /concepts/{id}
     (INV-KK-WEB-SEARCH-RESULT-ROUTED). LIMIT is always passed by the caller;
     there is no unbounded overload, because Scheduling Classes carries 440
     papers and a default of "all" would be an unbounded render waiting to be
     used by accident.
+
+    source_types NARROWS THE DISPLAY AND NOTHING ELSE
+    (INV-KK-WEB-CONCEPT-EVIDENCE-SPLIT). Passing None returns the set
+    concept_weight counted, which is what the paginated route serves; passing
+    DOC_SOURCE_TYPES or RESEARCH_SOURCE_TYPES returns one column of the detail
+    page's two. The counts beside those columns come from
+    concept_evidence_by_class, never from len() of a bounded page.
     """
-    rows = conn.execute(_CONCEPT_PAPERS_SQL, (concept_id, limit, offset)).fetchall()
+    clause = ""
+    params: list = [concept_id]
+    if source_types is not None:
+        if not source_types:
+            return []
+        placeholders = ", ".join("?" for _ in source_types)
+        clause = (f"AND COALESCE(json_extract(s.attrs, '$.source_type'), '') "
+                  f"IN ({placeholders}) ")
+        params.extend(source_types)
+    params.extend([limit, offset])
+    rows = conn.execute(
+        _CONCEPT_EVIDENCE_SQL.format(types=clause), tuple(params)).fetchall()
     papers = []
     for source_id, raw in rows:
         attrs = json.loads(raw) if isinstance(raw, str) else (raw or {})
@@ -912,8 +939,16 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         concept_id: str,
         page: int = Query(1, ge=1),
         per_page: int = Query(50, ge=10, le=200),
+        kind: str = Query("all", pattern="^(all|papers|documentation)$"),
     ):
-        """Every paper behind one concept (ALG-KK-WEB-CONCEPT-PAPERS).
+        """Every piece of evidence behind one concept (ALG-KK-WEB-CONCEPT-PAPERS).
+
+        THE PATH KEEPS THE WORD AND THE PAGE STOPS CLAIMING IT
+        (INV-KK-WEB-CONCEPT-EVIDENCE-SPLIT). /papers is a URL a curator may
+        have bookmarked; changing it breaks links to buy a heading that `kind`
+        already fixes. kind=all is what the badge counted and stays the
+        default; the detail page's two "see all" links carry kind=papers and
+        kind=documentation so each lands on the column it came from.
 
         The same traversal concept_weight walks, so this page is the evidence for
         the admission badge rather than a restatement of it — a reader who
@@ -934,7 +969,16 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             raise HTTPException(status_code=404, detail="Concept not found")
         attrs = json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
 
-        papers = _concept_papers(conn, concept_id, per_page + 1, (page - 1) * per_page)
+        from graph.rules import (DOC_SOURCE_TYPES, RESEARCH_SOURCE_TYPES,
+                                 concept_evidence_by_class)
+
+        by_class = concept_evidence_by_class(conn, concept_id)
+        types = {"all": None, "papers": RESEARCH_SOURCE_TYPES,
+                 "documentation": DOC_SOURCE_TYPES}[kind]
+        total = (concept_weight(conn, concept_id) if kind == "all"
+                 else by_class[kind])
+        papers = _concept_evidence(conn, concept_id, per_page + 1,
+                                   (page - 1) * per_page, source_types=types)
         has_next = len(papers) > per_page
         papers = papers[:per_page]
 
@@ -944,7 +988,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "concept_id": concept_id,
                 "concept_name": attrs.get("name") or concept_id,
                 "papers": papers,
-                "total": concept_weight(conn, concept_id),
+                "kind": kind,
+                "total": total,
                 "state": admission_state(conn, concept_id, seminal_concepts(conn)),
                 "page": page,
                 "per_page": per_page,
@@ -1035,19 +1080,35 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                             "examples": cr_attrs["code_examples"],
                         })
 
-        # The papers behind a Concept, bounded to a preview with a link to the
-        # full paginated route (ALG-KK-WEB-CONCEPT-PAPERS). Only for Concepts:
-        # this view renders every node kind, and the traversal is meaningless
-        # for the rest.
+        # The evidence behind a Concept, bounded to a preview with a link to
+        # the full paginated route (ALG-KK-WEB-CONCEPT-PAPERS). Only for
+        # Concepts: this view renders every node kind, and the traversal is
+        # meaningless for the rest.
+        #
+        # TWO PREVIEWS AND THREE COUNTS, NOT ONE OF EACH
+        # (INV-KK-WEB-CONCEPT-EVIDENCE-SPLIT). Measured 2026-09-30 over 731
+        # live Concepts: 665 rest on documentation alone, 42 on papers alone,
+        # 10 on both. A single section headed "Papers" was wrong for 91% of the
+        # vocabulary. concept_paper_total stays concept_weight — it is what the
+        # badge beside it is computed from, and the three counts sum to it.
         concept_papers_preview: list[dict] = []
+        concept_docs_preview: list[dict] = []
+        concept_evidence_counts = {"papers": 0, "documentation": 0, "other": 0}
         concept_paper_total = 0
         concept_state = ""
         concept_collides_with: list[dict] = []
         if node["kind"] == "Concept":
             from graph.concept_vocabulary import colliding_pairs
-            from graph.rules import admission_state, seminal_concepts
-            concept_papers_preview = _concept_papers(
-                conn, node_id, CONCEPT_PAPERS_PREVIEW)
+            from graph.rules import (DOC_SOURCE_TYPES, RESEARCH_SOURCE_TYPES,
+                                     admission_state, concept_evidence_by_class,
+                                     seminal_concepts)
+            concept_papers_preview = _concept_evidence(
+                conn, node_id, CONCEPT_PAPERS_PREVIEW,
+                source_types=RESEARCH_SOURCE_TYPES)
+            concept_docs_preview = _concept_evidence(
+                conn, node_id, CONCEPT_PAPERS_PREVIEW,
+                source_types=DOC_SOURCE_TYPES)
+            concept_evidence_counts = concept_evidence_by_class(conn, node_id)
             concept_paper_total = concept_weight(conn, node_id)
             concept_state = admission_state(conn, node_id, seminal_concepts(conn))
             # THE MERGE AFFORDANCE NAMES THE COUNTERPART AND NEVER ASKS FOR A
@@ -1072,8 +1133,11 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                     # merge a curator should be offered twice.
                     continue
                 concept_collides_with.append({
+                    # concept_weight, which counts documentation too — the
+                    # column that displayed this was headed "Papers" until
+                    # 2026-09-30 and never was one.
                     "id": other, "name": row[0] or other,
-                    "papers": concept_weight(conn, other)})
+                    "weight": concept_weight(conn, other)})
 
         subsystems: list[dict] = []
         if node["kind"] == "Concept":
@@ -1098,6 +1162,8 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                 "node_labels": node_labels,
                 "related_code": related_code,
                 "concept_papers": concept_papers_preview,
+                "concept_docs": concept_docs_preview,
+                "concept_evidence_counts": concept_evidence_counts,
                 "concept_paper_total": concept_paper_total,
                 "concept_state": concept_state,
                 "concept_collides_with": concept_collides_with,
