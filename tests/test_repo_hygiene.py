@@ -522,3 +522,94 @@ def test_the_claim_extractor_no_longer_cites_a_node_that_does_not_exist():
     src = (REPO / "src" / "ingest" / "claim_extractor.py").read_text(encoding="utf-8")
     assert "ALG-KK-CLAIM-EXTRACT" in src
     assert "ALG-KK-CLAIM-EXTRACT" not in KNOWN_UNRESOLVED_SPEC_IDS
+
+
+# --- INV-KK-DATA-COMMIT-CHECKPOINTED ---------------------------------------
+#
+# ON 2026-10-01 A COMMIT SAID THREE HARVEST BATCHES AND CONTAINED TWO. Commit
+# 4703abf reported virt (107 Concepts), networking (261) and driver-api (358),
+# and was pushed. The committed data/master.db held 1,134 Concepts where the
+# working file held 1,492: the driver-api batch, 358 Concepts and 634 edges,
+# was absent from the commit and from origin.
+#
+# master.db runs in WAL mode. A writer's pages land in data/master.db-wal and
+# reach the main file only at a checkpoint, and `git add data/master.db` reads
+# the MAIN FILE ONLY — while every SQLite reader in the session sees WAL and
+# main together and therefore agrees with the working tree. The commit and the
+# session disagree, and nothing says so: a commit missing 358 Concepts looks
+# exactly like a commit of a corpus with 358 fewer Concepts, because a binary
+# file's diff is a byte count. It was found only because an unrelated
+# connection later checkpointed the WAL and changed the file's SIZE. That is
+# luck, not a control, which is why this is a test and not a note.
+
+
+@needs_git
+def test_the_database_wal_is_empty_so_a_commit_cannot_omit_recent_writes():
+    """INV-KK-DATA-COMMIT-CHECKPOINTED.
+
+    A non-empty -wal beside a tracked database means git would stage a file
+    that is missing whatever the WAL holds. Zero-length is what a checkpoint
+    leaves behind, and an absent -wal is the same guarantee.
+    """
+    offenders = []
+    for db in ("data/master.db", "data/auth.db"):
+        if not (REPO / db).exists():
+            continue
+        wal = REPO / f"{db}-wal"
+        if wal.exists() and wal.stat().st_size > 0:
+            offenders.append(
+                f"{db}-wal holds {wal.stat().st_size} bytes — run "
+                f"PRAGMA wal_checkpoint(TRUNCATE) before staging {db}")
+    assert not offenders, "\n".join(offenders)
+
+
+@needs_git
+def test_the_committed_database_holds_what_the_working_database_holds():
+    """The direct check: the counts in HEAD's copy equal the counts live.
+
+    THE -wal TEST ABOVE IS NECESSARY AND NOT SUFFICIENT. It catches the window
+    before a checkpoint; this catches the state the 2026-10-01 defect actually
+    left behind — a checkpoint that happened AFTER the commit, so the WAL is
+    clean and the commit is still short. Skips when data/master.db is dirty for
+    a legitimate reason: an uncommitted harvest is this test failing correctly,
+    so it reports rather than skips, and the fix is to commit the data.
+    """
+    import sqlite3
+    import tempfile
+
+    db = REPO / "data/master.db"
+    if not db.exists():
+        pytest.skip("data/master.db is not present")
+    if _git("diff", "--quiet", "HEAD", "--", "data/master.db").returncode == 0:
+        # Identical to HEAD — nothing to compare.
+        return
+
+    blob = subprocess.run(
+        ["git", "show", "HEAD:data/master.db"], cwd=REPO,
+        capture_output=True, check=False)
+    if blob.returncode != 0:
+        pytest.skip("data/master.db is not tracked at HEAD")
+
+    def _counts(path: str) -> tuple[int, int]:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            return (conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
+                    conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0])
+        finally:
+            conn.close()
+
+    with tempfile.NamedTemporaryFile(suffix=".db") as fh:
+        fh.write(blob.stdout)
+        fh.flush()
+        committed = _counts(fh.name)
+    working = _counts(str(db))
+
+    assert working >= committed, (
+        f"HEAD's database holds MORE than the working tree "
+        f"(HEAD {committed}, working {working}) — the working file is stale")
+    if working != committed:
+        pytest.fail(
+            f"data/master.db has uncommitted rows: HEAD holds "
+            f"{committed[0]} nodes / {committed[1]} edges, the working file "
+            f"holds {working[0]} / {working[1]}. Commit the data, or the next "
+            f"commit of this file will claim work it does not carry.")

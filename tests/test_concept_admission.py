@@ -479,3 +479,73 @@ def test_the_measured_census_of_the_live_corpus_does_not_move(conn):
     assert (sweep.admissible, sweep.thin, sweep.unlinked) == (
         1, ["c-thin"], ["c-orphan"])
     assert sweep.documented == [] and sweep.retired == []
+
+
+# --- INV-KK-SUBSYSTEM-CARDINALITY-BY-KIND ----------------------------------
+#
+# A CENSUS ON 2026-10-01 RETURNED ONE NODE WITH TWO belongs-to EDGES AND IT WAS
+# NOT A VIOLATION. kinv-503a788db440 — "a page cache page must reflect the most
+# recent write, whether via write() or mmap store" — sits in both Security and
+# Virtual Memory. It is a KernelInvariant, and INV-KK-CONCEPT-SUBSYSTEM-SINGLE
+# quantifies over Concept.
+#
+# The asymmetry follows from what the two kinds ARE. A Concept names a
+# MECHANISM and a mechanism is implemented somewhere, so two subsystems means
+# the vocabulary has not decided where it lives. A KernelInvariant names a
+# PROPERTY, and POSIX page-cache coherence genuinely is a claim about both
+# subsystems; forcing it into one would be a worse record, not a tidier one.
+
+
+def test_a_concept_may_not_sit_in_two_subsystems(conn):
+    """The existing rule, restated here as the other half of the pair."""
+    from graph.engine import add_edge, add_node
+
+    cid = _concept(conn, "c-two-homes")
+    for sid, name in (("sub-a", "Security"), ("sub-b", "Virtual Memory")):
+        add_node(conn, sid, "Subsystem", {"name": name})
+    add_edge(conn, "belongs-to", cid, "sub-a")
+    add_edge(conn, "belongs-to", cid, "sub-b")
+    conn.commit()
+
+    n = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'belongs-to' AND source_id = ?",
+        (cid,)).fetchone()[0]
+    assert n == 2, "fixture did not create the state under test"
+    # The graph permits the edges; the RULE is what forbids them, and this is
+    # the query that detects it. A Concept here is a finding.
+    offenders = conn.execute(
+        "SELECT e.source_id FROM edges e JOIN nodes n ON n.id = e.source_id "
+        "AND n.kind = 'Concept' WHERE e.kind = 'belongs-to' "
+        "GROUP BY 1 HAVING COUNT(*) > 1").fetchall()
+    assert [r[0] for r in offenders] == [cid]
+
+
+def test_a_kernel_invariant_may_sit_in_several_and_is_not_a_finding(conn):
+    """The same shape on a KernelInvariant must NOT be reported.
+
+    This is the test that stops the next reader repairing kinv-503a788db440:
+    the detection query is scoped to Concept, so a KernelInvariant with two
+    subsystems is invisible to it by construction rather than by luck.
+    """
+    from graph.engine import add_edge, add_node
+
+    add_node(conn, "kinv-coherence", "KernelInvariant", {
+        "predicate": "A page cache page must reflect the most recent write",
+        "strength": "safety", "scope": "per-operation", "artifact_class": "B"})
+    for sid, name in (("sub-a", "Security"), ("sub-b", "Virtual Memory")):
+        add_node(conn, sid, "Subsystem", {"name": name})
+    add_edge(conn, "belongs-to", "kinv-coherence", "sub-a")
+    add_edge(conn, "belongs-to", "kinv-coherence", "sub-b")
+    conn.commit()
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind = 'belongs-to' AND source_id = ?",
+        ("kinv-coherence",)).fetchone()[0] == 2
+
+    offenders = conn.execute(
+        "SELECT e.source_id FROM edges e JOIN nodes n ON n.id = e.source_id "
+        "AND n.kind = 'Concept' WHERE e.kind = 'belongs-to' "
+        "GROUP BY 1 HAVING COUNT(*) > 1").fetchall()
+    assert offenders == [], (
+        "a KernelInvariant in two subsystems was reported as a Concept "
+        "violation — INV-KK-SUBSYSTEM-CARDINALITY-BY-KIND says it is not one")
