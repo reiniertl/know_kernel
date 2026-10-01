@@ -1217,6 +1217,85 @@ def test_venues_query_count_is_bounded(venue_client):
     assert len(selects) <= 3, selects
 
 
+# --- INV-KK-WEB-VENUE-ROWS-LABELLED ----------------------------------------
+#
+# MEASURED 2026-10-01. /venues listed every venue-less Source through a row
+# builder named _paper() and headed the page "N papers". 1,574 rows: kernel-doc
+# 1,510, article 22, preprint 17, vulnerability-database 16, discourse 9. The
+# VENUE rows were never the problem - 3,465 of 3,467 venue-attributed Sources
+# are research types - so the error was wholly in the trailing bucket, which
+# ALG-KK-WEB-VENUES sized at 107 and the seeding campaign took to 1,574.
+
+
+def test_a_document_is_not_listed_under_a_heading_naming_papers(venue_client):
+    """src-none-1 is kernel-doc. It must sit under a documentation heading,
+    and the page's own total must not call it a paper."""
+    text = venue_client.get("/venues").text
+    assert "No venue recorded &mdash; documentation" in text or \
+           "No venue recorded — documentation" in text
+    assert "7 sources across" in text, "the total still counts documents as papers"
+    assert "7 papers across" not in text
+
+
+def test_the_venue_less_bucket_is_split_by_kind_and_nothing_is_dropped(venue_client):
+    """ALG-KK-WEB-VENUES' postcondition: never silently omitted, because the
+    page's job is coverage of the corpus. Splitting the DISPLAY must not drop a
+    row - both venue-less Sources are still reachable, under different
+    headings."""
+    text = venue_client.get("/venues").text
+    assert "/paper/src-none-1" in text, "the kernel-doc Source was dropped"
+    assert "/paper/src-none-2" in text, "the discourse Source was dropped"
+    assert "documentation" in text and "other sources" in text
+
+
+def test_the_venue_column_keeps_the_word_paper(venue_client):
+    """A sweep renaming every occurrence would be as wrong as the pooling, in
+    the other direction. OSDI's three rows ARE papers and the column says so."""
+    text = venue_client.get("/venues").text
+    assert "<th style=\"width:10%;\">Papers</th>" in text
+
+
+def test_the_rendered_rows_sum_to_the_reported_total(venue_client):
+    """The count the page reports must match what it renders: 5 venue papers
+    plus 2 venue-less, and the split must not double-count or lose one."""
+    text = venue_client.get("/venues").text
+    assert text.count("/paper/src-") == 7
+    assert "7 sources" in text
+
+
+def test_an_untitled_source_renders_its_url_not_its_node_id(tmp_path):
+    """57 Sources carry no title, and a row reading src-462ab441d987 is the
+    defect that started this line of work. Offline title recovery is not
+    available for these - 22 of the 31 untitled article/discourse Sources carry
+    no Evidence text at all - so the url is what the row shows."""
+    db_path = tmp_path / "untitled.db"
+    conn = init_db(db_path)
+    add_node(conn, "src-untitled", "Source", {
+        "url": "https://lwn.net/Articles/1077739/",
+        "source_type": "discourse", "license": "MIT"})
+    conn.commit()
+    conn.close()
+    with TestClient(create_app(str(db_path))) as c:
+        text = c.get("/venues").text
+    assert "https://lwn.net/Articles/1077739/" in text
+    assert ">src-untitled<" not in text, "the row rendered the node id"
+
+
+def test_the_split_adds_no_query(venue_client):
+    """INV-KK-WEB-QUERY-BOUNDED. The kind of a Source is in source_type, which
+    both existing queries already select; a per-row type lookup is the obvious
+    way to write this and is what the bound forbids."""
+    conn = venue_client.app.state.conn
+    seen = []
+    conn.set_trace_callback(seen.append)
+    try:
+        venue_client.get("/venues")
+    finally:
+        conn.set_trace_callback(None)
+    selects = [q for q in seen if q.strip().upper().startswith("SELECT")]
+    assert len(selects) <= 3, selects
+
+
 def test_sources_route_is_gone(venue_client):
     assert venue_client.get("/sources").status_code == 404
 

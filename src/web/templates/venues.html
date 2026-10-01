@@ -1,9 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
+{# "sources", not "papers" (INV-KK-WEB-VENUE-ROWS-LABELLED). This count
+   includes 1,510 kernel-doc documents, which have no venue by construction and
+   are not literature. The venue rows below ARE papers — measured 2026-10-01,
+   3,465 of 3,467 venue-attributed Sources are research types — so that column
+   keeps its word. The error was only ever in the trailing bucket. #}
 <h1>Venues</h1>
-<p>{{ total_papers }} paper{{ "s" if total_papers != 1 else "" }} across {{ venues|length }} venue{{ "s" if venues|length != 1 else "" }}{% if unattributed %}, plus {{ unattributed|length }} with no venue recorded{% endif %}</p>
+<p>{{ total_sources }} source{{ "s" if total_sources != 1 else "" }} across {{ venues|length }} venue{{ "s" if venues|length != 1 else "" }}{% if unattributed %}, plus {{ unattributed|length }} with no venue recorded{% endif %}</p>
 
-{% macro paper_table(papers) -%}
+{% macro source_table(papers) -%}
 <table style="width:100%; font-size:0.85em;">
   <thead>
     <tr>
@@ -52,32 +57,39 @@
     </tr>
     <tr id="venue-{{ v.venue_id }}" style="display:none;">
       <td colspan="4" style="padding:0.3rem 2rem;">
-        {{ paper_table(v.papers) }}
+        {{ source_table(v.papers) }}
       </td>
     </tr>
   {% endfor %}
 
-  {% if unattributed %}
-    {# INV-KK-VENUE-SOURCE-EDGE: Sources with no published-at edge are shown
-       here rather than dropped. This page's job is coverage of the corpus. #}
+  {# INV-KK-VENUE-SOURCE-EDGE: Sources with no published-at edge are shown here
+     rather than dropped. This page's job is coverage of the corpus.
+
+     SPLIT BY KIND SINCE 2026-10-01 (INV-KK-WEB-VENUE-ROWS-LABELLED). This was
+     ONE bucket of 1,574 rows, of which 1,510 are canonical documentation and 17
+     are papers, and the page called all of them papers. It was sized at 107 —
+     3% of the corpus — when it was written; the seeding campaign made it 31%.
+     Nothing is filtered: every Source that was here before is still here, under
+     a heading that is true of it. #}
+  {% for g in unattributed_groups %}
     <tr style="background:#f0f0f0; font-weight:bold;">
-      <td><em>No venue recorded</em></td>
-      <td>{{ unattributed|length }}</td>
+      <td><em>{{ g.label }}</em> <span class="muted small" style="font-weight:normal;">&mdash; {{ g.note }}</span></td>
+      <td>{{ g.count }}</td>
       <td><span class="badge badge-structural">unattributed</span></td>
       <td>
-        <button onclick="toggleVenue('unattributed')" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#7f8c8d; color:#fff; border:none; border-radius:3px; font-size:0.8em;">+</button>
+        <button onclick="toggleVenue('{{ g.key }}')" style="font-family:monospace; padding:0.2rem 0.5rem; cursor:pointer; background:#7f8c8d; color:#fff; border:none; border-radius:3px; font-size:0.8em;">+</button>
       </td>
     </tr>
-    <tr id="venue-unattributed" style="display:none;">
+    <tr id="venue-{{ g.key }}" style="display:none;">
       <td colspan="4" style="padding:0.3rem 2rem;">
-        {{ paper_table(unattributed) }}
+        {{ source_table(g.rows) }}
       </td>
     </tr>
-  {% endif %}
+  {% endfor %}
   </tbody>
 </table>
 {% else %}
-<p>No papers found.</p>
+<p>No sources found.</p>
 {% endif %}
 
 <script>

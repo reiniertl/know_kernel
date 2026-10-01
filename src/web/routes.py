@@ -1173,7 +1173,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
 
     @app.get("/venues", response_class=HTMLResponse)
     async def venues(request: Request):
-        """Papers grouped by venue (ALG-KK-WEB-VENUES).
+        """Sources grouped by venue (ALG-KK-WEB-VENUES).
 
         Replaces the retired /sources listing. Groups on the Venue node reached
         by the published-at edge, never on the raw Source.attrs.venue string:
@@ -1184,7 +1184,23 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         INV-KK-WEB-QUERY-BOUNDED: exactly three queries regardless of corpus
         size — one join for the Source/Venue pairs, one for the venue-less
         remainder, one batched review-status lookup. No per-paper enrichment
-        inside the grouping loop, which is where /feed goes wrong.
+        inside the grouping loop, which is where /feed goes wrong. The 2026-10-01
+        labelling fix added NO query: the split is computed from source_type,
+        which rows 1 and 2 already select.
+
+        IT CALLED 1,510 DOCUMENTS PAPERS AND THE VENUE TABLE WAS NEVER THE
+        PROBLEM (INV-KK-WEB-VENUE-ROWS-LABELLED). Measured 2026-10-01: of 3,467
+        venue-attributed Sources, 3,465 are research types and 2 are article, so
+        the Papers column over venues is correct and is untouched. The error was
+        wholly inside the venue-less bucket, which ALG-KK-WEB-VENUES sized at
+        107 — 3% of the corpus — and which the seeding campaign took to 1,574,
+        or 31%. A label that was a rounding error became the page's main claim.
+
+        NOTHING IS FILTERED OUT TO MAKE THE LABELS TRUE. The postcondition on
+        this route is explicit that the venue-less Sources "are never silently
+        omitted" because "this page's job is coverage of the corpus", and a
+        venue-less kernel-doc Source is not an anomaly — documentation has no
+        venue by construction. What changes is what the page SAYS.
         """
         conn = request.app.state.conn
 
@@ -1210,11 +1226,20 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
         all_sids = [r[3] for r in rows] + [r[0] for r in orphan_rows]
         review_status = _batch_review_status(conn, all_sids)
 
-        def _paper(sid: str, attrs_raw) -> dict:
+        def _source_row(sid: str, attrs_raw) -> dict:
+            """One row. Named for what it builds: it was _paper() and it has
+            always built rows for documentation too.
+            """
             a = json.loads(attrs_raw) if isinstance(attrs_raw, str) else (attrs_raw or {})
             return {
                 "source_id": sid,
-                "title": a.get("title", sid),
+                # URL BEFORE NODE ID. 57 Sources carry no title, and a row
+                # reading src-462ab441d987 is the defect that started this line
+                # of work. A url is always present and always readable; a title
+                # guessed from stored text would be neither — 22 of the 31
+                # untitled article/discourse Sources carry no text at all, and
+                # of the 9 that do, 5 open mid-prose.
+                "title": a.get("title") or a.get("url") or sid,
                 "url": a.get("url", ""),
                 "source_type": a.get("source_type", ""),
                 "published_date": a.get("published_date", a.get("source_date", "")),
@@ -1231,7 +1256,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                     "venue_type": venue_type or "other",
                     "papers": [],
                 }
-            entry["papers"].append(_paper(sid, s_attrs))
+            entry["papers"].append(_source_row(sid, s_attrs))
 
         venue_list = list(by_venue.values())
         for v in venue_list:
@@ -1239,17 +1264,50 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             v["papers"].sort(key=lambda p: p["published_date"] or "", reverse=True)
         venue_list.sort(key=lambda v: (-v["paper_count"], v["name"]))
 
-        unattributed = [_paper(sid, a) for sid, a in orphan_rows]
-        unattributed.sort(key=lambda p: p["published_date"] or "", reverse=True)
+        # THE VENUE-LESS BUCKET IS SPLIT BY WHAT IS IN IT, NOT FILTERED
+        # (INV-KK-WEB-VENUE-ROWS-LABELLED). One bucket of 1,574 rows headed by a
+        # word that is true of 17 of them was the defect; three buckets, each
+        # naming its own kind, is the fix. Every Source still appears, which is
+        # what ALG-KK-WEB-VENUES' postcondition requires. No extra query: both
+        # row sets already carry source_type.
+        from graph.rules import DOC_SOURCE_TYPES, RESEARCH_SOURCE_TYPES
 
-        total_papers = sum(v["paper_count"] for v in venue_list) + len(unattributed)
+        unattributed_groups = [
+            {"key": "documentation", "label": "No venue recorded — documentation",
+             "note": "canonical documentation has no venue by construction",
+             "rows": []},
+            {"key": "papers", "label": "No venue recorded — papers",
+             "note": "literature whose venue is genuinely missing", "rows": []},
+            {"key": "other", "label": "No venue recorded — other sources",
+             "note": "articles, CVE records and discussion, which are neither",
+             "rows": []},
+        ]
+        by_key = {g["key"]: g for g in unattributed_groups}
+        unattributed = []
+        for sid, a in orphan_rows:
+            row = _source_row(sid, a)
+            unattributed.append(row)
+            st = row["source_type"]
+            key = ("documentation" if st in DOC_SOURCE_TYPES
+                   else "papers" if st in RESEARCH_SOURCE_TYPES else "other")
+            by_key[key]["rows"].append(row)
+        unattributed.sort(key=lambda p: p["published_date"] or "", reverse=True)
+        for g in unattributed_groups:
+            g["rows"].sort(key=lambda p: p["published_date"] or "", reverse=True)
+            g["count"] = len(g["rows"])
+        unattributed_groups = [g for g in unattributed_groups if g["count"]]
+
+        # "sources", not "papers": this total counts all 1,574 venue-less rows,
+        # 1,510 of which are documentation.
+        total_sources = sum(v["paper_count"] for v in venue_list) + len(unattributed)
         return templates.TemplateResponse(
             request,
             "venues.html",
             {
                 "venues": venue_list,
                 "unattributed": unattributed,
-                "total_papers": total_papers,
+                "unattributed_groups": unattributed_groups,
+                "total_sources": total_sources,
             },
         )
 
