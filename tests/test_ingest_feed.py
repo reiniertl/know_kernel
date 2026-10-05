@@ -49,10 +49,14 @@ def state_path(tmp_path):
 
 
 def _item(url: str = "https://example.com/article", title: str = "Test Article") -> FeedItem:
+    # The content carries two distinct kernel terms so these items pass
+    # INV-KK-FEED-ITEM-KERNEL-RELEVANT and reach the dedup and state code these
+    # tests are actually about. Before that gate existed the content read
+    # "Some kernel discussion content." — one term, which the rule refuses.
     return FeedItem(
         title=title,
         url=url,
-        content="Some kernel discussion content.",
+        content="Some kernel discussion about the scheduler and io_uring.",
         published="2026-06-15",
         source_feed="test",
     )
@@ -643,3 +647,120 @@ class TestHNFeedPoller:
         state = load_feed_state(state_path)
         assert "hackernews" in state
         assert "https://lwn.net/611" in state["hackernews"]["seen_urls"]
+
+
+# --- INV-KK-FEED-ITEM-KERNEL-RELEVANT ---------------------------------------
+#
+# MEASURED 2026-10-05 over EVERY discourse Source in the corpus: all NINE are
+# off-topic. Venetian bridge brawls in 17th-century art, font-family
+# recommendations, Netflix batch compute with Kueue, three Phoronix desktop
+# items, a look at MinIO alternatives, free-threaded Python, and the Apple
+# Neural Engine. The feed path created a Source for every item a poller
+# returned, filtered only by URL duplication, and one poller reads Hacker News.
+#
+# kernel_filter was declared on FeedConfig and used NOWHERE. The gate was
+# anticipated and never wired.
+
+
+REAL_OFF_TOPIC = [
+    ("Venetian Bridge Brawls in 17th and 18th Century Art", ""),
+    ("Font-Family Recommendations", ""),
+    ("Netflix Simplified Batch Compute with Kueue", ""),
+    ("COSMIC's New System Monitor Is Looking Very Slick", ""),
+    ("[$] A look at MinIO alternatives: Ceph and Garage",
+     "a popular object-storage server that offered compatibility with S3"),
+    ("[$] Free-threaded Python: past, present, and future",
+     "the advent of the free-threaded version of the language, removing the GIL"),
+    ("Apple Neural Engine: Architecture, Programming, and Performance", ""),
+    ("Vim Patches Yielding Faster GTK3 Wayland Performance", ""),
+    ("KDE Plasma 6.7.2 To Fix KWin's Most Common Crash", ""),
+]
+
+
+def _relevance_item(title, content=""):
+    from ingest.feed import FeedItem
+    return FeedItem(title=title, url="https://example.com/x", content=content,
+                    published="2026-10-05", source_feed="t")
+
+
+def test_every_off_topic_source_the_corpus_actually_holds_is_refused():
+    """Not a fixture — these are the nine real titles, verbatim."""
+    from ingest.feed import item_is_kernel_relevant
+
+    admitted = [t for t, c in REAL_OFF_TOPIC
+                if item_is_kernel_relevant(_relevance_item(t, c))]
+    assert admitted == [], admitted
+
+
+def test_a_kernel_item_is_admitted():
+    """RECALL IS UNMEASURED AND THESE ARE HAND-WRITTEN. The corpus contains no
+    feed item that SHOULD have been admitted, so nine-of-nine refused is a
+    precision result on a set with no true positives. These three exist to stop
+    the rule tightening into one that admits nothing; they are not evidence
+    that the threshold is right."""
+    from ingest.feed import item_is_kernel_relevant
+
+    for title, content in (
+        ("sched_ext: The BPF extensible scheduler class",
+         "A new scheduler class using eBPF in the Linux kernel"),
+        ("io_uring and the future of Linux asynchronous I/O",
+         "the io_uring syscall interface in the kernel"),
+        ("A deep dive into RCU grace periods",
+         "RCU in the Linux kernel, read-copy-update and the VFS"),
+    ):
+        assert item_is_kernel_relevant(_relevance_item(title, content)), title
+
+
+def test_one_kernel_word_is_not_enough():
+    """"Netflix Simplified Batch Compute with Kueue" mentions a driver and
+    "A look at MinIO alternatives" mentions storage. The threshold is two
+    DISTINCT terms, and that is what separates an item about the kernel from
+    one that merely touches it."""
+    from ingest.feed import KERNEL_TERM_THRESHOLD, item_is_kernel_relevant
+
+    assert KERNEL_TERM_THRESHOLD == 2
+    assert not item_is_kernel_relevant(_relevance_item("A new driver for my toaster"))
+    assert item_is_kernel_relevant(_relevance_item("A new kernel driver for my toaster"))
+
+
+def test_kernel_filter_overrides_the_default_rule():
+    """The field was declared on FeedConfig and wired nowhere. A feed that is
+    entirely kernel material by construction should not be re-filtered by a
+    general rule whose recall is unmeasured."""
+    from ingest.feed import FeedConfig, item_is_kernel_relevant
+
+    cfg = FeedConfig(name="lkml", feed_type="rss", url="u", kernel_filter=".")
+    assert item_is_kernel_relevant(_relevance_item("Venetian Bridge Brawls"), cfg)
+    narrow = FeedConfig(name="x", feed_type="rss", url="u", kernel_filter="sched_ext")
+    assert not item_is_kernel_relevant(_relevance_item("A kernel driver and a syscall"), narrow)
+
+
+def test_a_refused_item_writes_no_node_and_is_counted(tmp_path, monkeypatch):
+    """A filter that discards without a record is indistinguishable from a feed
+    that returned nothing — the shape this project has now found six times."""
+    import json
+
+    from graph.schema import init_db
+    from ingest.feed import FeedConfig, FeedPoller
+
+    class _Poller(FeedPoller):
+        def fetch(self):
+            return [_relevance_item("Venetian Bridge Brawls in 17th and 18th Century Art"),
+                    _relevance_item("sched_ext: a BPF scheduler class for the Linux kernel",
+                          "kernel sched_ext bpf")]
+
+    conn = init_db(tmp_path / "feed.db")
+    state = tmp_path / "state.json"
+    p = _Poller(FeedConfig(name="hn", feed_type="hn", url="u"), state_path=state)
+    results = p.poll(conn)
+    conn.commit()
+
+    assert len(results) == 1, "the off-topic item was ingested"
+    sources = conn.execute(
+        "SELECT json_extract(attrs, '$.url') FROM nodes WHERE kind = 'Source'"
+    ).fetchall()
+    assert len(sources) == 1
+
+    recorded = json.loads(state.read_text())["hn"]
+    assert recorded["refused_off_topic"] == 1, recorded
+    conn.close()

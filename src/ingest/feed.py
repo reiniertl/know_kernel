@@ -68,6 +68,62 @@ def is_duplicate(conn: sqlite3.Connection, url: str, state: dict[str, Any], sour
     return url in seen_urls
 
 
+#: Terms that mark an item as being about the Linux kernel. Deliberately
+#: NARROW and about the kernel as such, not about computing: "memory" and
+#: "storage" and "performance" are what the nine off-topic Sources of
+#: 2026-10-05 were full of.
+KERNEL_TERMS = frozenset("""
+kernel linux syscall sched_ext ebpf bpf netfilter iommu dma kvm virtio cgroup
+cgroups namespace lkml mainline rcu vfs ext4 btrfs xfs overlayfs io_uring
+preempt mm vmalloc kmalloc slub page-cache hugetlb tlb numa lsm selinux
+apparmor landlock seccomp ftrace kprobe uprobe tracepoint perf_event module
+driver dts devicetree acpi pci usb scsi nvme block-layer irq softirq
+workqueue spinlock mutex futex kthread procfs sysfs debugfs
+""".split())
+
+#: How many distinct kernel terms an item must carry.
+#: ONE IS TOO FEW AND WAS MEASURED: "Netflix Simplified Batch Compute with
+#: Kueue" mentions a driver, and "A look at MinIO alternatives" mentions
+#: storage. TWO distinct terms is what separates an item about the kernel from
+#: one that merely touches it.
+KERNEL_TERM_THRESHOLD = 2
+
+_WORD_RE = re.compile(r"[a-z0-9_]+")
+
+
+def item_is_kernel_relevant(item: FeedItem, config: FeedConfig | None = None) -> bool:
+    """INV-KK-FEED-ITEM-KERNEL-RELEVANT: is this item about the kernel?
+
+    THE GATE THE OTHER ENTRANCE ALREADY HAD. INV-KK-SEED-PATH-DEFINITIONAL
+    refuses a document outside DOC_PATH_PREFIXES before any fetch, and has been
+    argued over and widened by measurement four times. The feed path had
+    nothing: ingest_item created a Source for every item a poller returned,
+    filtered only by URL duplication, and one of the pollers reads the Hacker
+    News API. A corpus with one guarded door and one open one is guarded by
+    neither.
+
+    MEASURED 2026-10-05 OVER EVERY discourse SOURCE IN THE CORPUS: all NINE are
+    off-topic — Venetian bridge brawls in 17th-century art, font-family
+    recommendations, Netflix batch compute with Kueue, three Phoronix desktop
+    items on Vim/GTK3, KDE Plasma and COSMIC, a look at MinIO alternatives, and
+    free-threaded Python. This rule refuses all nine.
+
+    THE SAMPLE HAS NO POSITIVE EXAMPLES AND THAT BOUNDS WHAT CAN BE CLAIMED.
+    Nine of nine refused is a precision result on a set with no true positives
+    in it; RECALL IS UNMEASURED, because this corpus contains no feed item that
+    should have been admitted. The threshold of two distinct terms is a
+    judgement, not a measurement, and the first legitimate item this refuses is
+    the evidence that would lower it. kernel_filter on FeedConfig — a field
+    declared and never wired until now — overrides this per feed for exactly
+    that case.
+    """
+    if config is not None and config.kernel_filter:
+        return bool(re.search(config.kernel_filter, f"{item.title} {item.content}",
+                              re.IGNORECASE))
+    words = set(_WORD_RE.findall(f"{item.title} {item.content}".lower()))
+    return len(words & KERNEL_TERMS) >= KERNEL_TERM_THRESHOLD
+
+
 def ingest_item(conn: sqlite3.Connection, item: FeedItem) -> tuple[str, str]:
     """INV-KK-FEED-SOURCE-NODE: create Source + Evidence nodes for a feed item.
 
@@ -122,10 +178,26 @@ class FeedPoller(ABC):
         source_state = state.get(self.config.name, {"seen_urls": [], "last_fetched_timestamp": ""})
         seen_urls: list[str] = source_state.get("seen_urls", [])
         seen_set = set(seen_urls)
+        # COUNTED, not silently dropped. A filter that discards without a
+        # record is indistinguishable from a feed that returned nothing — the
+        # shape this project has now found six times.
+        refused: list[str] = []
 
         for item in items:
             if is_duplicate(conn, item.url, state, self.config.name):
                 log.debug("Skipping duplicate URL: %s", item.url)
+                continue
+
+            # INV-KK-FEED-ITEM-KERNEL-RELEVANT, BEFORE the write and AFTER the
+            # dedup. Before the write because a refused item must leave no node
+            # behind; after the dedup because a URL already seen costs nothing
+            # to skip and re-testing it would only be slower. The url IS marked
+            # seen, so a refused item is not re-tested on every poll — a
+            # refusal nobody records is one that is paid for daily.
+            if not item_is_kernel_relevant(item, self.config):
+                log.debug("Skipping off-topic item: %s", item.url)
+                refused.append(item.url)
+                seen_set.add(item.url)
                 continue
 
             src_id, ev_id = ingest_item(conn, item)
@@ -136,8 +208,14 @@ class FeedPoller(ABC):
         if items:
             source_state["last_fetched_timestamp"] = items[-1].published
             source_state["last_fetched_url"] = items[-1].url
+        source_state["refused_off_topic"] = (
+            source_state.get("refused_off_topic", 0) + len(refused))
         state[self.config.name] = source_state
         save_feed_state(state, self.state_path)
+        if refused:
+            log.info("%s: refused %d off-topic item(s) "
+                     "(INV-KK-FEED-ITEM-KERNEL-RELEVANT)",
+                     self.config.name, len(refused))
 
         return results
 
