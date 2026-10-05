@@ -380,12 +380,28 @@ class DocHarvestResult:
     rejected_not_mechanism: int = 0
     rejected_incomplete: int = 0
     rejected_not_a_class: int = 0
+    #: THE NAMES BEHIND rejected_not_a_class, NOT JUST HOW MANY.
+    #: Measured 2026-10-05: userspace-api rejected 299 names over 408 documents
+    #: against driver-api's 32 over 196, and NOTHING RECORDED WHAT THEY WERE. A
+    #: count without its subjects cannot distinguish a gate working hard on an
+    #: ABI reference manual from a gate that has started refusing good names —
+    #: the two look identical, which is the null-indistinguishable-from-absence
+    #: shape this project keeps finding. The question was answerable only by
+    #: grouping documents by subdirectory and inferring; with the names it is a
+    #: one-line read. Bounded so a pathological batch cannot bloat the report.
+    rejected_names: list[str] = field(default_factory=list)
     attached_foreign: int = 0
     subsystem_id: str = ""
     subsystem_unmatched: str = ""
     dry_run: bool = False
     prompt_chars: int = 0
     cached_tokens: int = 0
+
+
+#: How many refused names one document's result keeps. A document proposing
+#: more than this is already pathological and the count still tells the truth;
+#: the names are a diagnostic, not a ledger.
+MAX_REJECTED_NAMES_RECORDED = 12
 
 
 def new_batch_id() -> str:
@@ -550,6 +566,8 @@ def harvest_document(
         # INV-KK-HARVEST-NAME-IS-A-CLASS, AFTER matching and never before.
         if not name_is_a_class(name, subsystems):
             result.rejected_not_a_class += 1
+            if len(result.rejected_names) < MAX_REJECTED_NAMES_RECORDED:
+                result.rejected_names.append(name)
             continue
 
         if not _proposal_is_complete(item):

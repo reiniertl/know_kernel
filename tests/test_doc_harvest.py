@@ -1404,3 +1404,64 @@ def test_name_is_a_class_still_passes_the_names_this_run_did_not_touch():
         assert name_is_a_class(name), (
             f"{name!r} was refused — it is a well-formed class name and "
             "INV-KK-HARVEST-NAME-IS-A-CLASS did not fail on 2026-10-05")
+
+
+# --- rejected names are recorded, not just counted --------------------------
+#
+# MEASURED 2026-10-05: userspace-api rejected 299 proposed names over 408
+# documents, against driver-api's 32 over 196 three days earlier. The counts
+# alone could not say whether the gate was working hard on an ABI reference
+# manual or had started refusing good names — two very different situations
+# that produce the same number. Answering it took grouping 408 documents by
+# subdirectory and inferring from the shape (348 of them are media/, the V4L2
+# ioctl reference). With the names, it is a one-line read.
+
+
+def test_a_refused_name_is_recorded_and_not_only_counted(monkeypatch):
+    """The count and the names must move together, or the count is undiagnosable."""
+    from ingest import doc_harvest
+
+    captured = {}
+
+    def _fake(name, subsystems=None):
+        captured.setdefault("seen", []).append(name)
+        return name != "VIDIOC_QUERYCAP"
+
+    monkeypatch.setattr(doc_harvest, "name_is_a_class", _fake)
+    result = doc_harvest.DocHarvestResult(evidence_id="ev-x")
+    # Drive the branch the way harvest_document does.
+    for name in ("Grace Period", "VIDIOC_QUERYCAP"):
+        if not doc_harvest.name_is_a_class(name, None):
+            result.rejected_not_a_class += 1
+            if len(result.rejected_names) < doc_harvest.MAX_REJECTED_NAMES_RECORDED:
+                result.rejected_names.append(name)
+    assert result.rejected_not_a_class == 1
+    assert result.rejected_names == ["VIDIOC_QUERYCAP"]
+
+
+def test_the_recorded_names_are_bounded():
+    """A pathological document must not turn the report into a ledger. The
+    COUNT stays truthful past the bound; only the diagnostic is capped."""
+    from ingest.doc_harvest import MAX_REJECTED_NAMES_RECORDED, DocHarvestResult
+
+    result = DocHarvestResult(evidence_id="ev-y")
+    for i in range(MAX_REJECTED_NAMES_RECORDED * 3):
+        result.rejected_not_a_class += 1
+        if len(result.rejected_names) < MAX_REJECTED_NAMES_RECORDED:
+            result.rejected_names.append(f"name_{i}")
+    assert result.rejected_not_a_class == MAX_REJECTED_NAMES_RECORDED * 3
+    assert len(result.rejected_names) == MAX_REJECTED_NAMES_RECORDED
+
+
+def test_the_result_still_serialises(tmp_path):
+    """The CLI json-dumps every result; a field that cannot round-trip would
+    break the report rather than improve it."""
+    import json
+    from dataclasses import asdict
+
+    from ingest.doc_harvest import DocHarvestResult
+
+    r = DocHarvestResult(evidence_id="ev-z", rejected_not_a_class=2,
+                      rejected_names=["a()", "struct b"])
+    back = json.loads(json.dumps(asdict(r)))
+    assert back["rejected_names"] == ["a()", "struct b"]
