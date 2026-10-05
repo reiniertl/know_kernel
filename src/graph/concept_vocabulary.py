@@ -22,6 +22,7 @@ paraphrase.
 
 from __future__ import annotations
 
+import math
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -1359,3 +1360,108 @@ def record_distinct(
         return False
     add_edge(conn, "contradicts", concept_a, concept_b)
     return True
+
+
+#: How many suggestions the subsystem chooser puts at the top.
+#: THREE, BECAUSE THREE IS WHERE THE MEASUREMENT IS. Held out over 343 of the
+#: 1,695 Concepts the harvest has already labelled: top-1 76.7%, top-2 92.7%,
+#: top-3 94.8%, top-5 97.1%. Two is noticeably worse and five is most of a
+#: 21-item list, which would make the ranking pointless.
+SUBSYSTEM_SUGGESTION_COUNT = 3
+
+#: Words carrying no subsystem signal. Hand-written and deliberately short: a
+#: longer list is a tuning knob nobody can justify, and the IDF weighting below
+#: already suppresses anything common.
+_SUGGEST_STOPWORDS = frozenset("""
+the a an and or of to in is are for with that this it as by on at from be can
+which allows provides mechanism system used use using when while into their its
+they them other than such more not no all any each some only also both during
+within without through between
+""".split())
+
+_SUGGEST_TOKEN_RE = re.compile(r"[a-z0-9_]+")
+
+
+def _suggest_tokens(text: str) -> list[str]:
+    return [w for w in _SUGGEST_TOKEN_RE.findall((text or "").lower())
+            if w not in _SUGGEST_STOPWORDS and len(w) > 2]
+
+
+def rank_subsystems_for_concept(
+    conn: sqlite3.Connection, concept_id: str, limit: int = SUBSYSTEM_SUGGESTION_COUNT
+) -> list[str]:
+    """The Subsystems most likely to be this Concept's home, best first.
+
+    A SUGGESTION AND NEVER A DECISION (INV-KK-WEB-SUBSYSTEM-SUGGESTIONS-RANKED).
+    The caller renders these at the top of a select that still offers all 21 and
+    pre-selects none. At 76.7% top-1 this model is a good hint and a bad
+    decision-maker, and the project already refused a path table at roughly the
+    same accuracy; what justifies it is the 94.8% top-3, which is a claim about
+    a LIST and not about a choice.
+
+    THE TRAINING DATA IS THE HARVEST'S OWN WORK, which is why this needs no
+    model call and no new corpus: 1,695 live Concepts already carry a
+    belongs-to edge the harvest wrote, and every one is an example of a
+    description beside its subsystem. A Concept with no description, or a
+    vocabulary with no labelled examples, yields an empty list rather than a
+    guess — the caller then renders the plain alphabetical select it always had.
+
+    Cost is one query over labelled Concepts per call. That is bounded by the
+    corpus and not by the page, and this route renders ONE concept.
+    """
+    row = conn.execute(
+        "SELECT json_extract(attrs, '$.name'), json_extract(attrs, '$.description') "
+        "FROM nodes WHERE id = ? AND kind = 'Concept'", (concept_id,)
+    ).fetchone()
+    if row is None:
+        return []
+    target = f"{row[0] or ''} {row[1] or ''}"
+    if not _suggest_tokens(target):
+        return []
+
+    labelled = conn.execute(
+        "SELECT json_extract(n.attrs, '$.name'), json_extract(n.attrs, '$.description'), "
+        "json_extract(s.attrs, '$.name') "
+        "FROM nodes n JOIN edges e ON e.source_id = n.id AND e.kind = 'belongs-to' "
+        "JOIN nodes s ON s.id = e.target_id AND s.kind = 'Subsystem' "
+        "WHERE n.kind = 'Concept' AND n.id != ? "
+        "AND COALESCE(json_extract(n.attrs, '$.curation_state'), '') != 'retired'",
+        (concept_id,),
+    ).fetchall()
+    docs = [(f"{n or ''} {d or ''}", s) for n, d, s in labelled if s and (d or "").strip()]
+    if not docs:
+        return []
+
+    df: dict[str, int] = {}
+    for text, _ in docs:
+        for w in set(_suggest_tokens(text)):
+            df[w] = df.get(w, 0) + 1
+    total = len(docs)
+    idf = {w: math.log(total / (1 + n)) for w, n in df.items()}
+
+    centroid: dict[str, dict[str, float]] = {}
+    for text, subsystem in docs:
+        vec = centroid.setdefault(subsystem, {})
+        counts: dict[str, int] = {}
+        for w in _suggest_tokens(text):
+            counts[w] = counts.get(w, 0) + 1
+        for w, k in counts.items():
+            vec[w] = vec.get(w, 0.0) + (1 + math.log(k)) * idf.get(w, 0.0)
+
+    counts = {}
+    for w in _suggest_tokens(target):
+        counts[w] = counts.get(w, 0) + 1
+    q = {w: (1 + math.log(k)) * idf.get(w, 0.0) for w, k in counts.items()}
+    qn = math.sqrt(sum(v * v for v in q.values()))
+    if not qn:
+        return []
+
+    scored = []
+    for subsystem, vec in centroid.items():
+        vn = math.sqrt(sum(v * v for v in vec.values()))
+        if not vn:
+            continue
+        dot = sum(v * vec.get(w, 0.0) for w, v in q.items())
+        scored.append((dot / (qn * vn), subsystem))
+    scored.sort(reverse=True)
+    return [s for _, s in scored[:limit]]

@@ -83,14 +83,34 @@
      classifying is not reading. #}
   <h4>Subsystem</h4>
   <p>
+    {# RANKED, NEVER CHOSEN (INV-KK-WEB-SUBSYSTEM-SUGGESTIONS-RANKED). The
+       three most likely by description similarity sit at the top, in their own
+       labelled group, and every subsystem remains reachable below. NOTHING IS
+       PRE-SELECTED: a pre-filled value a human confirms is a bulk assignment
+       with extra steps, and it would collect the model's 23% top-1 error rate
+       under the appearance of review. Measured top-3 94.8%, top-1 76.7% — the
+       first number justifies the list, the second forbids the choice. #}
     <select id="concept-subsystem">
+      <option value="" disabled selected>Choose a subsystem&hellip;</option>
+      {% if subsystem_suggestions %}
+      <optgroup label="Suggested (from this concept's description — a hint, not an answer)">
+        {% for sub in subsystems if sub.name in subsystem_suggestions %}
+        <option value="{{ sub.id }}">{{ sub.name }}</option>
+        {% endfor %}
+      </optgroup>
+      <optgroup label="All subsystems">
+      {% endif %}
       {% for sub in subsystems %}
       <option value="{{ sub.id }}">{{ sub.name }}</option>
       {% endfor %}
+      {% if subsystem_suggestions %}</optgroup>{% endif %}
     </select>
     <button type="button" onclick="assignSubsystem()">Assign</button>
     <span class="muted small">
       A concept belongs to one subsystem; assigning replaces any existing one.
+      {% if subsystem_suggestions %}The suggestions are right about 95% of the
+      time as a group of three and 77% as a first pick, so read before you
+      click.{% endif %}
     </span>
   </p>
   <p class="muted small" id="concept-subsystem-status"></p>
@@ -202,6 +222,9 @@ async function mergeConcept(loser, winner, winnerName) {
 async function assignSubsystem() {
   var sel = document.getElementById("concept-subsystem");
   var el = document.getElementById("concept-subsystem-status");
+  // The placeholder is selected by default so no suggestion is ever submitted
+  // by accident (INV-KK-WEB-SUBSYSTEM-SUGGESTIONS-RANKED).
+  if (!sel.value) { el.textContent = "pick a subsystem first"; return; }
   el.textContent = "assigning\u2026";
   var r = await fetch("/api/concept-subsystem/{{ node.id }}/" + encodeURIComponent(sel.value), {method: "POST"});
   var body = await r.json();

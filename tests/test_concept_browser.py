@@ -689,3 +689,91 @@ def test_the_split_sums_to_the_weight_on_every_live_concept():
             f"{docs_only} of {len(cids)} rest on documentation alone")
     finally:
         conn.close()
+
+
+# --- INV-KK-WEB-SUBSYSTEM-SUGGESTIONS-RANKED -------------------------------
+#
+# MEASURED 2026-10-05 on the 1,695 concepts the harvest has already labelled,
+# held out 80/20: top-1 76.7%, top-2 92.7%, TOP-3 94.8%, top-5 97.1%, against
+# an always-guess baseline of 30.8%. Better than every path rule tried — 7 of
+# 77, then 66 of 138 at ~75%, then trace/ at 25 of 36 — and still at the
+# accuracy the second of those was REFUSED at. So it ranks and never assigns:
+# 94.8% is a claim about a list, 76.7% is a claim about a choice.
+
+
+def test_the_suggestions_never_pre_select_anything(client):
+    """A pre-filled value a human confirms is a bulk assignment with extra
+    steps, collecting a 23% error rate under the appearance of review.
+
+    concept-orphan carries no subsystem, so the chooser renders for it.
+    """
+    text = client.get("/concepts/concept-orphan").text
+    assert "<select id=\"concept-subsystem\">" in text, "the chooser did not render"
+    assert 'disabled selected' in text, "no inert placeholder — something is pre-selected"
+    assert text.count('<option value="" disabled selected>') == 1
+    assert 'selected>' not in text.replace('disabled selected>', ''), (
+        "a real option is pre-selected")
+
+
+def test_every_subsystem_stays_reachable_when_suggestions_are_shown(tmp_path):
+    """Ranking must not become filtering. The human's answer may be any of the
+    21, and a suggestion that hid the other 18 would be the bulk rule this
+    refused, implemented as a dropdown."""
+    from graph.engine import add_node
+
+    path = tmp_path / "suggest.db"
+    conn = init_db(path)
+    _concept(conn, "c-x", "Memory Barriers")
+    names = ["Memory Management", "Synchronization", "Networking",
+             "File Systems", "Scheduler"]
+    for i, n in enumerate(names):
+        add_node(conn, f"sub-{i}", "Subsystem", {"name": n})
+    conn.commit()
+    conn.close()
+    with TestClient(create_app(str(path))) as c:
+        text = c.get("/concepts/c-x").text
+    for n in names:
+        assert f">{n}</option>" in text, f"{n} is not reachable"
+
+
+def test_the_ranker_returns_nothing_rather_than_guessing(tmp_path):
+    """No labelled examples means no suggestions — the page falls back to the
+    plain alphabetical select it always had. A ranker with no training data
+    that still emitted three names would be inventing them."""
+    from graph.concept_vocabulary import rank_subsystems_for_concept
+    from graph.engine import add_node
+
+    conn = init_db(tmp_path / "cold.db")
+    _concept(conn, "c-cold", "Memory Barriers")
+    add_node(conn, "sub-0", "Subsystem", {"name": "Memory Management"})
+    conn.commit()
+    assert rank_subsystems_for_concept(conn, "c-cold") == []
+    conn.close()
+
+
+def test_the_ranker_is_bounded_to_three(tmp_path):
+    from graph.concept_vocabulary import (SUBSYSTEM_SUGGESTION_COUNT,
+                                          rank_subsystems_for_concept)
+    from graph.engine import add_edge, add_node
+
+    conn = init_db(tmp_path / "many.db")
+    for i, (sub, word) in enumerate((
+            ("Memory Management", "page memory allocation"),
+            ("Networking", "packet socket transmit"),
+            ("Scheduler", "task runqueue priority"),
+            ("File Systems", "inode directory mount"),
+            ("Synchronization", "lock barrier atomic"))):
+        add_node(conn, f"sub-{i}", "Subsystem", {"name": sub})
+        _concept(conn, f"c-{i}", f"Thing {i}")
+        conn.execute("UPDATE nodes SET attrs = json_set(attrs, '$.description', ?) "
+                     "WHERE id = ?", (f"A mechanism about {word}.", f"c-{i}"))
+        add_edge(conn, "belongs-to", f"c-{i}", f"sub-{i}")
+    _concept(conn, "c-target", "Page Allocator")
+    conn.execute("UPDATE nodes SET attrs = json_set(attrs, '$.description', ?) "
+                 "WHERE id = ?", ("Handles page memory allocation.", "c-target"))
+    conn.commit()
+    out = rank_subsystems_for_concept(conn, "c-target")
+    assert len(out) == SUBSYSTEM_SUGGESTION_COUNT == 3
+    assert out[0] == "Memory Management", out
+    assert "c-target" not in out
+    conn.close()

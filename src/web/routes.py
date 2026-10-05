@@ -1140,6 +1140,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                     "weight": concept_weight(conn, other)})
 
         subsystems: list[dict] = []
+        subsystem_suggestions: list[str] = []
         if node["kind"] == "Concept":
             # ALG-KK-WEB-CONCEPT-SUBSYSTEM. The 22 Subsystems, offered as a
             # choice — this route may not create one, so the select IS the
@@ -1150,6 +1151,17 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
                     "SELECT id, json_extract(attrs, '$.name') FROM nodes "
                     "WHERE kind = 'Subsystem' ORDER BY 2").fetchall()
             ]
+            # RANKED, NEVER CHOSEN (INV-KK-WEB-SUBSYSTEM-SUGGESTIONS-RANKED).
+            # Measured on 343 held-out Concepts the harvest had labelled:
+            # top-1 76.7%, TOP-3 94.8%, baseline 30.8%. 76.7% is the accuracy
+            # at which a path table was already refused for bulk assignment, so
+            # this suggests and the human decides. The full list stays, nothing
+            # is pre-selected, and no edge is created by this route.
+            # Only computed for a Concept that has no subsystem yet: a Concept
+            # with one needs no suggestion and the query is not free.
+            if not _concept_subsystem(conn, node_id):
+                from graph.concept_vocabulary import rank_subsystems_for_concept
+                subsystem_suggestions = rank_subsystems_for_concept(conn, node_id)
 
         return templates.TemplateResponse(
             request,
@@ -1157,6 +1169,7 @@ def setup_routes(app: FastAPI, templates: Jinja2Templates) -> None:
             {
                 "node": node,
                 "subsystems": subsystems,
+                "subsystem_suggestions": subsystem_suggestions,
                 "edges": edges,
                 "grouped_edges": grouped_edges,
                 "node_labels": node_labels,
