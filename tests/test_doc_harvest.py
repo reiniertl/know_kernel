@@ -1332,3 +1332,75 @@ def test_reverting_one_batch_leaves_another_batch_s_marks(conn):
     revert_batch(conn, batch_a)
     unread, _, _, _, _ = select_doc_evidence(conn)
     assert unread == [ev_a]
+
+
+# --- INV-KK-HARVEST-NAME-IS-UNAMBIGUOUS ------------------------------------
+#
+# READ 2026-10-05: all 86 collision pairs, from their DESCRIPTIONS rather than
+# their names. 23 of them were ONE defect — a real mechanism given a name with
+# no subsystem in it. "Trace Events" is the DWC3 USB driver's, "Driver
+# Registration" is VME's, "Protocol Driver" is SPI's, "Signal" is an IIO
+# counter's. Fourteen concepts; "Driver Registration" alone caused five
+# collisions.
+#
+# THE PROMPT ASKED FOR IT, WHICH IS WHY NO GATE CAUGHT IT. The schema line read
+# '"name": "<the mechanism, as a general class>"' and the definition demanded a
+# mechanism that "exists independently of this one document". The model
+# complied. Two code-level gates were measured and both ranked legitimate names
+# ABOVE defective ones — token containment gives sysfs 7 and Device
+# Registration 7 against Trace Events 3 and Device Platform Data 0; requiring
+# the name to echo its document path would refuse 807 of 1,424 legitimate
+# concepts. The fix is in the instruction, and an instruction has no other
+# guard than a test that reads it.
+
+
+def test_the_prompt_tells_the_model_the_vocabulary_outlives_the_document():
+    """The disambiguation instruction, asserted by content and not by phrase.
+
+    A prompt is deleted by an edit that looks like tidying, and nothing else
+    here would notice: the harvest would keep running and keep minting names
+    that collide four ways. This is the same guard shape start.sh carries.
+    """
+    from ingest.doc_harvest import HARVEST_SYSTEM_PROMPT
+
+    # Whitespace-normalised: the prompt is hard-wrapped, so a phrase the model
+    # reads as one unit spans a newline in the source. Asserting on the raw
+    # string would make this test fail on a reflow, which is not the change it
+    # exists to catch.
+    text = " ".join(HARVEST_SYSTEM_PROMPT.split())
+    assert "DRIVER" in text and "BUS" in text, (
+        "the prompt no longer tells the model to qualify by driver or bus")
+    assert "Trace Events" in text, (
+        "the worked example is gone — the instruction without the example is "
+        "the instruction that was already there and was already complied with")
+    for qualified in ("DWC3 Trace Events", "VME Driver Registration",
+                      "SPI Protocol Driver"):
+        assert qualified in text, f"{qualified!r} missing from the prompt"
+
+
+def test_the_prompt_still_permits_a_genuinely_general_name():
+    """The instruction must not be read as 'always qualify'.
+
+    Grace Period, Copy-on-Write and Journaling are general and their bare names
+    are correct. An over-correction here would be as wrong as the collisions,
+    in the other direction — the same trap the 'paper' sweep had to avoid.
+    """
+    from ingest.doc_harvest import HARVEST_SYSTEM_PROMPT
+
+    text = " ".join(HARVEST_SYSTEM_PROMPT.split())
+    assert "does NOT conflict" in text or "really is general" in text, (
+        "the prompt no longer says a general mechanism keeps its bare name")
+    assert "Grace Period" in text
+
+
+def test_name_is_a_class_still_passes_the_names_this_run_did_not_touch():
+    """The 14 defective names ARE classes and this gate must keep accepting
+    them — the defect is their SCOPE, not their class-ness, and a gate change
+    here would be the wrong fix applied to the right finding."""
+    from ingest.doc_harvest import name_is_a_class
+
+    for name in ("Trace Events", "Driver Registration", "Protocol Driver",
+                 "Error Handling", "Memory Device", "Bridge Driver"):
+        assert name_is_a_class(name), (
+            f"{name!r} was refused — it is a well-formed class name and "
+            "INV-KK-HARVEST-NAME-IS-A-CLASS did not fail on 2026-10-05")

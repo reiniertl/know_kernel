@@ -70,6 +70,22 @@ at the level of the whole subsystem. RCU is NOT one concept in this vocabulary:
 Grace Period and Quiescent State Detection stand beside it as separate entries.
 If a document defines three mechanisms, return three.
 
+THE NAME MUST STILL MEAN ONE THING WHEN THIS DOCUMENT IS GONE. You are reading
+one document; the vocabulary spans hundreds. A name that is obvious here can be
+ambiguous there, and the ambiguity is invisible to you because the other
+documents are not in front of you. IF THE MECHANISM BELONGS TO ONE DRIVER, BUS
+OR PROTOCOL, THE NAME MUST SAY WHICH. Writing "Trace Events" for the DWC3 USB
+driver's tracing, "Driver Registration" for the VME subsystem's, "Protocol
+Driver" for SPI's or "Signal" for a counter's data stream produces a name that
+four unrelated documents will all claim. "DWC3 Trace Events", "VME Driver
+Registration", "SPI Protocol Driver" and "Counter Signal" are the same concepts,
+named so they survive the company of the rest of the corpus.
+
+This does NOT conflict with naming a general class: where the mechanism really
+is general — Grace Period, Copy-on-Write, Journaling, Scatter-Gather — the bare
+name is right and is what you should use. The test is whether another kernel
+subsystem could define something it would also call this. If it could, qualify.
+
 PREFER A NAME ALREADY IN THE VOCABULARY. You will be shown the existing concept
 names. If this document defines one of them, USE THAT NAME EXACTLY — the
 document becomes further evidence for an entry that already exists, which is
@@ -84,7 +100,7 @@ Return ONLY JSON:
   "subsystem": "<exactly one name from the SUBSYSTEMS list, or \\"none\\">",
   "concepts": [
     {
-      "name": "<the mechanism, as a general class>",
+      "name": "<the mechanism, as a general class — qualified by its driver, bus or protocol if it belongs to one>",
       "description": "<what it is and what problem it solves, 2-4 sentences>",
       "artifact_class": "abstracted-mechanism",
       "key_properties": ["<property>", "..."],
