@@ -290,6 +290,44 @@ def document_is_navigation(text: str) -> bool:
     return in_toctree / total >= NAVIGATION_TOCTREE_SHARE
 
 
+#: A filename that enumerates hardware rather than defining a mechanism.
+#: Documentation/.../*-cardlist.rst lists the device ids a driver supports.
+CARDLIST_FILENAME = "cardlist"
+
+
+def document_is_a_card_list(url: str) -> bool:
+    """INV-KK-HARVEST-DOCUMENT-DEFINES: is this a table of device ids?
+
+    A FILENAME TEST, WHICH THIS PROJECT HAS REFUSED THREE TIMES BEFORE AND
+    ACCEPTS HERE ONLY BECAUSE THE READING SAID SO. A path groups DOCUMENTATION
+    rather than MECHANISMS — measured at 7 of 77, then 66 of 138, then 25 of 36
+    — so the pattern was not trusted. All 64 Concepts from the three suspect
+    filename kinds were read on 2026-10-05 before anything was filtered, and
+    only one of the three survived.
+
+    CARD LISTS DID NOT SURVIVE. bttv-cardlist.rst, cx88-cardlist.rst,
+    em28xx-cardlist.rst and twenty-odd dvb-usb-*-cardlist.rst files produced 36
+    Concepts: "BTTV Card Identification", "DVB USB Device List", "Modprobe
+    Parameter for Tuner Selection", and "DVB-USB Device Identification" SIX
+    TIMES from six different files. A card list is to a driver what a sysctl
+    table is to a subsystem, and HARVEST_SYSTEM_PROMPT already refuses the
+    latter.
+
+    THE OTHER TWO KINDS ARE NOT FILTERED AND THAT IS THE POINT.
+    index.rst was predicted to be a table of contents; its 20 Concepts include
+    Page Cache, Journaling, eBPF, Virtual Filesystem (VFS) Layer and Ring
+    Buffer. A subsystem's index.rst often carries real prose, which is why
+    document_is_navigation measures the TOCTREE SHARE and not the name, and why
+    it correctly let these through. *-sysctl.rst was predicted to be a list of
+    knobs and is mixed: TCP Congestion Control, TCP Fast Open, Path MTU
+    Discovery and Segment Routing for IPv6 are real mechanisms documented
+    beside their tunables. Filtering index.rst would delete Page Cache;
+    filtering sysctl would delete TCP Congestion Control. The prediction was 64
+    bad and the reading gave 36.
+    """
+    return CARDLIST_FILENAME in (url or "").rsplit("/", 1)[-1].lower()
+
+
 def document_announces_a_procedure(text: str) -> bool:
     """INV-KK-HARVEST-DOCUMENT-DEFINES: is this document ABOUT a procedure?
 
@@ -694,11 +732,11 @@ def select_doc_evidence(
     source_types: tuple[str, ...] | None = None,
     include_harvested: bool = False,
     path_prefixes: tuple[str, ...] | None = None,
-) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
-    """Evidence of canonical documents, split four ways.
+) -> tuple[list[str], list[str], list[str], list[str], list[str], list[str]]:
+    """Evidence of canonical documents, split five ways.
 
     Returns (with_text, skipped_empty, skipped_harvested, skipped_procedural,
-    skipped_navigation).
+    skipped_navigation, skipped_card_list).
 
     PROCEDURAL DOCUMENTS ARE REFUSED HERE AND NOT IN harvest_document, per
     INV-KK-HARVEST-DOCUMENT-DEFINES, because refusing at selection costs no
@@ -751,7 +789,8 @@ def select_doc_evidence(
         params.extend(f"%{prefix}%" for prefix in path_prefixes)
 
     rows = conn.execute(
-        "SELECT e.id, COALESCE(json_extract(e.attrs, '$.text'), '') FROM nodes e "
+        "SELECT e.id, COALESCE(json_extract(e.attrs, '$.text'), ''), "
+        "COALESCE(json_extract(src.attrs, '$.url'), '') FROM nodes e "
         "JOIN edges s ON s.source_id = e.id AND s.kind = 'sourced-from' "
         "JOIN nodes src ON src.id = s.target_id "
         "WHERE e.kind = 'Evidence' "
@@ -777,13 +816,23 @@ def select_doc_evidence(
         if r[1].strip() and r[0] not in set(procedural)
         and document_is_navigation(r[1])
     ]
-    refused = set(procedural) | set(navigation)
+    # INV-KK-HARVEST-DOCUMENT-DEFINES' third genre, counted separately from the
+    # other two for the same reason they are counted separately from each
+    # other: a refusal whose cause is folded into another's is a number nobody
+    # can act on. Unlike the first two this one reads the URL, because a card
+    # list's text is a well-formed table and nothing in it announces what it is.
+    card_lists = [
+        r[0] for r in rows
+        if r[1].strip() and r[0] not in set(procedural) | set(navigation)
+        and document_is_a_card_list(r[2])
+    ]
+    refused = set(procedural) | set(navigation) | set(card_lists)
     with_text = [
         r[0] for r in rows if r[1].strip() and r[0] not in refused
     ]
 
     if include_harvested:
-        return with_text, skipped, [], procedural, navigation
+        return with_text, skipped, [], procedural, navigation, card_lists
 
     # A CONCEPT EDGE IS NOT THE SAME SET AS "HAS BEEN READ", and conflating
     # them cost a repeat read of 10 documents in 99 (INV-KK-HARVEST-READ-RECORDED).
@@ -805,7 +854,7 @@ def select_doc_evidence(
     }
     unread = [e for e in with_text if e not in harvested]
     already = [e for e in with_text if e in harvested]
-    return unread, skipped, already, procedural, navigation
+    return unread, skipped, already, procedural, navigation, card_lists
 
 
 # ---------------------------------------------------------------------------

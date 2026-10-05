@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> None:
 
     batch_id = new_batch_id()
     (evidence_ids, skipped_empty, skipped_harvested, skipped_procedural,
-     skipped_navigation) = select_doc_evidence(
+     skipped_navigation, skipped_card_list) = select_doc_evidence(
         conn, tuple(args.source_types) if args.source_types else None,
         include_harvested=args.include_harvested,
         path_prefixes=tuple(args.subtrees) if args.subtrees else None)
@@ -165,6 +165,10 @@ def main(argv: list[str] | None = None) -> None:
         # contents. Counted apart from procedural because the two
         # refusals have different causes and different fixes.
         "skipped_navigation": len(skipped_navigation),
+        # Counted separately from navigation: a card list is refused on its
+        # FILENAME where a toctree is refused on its content, and a run that
+        # reported them as one number could not tell which rule had fired.
+        "skipped_card_list": len(skipped_card_list),
         "attempted": len(evidence_ids),
         "errors": len(errors),
         "concepts_created": sum(len(r["concepts_created"]) for r in results),

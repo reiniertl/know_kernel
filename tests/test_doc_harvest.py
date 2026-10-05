@@ -313,7 +313,7 @@ def test_documents_with_no_text_are_filtered_before_the_limit(conn):
     for n in ("c", "d"):
         _doc_source(conn, n, text="")
     conn.commit()
-    with_text, skipped, _, _, _ = select_doc_evidence(conn)
+    with_text, skipped, _, _, _, _ = select_doc_evidence(conn)
     assert sorted(with_text) == ["ev-a", "ev-b"]
     assert sorted(skipped) == ["ev-c", "ev-d"]
 
@@ -322,7 +322,7 @@ def test_only_canonical_documentation_is_selected(conn):
     _doc_source(conn, "doc", source_type="kernel-doc")
     _doc_source(conn, "paper", source_type="preprint")
     conn.commit()
-    with_text, _, _, _, _ = select_doc_evidence(conn)
+    with_text, _, _, _, _, _ = select_doc_evidence(conn)
     assert with_text == ["ev-doc"]
 
 
@@ -861,7 +861,7 @@ def test_selection_excludes_documents_already_harvested(conn):
                      client=MockLLMClient([_reply([_mech("Work Stealing")])]))
     conn.commit()
 
-    unread, empty, already, _, _ = select_doc_evidence(conn)
+    unread, empty, already, _, _, _ = select_doc_evidence(conn)
     assert unread == [ev_new]
     assert already == [ev_done]
     assert empty == []
@@ -882,7 +882,7 @@ def test_a_non_concept_edge_does_not_count_as_harvested(conn):
     add_edge(conn, "extracted-from", "pp-1", ev)
     conn.commit()
 
-    unread, _, already, _, _ = select_doc_evidence(conn)
+    unread, _, already, _, _, _ = select_doc_evidence(conn)
     assert unread == [ev], "a non-Concept edge was mistaken for a harvest"
     assert already == []
 
@@ -893,7 +893,7 @@ def test_include_harvested_restores_the_whole_corpus(conn):
     harvest_document(conn, ev_done, new_batch_id(),
                      client=MockLLMClient([_reply([_mech("Work Stealing")])]))
     conn.commit()
-    unread, _, already, _, _ = select_doc_evidence(conn, include_harvested=True)
+    unread, _, already, _, _, _ = select_doc_evidence(conn, include_harvested=True)
     assert sorted(unread) == sorted([ev_done, ev_new])
     assert already == []
 
@@ -1056,7 +1056,7 @@ def test_a_procedural_document_is_refused_at_selection(conn):
     ev_mech = _doc_source(conn, "vfs", text="VFS\n===\n\nThis document defines "
                                             "the virtual filesystem switch.")
     conn.commit()
-    unread, empty, already, procedural, _ = select_doc_evidence(conn)
+    unread, empty, already, procedural, _, _ = select_doc_evidence(conn)
     assert unread == [ev_mech]
     assert procedural == [ev_proc]
     assert already == []
@@ -1071,7 +1071,7 @@ def test_include_harvested_does_not_restore_a_procedural_document(conn):
     ev_mech = _doc_source(conn, "vfs", text="VFS\n===\n\nThis document defines "
                                             "the virtual filesystem switch.")
     conn.commit()
-    unread, _, _, procedural, _ = select_doc_evidence(conn, include_harvested=True)
+    unread, _, _, procedural, _, _ = select_doc_evidence(conn, include_harvested=True)
     assert unread == [ev_mech]
     assert procedural == [ev_proc]
 
@@ -1085,7 +1085,7 @@ def test_a_procedural_document_is_never_sent_to_the_model(conn):
 
     ev_proc = _doc_source(conn, "adding", text=_ADDING_NEW_FILESYSTEMS)
     conn.commit()
-    unread, _, _, procedural, _ = select_doc_evidence(conn)
+    unread, _, _, procedural, _, _ = select_doc_evidence(conn)
     assert procedural == [ev_proc]
     for ev in unread:
         harvest_document(conn, ev, new_batch_id(), client=ExplodingClient())
@@ -1121,7 +1121,7 @@ def test_a_subtree_filter_selects_only_that_subtree(conn):
     _doc_source(conn, "userspace-api/media/v4l/ioctl")
     conn.commit()
 
-    unread, _, _, _, _ = select_doc_evidence(
+    unread, _, _, _, _, _ = select_doc_evidence(
         conn, path_prefixes=("Documentation/trace/",))
     assert unread == ["ev-trace/ftrace"]
 
@@ -1132,7 +1132,7 @@ def test_several_subtrees_are_a_union(conn):
     _doc_source(conn, "userspace-api/media/v4l/ioctl")
     conn.commit()
 
-    unread, _, _, _, _ = select_doc_evidence(
+    unread, _, _, _, _, _ = select_doc_evidence(
         conn, path_prefixes=("Documentation/trace/", "Documentation/block/"))
     assert sorted(unread) == ["ev-block/queue", "ev-trace/ftrace"]
 
@@ -1143,7 +1143,7 @@ def test_no_filter_still_selects_everything(conn):
     _doc_source(conn, "block/queue")
     conn.commit()
 
-    unread, _, _, _, _ = select_doc_evidence(conn)
+    unread, _, _, _, _, _ = select_doc_evidence(conn)
     assert len(unread) == 2
 
 
@@ -1156,7 +1156,7 @@ def test_the_filter_does_not_reach_past_the_already_harvested_exclusion(conn):
                      client=MockLLMClient([_reply([_mech("Work Stealing")])]))
     conn.commit()
 
-    unread, _, already, _, _ = select_doc_evidence(
+    unread, _, already, _, _, _ = select_doc_evidence(
         conn, path_prefixes=("Documentation/trace/",))
     assert unread == ["ev-trace/new"]
     assert already == [done]
@@ -1170,7 +1170,7 @@ def test_the_filter_cannot_admit_a_path_seeding_would_refuse(conn):
     _doc_source(conn, "trace/ftrace")
     conn.commit()
 
-    unread, _, _, _, _ = select_doc_evidence(
+    unread, _, _, _, _, _ = select_doc_evidence(
         conn, path_prefixes=("Documentation/process/",))
     assert unread == []
 
@@ -1227,7 +1227,7 @@ def test_navigation_is_counted_apart_from_procedural(conn):
                                "function tracer. " * 20)
     conn.commit()
 
-    unread, _, _, procedural, navigation = select_doc_evidence(conn)
+    unread, _, _, procedural, navigation, _ = select_doc_evidence(conn)
     assert unread == [ev_real]
     assert procedural == [ev_proc]
     assert navigation == [ev_nav]
@@ -1239,7 +1239,7 @@ def test_include_harvested_does_not_restore_a_navigation_page(conn):
                           text="Ftrace\n======\n\nThis defines the tracer. " * 20)
     conn.commit()
 
-    unread, _, _, _, navigation = select_doc_evidence(conn, include_harvested=True)
+    unread, _, _, _, navigation, _ = select_doc_evidence(conn, include_harvested=True)
     assert unread == [ev_real]
     assert navigation == [ev_nav]
 
@@ -1262,7 +1262,7 @@ def test_a_document_that_yields_nothing_is_not_re_selected(conn):
                      client=MockLLMClient([_reply([])]))
     conn.commit()
 
-    unread, _, already, _, _ = select_doc_evidence(conn)
+    unread, _, already, _, _, _ = select_doc_evidence(conn)
     assert unread == [], "a document read and found empty was offered again"
     assert already == [ev]
 
@@ -1301,7 +1301,7 @@ def test_include_harvested_still_reaches_a_no_yield_document(conn):
                      client=MockLLMClient([_reply([])]))
     conn.commit()
 
-    unread, _, _, _, _ = select_doc_evidence(conn, include_harvested=True)
+    unread, _, _, _, _, _ = select_doc_evidence(conn, include_harvested=True)
     assert unread == [ev]
 
 
@@ -1315,7 +1315,7 @@ def test_reverting_a_batch_that_yielded_nothing_restores_the_document(conn):
     assert select_doc_evidence(conn)[0] == []
 
     revert_batch(conn, batch)
-    unread, _, already, _, _ = select_doc_evidence(conn)
+    unread, _, already, _, _, _ = select_doc_evidence(conn)
     assert unread == [ev], "a reverted document stayed marked as read"
     assert already == []
 
@@ -1330,7 +1330,7 @@ def test_reverting_one_batch_leaves_another_batch_s_marks(conn):
     conn.commit()
 
     revert_batch(conn, batch_a)
-    unread, _, _, _, _ = select_doc_evidence(conn)
+    unread, _, _, _, _, _ = select_doc_evidence(conn)
     assert unread == [ev_a]
 
 
@@ -1465,3 +1465,85 @@ def test_the_result_still_serialises(tmp_path):
                       rejected_names=["a()", "struct b"])
     back = json.loads(json.dumps(asdict(r)))
     assert back["rejected_names"] == ["a()", "struct b"]
+
+
+# --- card lists are refused; index.rst and sysctl are NOT -------------------
+#
+# READ 2026-10-05. Three filename kinds were suspected of yielding non-mechanisms
+# and all 64 of their concepts were read before anything was filtered. Only one
+# survived the reading.
+#
+#   cardlist  36 concepts, ALL non-mechanisms: "BTTV Card Identification",
+#             "DVB USB Device List", "Modprobe Parameter for Tuner Selection",
+#             and "DVB-USB Device Identification" SIX times from six files.
+#   index     20 concepts, almost all GOOD: Page Cache, Journaling, eBPF,
+#             Virtual Filesystem (VFS) Layer, Ring Buffer, DMAEngine framework.
+#   sysctl    19 concepts, MIXED: TCP Congestion Control and TCP Fast Open are
+#             real mechanisms documented beside their tunables.
+#
+# The prediction was 64 bad and the reading gave 36. Filtering on the pattern
+# alone would have cost 28 good concepts including four of the most-cited
+# mechanisms in the corpus — which is why this test asserts what is SPARED as
+# forcefully as what is refused.
+
+
+def test_a_card_list_is_refused_by_its_filename():
+    from ingest.doc_harvest import document_is_a_card_list
+
+    for url in (
+        "https://git.kernel.org/.../Documentation/admin-guide/media/bttv-cardlist.rst",
+        "https://git.kernel.org/.../Documentation/admin-guide/media/cx88-cardlist.rst",
+        "https://git.kernel.org/.../Documentation/admin-guide/media/dvb-usb-af9015-cardlist.rst",
+    ):
+        assert document_is_a_card_list(url), url
+
+
+def test_index_and_sysctl_are_spared_because_the_reading_spared_them():
+    """THE REGRESSION THIS GUARDS IS A TIDYING EDIT THAT GENERALISES THE RULE.
+
+    Filtering index.rst would delete Page Cache, Journaling and eBPF.
+    Filtering *-sysctl.rst would delete TCP Congestion Control and TCP Fast
+    Open. Both were predicted bad and both were measured good.
+    """
+    from ingest.doc_harvest import document_is_a_card_list
+
+    for url in (
+        "https://git.kernel.org/.../Documentation/filesystems/index.rst",
+        "https://git.kernel.org/.../Documentation/mm/index.rst",
+        "https://git.kernel.org/.../Documentation/networking/ip-sysctl.rst",
+        "https://git.kernel.org/.../Documentation/networking/mptcp-sysctl.rst",
+        "https://git.kernel.org/.../Documentation/networking/napi.rst",
+    ):
+        assert not document_is_a_card_list(url), url
+
+
+def test_selection_refuses_a_card_list_and_counts_it_on_its_own(tmp_path):
+    """Counted separately from navigation, because a card list is refused on
+    its FILENAME where a toctree is refused on its CONTENT — a run reporting
+    them as one number could not say which rule fired."""
+    from graph.engine import add_edge, add_node
+    from graph.schema import init_db
+    from ingest.doc_harvest import select_doc_evidence
+
+    conn = init_db(tmp_path / "cards.db")
+    for sid, fname, text in (
+        ("src-card", "bttv-cardlist.rst", "card 0 BT848 ...\ncard 1 Miro ...\n" * 40),
+        ("src-real", "napi.rst", "NAPI is an interrupt mitigation framework. " * 40),
+    ):
+        add_node(conn, sid, "Source", {
+            "url": f"https://x/Documentation/networking/{fname}",
+            "source_type": "kernel-doc", "license": "MIT"})
+        eid = f"ev-{sid}"
+        add_node(conn, eid, "Evidence", {
+            "artifact_class": "licensed-evidence",
+            "contamination_level": "weak-copyleft", "text": text})
+        add_edge(conn, "sourced-from", eid, sid)
+    conn.commit()
+
+    unread, empty, already, procedural, navigation, cards = select_doc_evidence(conn)
+    assert cards == ["ev-src-card"], cards
+    assert "ev-src-card" not in unread, "the card list was selected for reading"
+    assert "ev-src-real" in unread, "a real document was refused with it"
+    assert navigation == [] and procedural == [], (
+        "the card list was attributed to the wrong rule")
+    conn.close()
